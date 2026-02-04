@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python simple_test.py",
+    "startCommand": "python arbitrage_main.py",
     "restartPolicyType": "ALWAYS"
   }
 }
