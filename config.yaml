@@ -1,0 +1,56 @@
+# Predict.fun 交易配置文件
+
+# API 配置
+api:
+  base_url: "https://api.predict.fun"
+  api_key: "1b0c25d4-8ca6-4aa8-8910-cd72b311e4f6"
+  ws_url: "wss://api.predict.fun/ws"
+
+# 市场配置
+market:
+  market_id: "YOUR_MARKET_ID"  # 目标市场ID
+  base_position_size: 10       # 基础仓位大小（Yes代币数量）
+  max_exposure: 100             # 最大风险敞口
+
+# 挂单策略
+strategy:
+  spread_percent: 6.0           # 挂单范围（当前价格±6%）
+  cancel_threshold: 0.5         # 撤单阈值（距离挂单价0.5%时撤单）
+  refresh_interval: 5           # 检查间隔（秒）
+
+# 风险管理
+risk:
+  max_orders_per_side: 3        # 每侧最大挂单数
+  min_price: 0.01               # 最低价格限制
+  max_price: 0.99               # 最高价格限制
+  daily_loss_limit: 50          # 每日最大损失限制
+
+# 日志配置
+logging:
+  level: "INFO"                 # DEBUG, INFO, WARNING, ERROR
+  file: "logs/trading.log"
+
+# Polymarket 配置
+polymarket:
+  base_url: "https://api.polymarket.com"
+  enabled: true                 # 是否启用Polymarket数据
+
+# 套利监控配置
+arbitrage:
+  enabled: true                 # 是否启用套利监控
+  min_arbitrage_threshold: 2.0  # 最小套利空间阈值（%），Yes+No < 100-2% 时通知
+  scan_interval: 10             # 扫描间隔（秒）
+  cooldown_minutes: 5           # 同一市场通知冷却时间（分钟）
+
+# 通知配置
+notification:
+  telegram:
+    enabled: true               # 启用Telegram通知
+    bot_token: "8273809449:AAHKO7J_gcNxBpTvc6X_SGWGIZwKKjc4H3Q"
+    chat_id: "7944527195"
+
+  wechat:
+    enabled: false              # 微信推送已停用
+    service: "serverchan"
+    sckey: ""
+    token: ""
