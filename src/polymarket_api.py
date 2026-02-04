@@ -163,6 +163,43 @@ class MockPolymarketClient:
             'active': True
         }]
 
+    def get_market_info(self, market_id: str):
+        """获取市场信息（模拟）"""
+        change = random.uniform(-0.015, 0.015)
+        self.base_price = max(0.01, min(0.99, self.base_price * (1 + change)))
+
+        from dataclasses import dataclass
+
+        @dataclass
+        class MarketInfo:
+            question_id: str
+            question_title: str
+            current_price: float
+
+        return MarketInfo(
+            question_id=market_id,
+            question_title='测试市场：某事件将在2026年发生',
+            current_price=round(self.base_price, 3)
+        )
+
+    def get_order_book(self, market_id: str):
+        """获取订单簿（模拟）"""
+        change = random.uniform(-0.015, 0.015)
+        self.base_price = max(0.01, min(0.99, self.base_price * (1 + change)))
+
+        from dataclasses import dataclass
+
+        @dataclass
+        class OrderBook:
+            yes_bid: float
+            yes_ask: float
+
+        spread = random.uniform(0.005, 0.02)
+        return OrderBook(
+            yes_bid=round(self.base_price - spread / 2, 3),
+            yes_ask=round(self.base_price + spread / 2, 3)
+        )
+
     def get_market_price(self, token_id: str, side: str = "BUY") -> Optional[float]:
         change = random.uniform(-0.015, 0.015)
         self.base_price = max(0.01, min(0.99, self.base_price * (1 + change)))
