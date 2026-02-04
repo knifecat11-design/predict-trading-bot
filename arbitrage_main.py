@@ -8,9 +8,15 @@ import os
 import sys
 import time
 import logging
-import signal
 from pathlib import Path
 from datetime import datetime, timedelta
+
+# Railway 环境兼容性处理
+try:
+    import signal
+    HAS_SIGNAL = True
+except ImportError:
+    HAS_SIGNAL = False
 
 import yaml
 
@@ -20,22 +26,25 @@ def setup_logging(config: dict):
     log_level = config.get('logging', {}).get('level', 'INFO')
     log_file = config.get('logging', {}).get('file', 'logs/trading.log')
 
-    # 使用不同的日志文件
-    log_file = log_file.replace('.log', '_arbitrage.log')
-
-    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-
+    # Railway 环境下，日志输出到标准输出
     log_format = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
     date_format = '%Y-%m-%d %H:%M:%S'
+
+    handlers = [logging.StreamHandler(sys.stdout)]
+
+    # 只在本地环境写入文件
+    if not os.getenv('RAILWAY_ENVIRONMENT'):
+        try:
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
+        except:
+            pass
 
     logging.basicConfig(
         level=getattr(logging, log_level),
         format=log_format,
         datefmt=date_format,
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
+        handlers=handlers
     )
 
     return logging.getLogger(__name__)
@@ -51,7 +60,25 @@ def load_config(config_path: str = 'config.yaml') -> dict:
         # 回退到原始方法
         if not os.path.exists(config_path):
             # Railway 环境下可能没有 config.yaml
-            return {}
+            config = {
+                'arbitrage': {
+                    'enabled': True,
+                    'min_arbitrage_threshold': float(os.getenv('MIN_ARBITRAGE_THRESHOLD', 2.0)),
+                    'scan_interval': int(os.getenv('SCAN_INTERVAL', 10)),
+                    'cooldown_minutes': int(os.getenv('COOLDOWN_MINUTES', 5))
+                },
+                'notification': {
+                    'telegram': {
+                        'enabled': True,
+                        'bot_token': os.getenv('TELEGRAM_BOT_TOKEN', ''),
+                        'chat_id': os.getenv('TELEGRAM_CHAT_ID', '')
+                    }
+                },
+                'logging': {
+                    'level': os.getenv('LOG_LEVEL', 'INFO')
+                }
+            }
+            return config
 
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
@@ -84,7 +111,6 @@ def print_startup_info(config: dict):
 
     print()
     print("运行模式: 模拟模式 (使用模拟数据)")
-    print("按 Ctrl+C 停止程序")
     print("-" * 60)
     print()
 
@@ -96,14 +122,8 @@ def main():
     # 加载配置
     try:
         config = load_config()
-    except FileNotFoundError as e:
+    except Exception as e:
         print(f"错误: {e}")
-        print("请确保 config.yaml 文件存在")
-        return 1
-
-    # 检查是否启用套利监控
-    if not config.get('arbitrage', {}).get('enabled', False):
-        print("套利监控未启用，请在 config.yaml 中设置 arbitrage.enabled = true")
         return 1
 
     # 设置日志
@@ -123,7 +143,6 @@ def main():
         from src.notifier import TelegramNotifier
     except ImportError as e:
         logger.error(f"导入模块失败: {e}")
-        print("请确保已安装所有依赖: pip install -r requirements.txt")
         return 1
 
     # 创建组件
@@ -140,7 +159,10 @@ def main():
     # 发送启动通知
     if config.get('notification', {}).get('telegram', {}).get('enabled', False):
         logger.info("发送启动通知...")
-        notifier.send_test_message()
+        try:
+            notifier.send_test_message()
+        except Exception as e:
+            logger.warning(f"发送测试消息失败: {e}")
 
     # 运行状态
     running = True
@@ -151,13 +173,15 @@ def main():
     cooldown_minutes = config.get('arbitrage', {}).get('cooldown_minutes', 5)
     scan_interval = config.get('arbitrage', {}).get('scan_interval', 10)
 
-    # 信号处理
-    def signal_handler(sig, frame):
-        nonlocal running
-        logger.info("收到停止信号...")
-        running = False
+    # 信号处理（只在非 Railway 环境）
+    if HAS_SIGNAL and not os.getenv('RAILWAY_ENVIRONMENT'):
+        def signal_handler(sig, frame):
+            nonlocal running
+            logger.info("收到停止信号...")
+            running = False
 
-    signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
     # 主循环
     logger.info("开始监控套利机会...")
@@ -188,7 +212,10 @@ def main():
 
                         # 发送通知
                         logger.info(f"发送套利通知: {opp.market_name}")
-                        notifier.send_arbitrage_alert(opp)
+                        try:
+                            notifier.send_arbitrage_alert(opp)
+                        except Exception as e:
+                            logger.error(f"发送通知失败: {e}")
                         last_notification_time[market_key] = now
 
                 # 定期输出统计
