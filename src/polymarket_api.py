@@ -17,7 +17,7 @@ class PolymarketMarket:
     question_title: str
     current_price: float
     volume_24h: float
-    end_date: Optional[str
+    end_date: Optional[str] = None
 
 
 class RealPolymarketClient:
