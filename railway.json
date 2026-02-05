@@ -11,5 +11,9 @@
     "healthcheckPath": null,
     "healthcheckTimeout": 300,
     "cron": null
+  },
+  "variables": {
+    "USE_REAL_API": "true",
+    "USE_HYBRID_MODE": "false"
   }
 }
