@@ -93,7 +93,25 @@ class PredictAPIClient:
             response.raise_for_status()
             data = response.json()
 
-            markets = data.get('items', data) if isinstance(data, dict) else data
+            # 调试：记录原始响应格式
+            if isinstance(data, dict):
+                logger.debug(f"API 响应键: {list(data.keys())}")
+            elif isinstance(data, list):
+                logger.debug(f"API 响应为列表，首项类型: {type(data[0]) if data else 'empty'}")
+
+            # 处理不同的响应格式
+            if isinstance(data, dict):
+                markets = data.get('items', data.get('data', []))
+                # 如果还是没有，可能 data 本身就是市场列表的包装
+                if not isinstance(markets, list):
+                    logger.warning(f"API 返回了意外的格式: {type(data)}")
+                    markets = []
+            elif isinstance(data, list):
+                markets = data
+            else:
+                logger.warning(f"API 返回了非列表/字典格式: {type(data)}")
+                markets = []
+
             logger.info(f"获取到 {len(markets)} 个市场")
             return markets
 
@@ -122,6 +140,11 @@ class PredictAPIClient:
             # 查找指定市场
             target_market = None
             for market in markets:
+                # 类型检查：跳过非字典格式的项
+                if not isinstance(market, dict):
+                    logger.debug(f"跳过非字典格式的市场数据: {type(market)}")
+                    continue
+
                 if market.get('id') == market_id or market.get('slug') == market_id:
                     target_market = market
                     break
@@ -241,8 +264,21 @@ class PredictAPIClient:
             response.raise_for_status()
             data = response.json()
 
+            # 处理不同的响应格式
+            order_list = []
+            if isinstance(data, dict):
+                order_list = data.get('items', data.get('data', []))
+                if not isinstance(order_list, list):
+                    order_list = []
+            elif isinstance(data, list):
+                order_list = data
+
             orders = []
-            for order_data in data.get('items', data) if isinstance(data, dict) else data:
+            for order_data in order_list:
+                # 类型检查
+                if not isinstance(order_data, dict):
+                    continue
+
                 orders.append(Order(
                     order_id=str(order_data.get('id', '')),
                     side=order_data.get('side', 'buy'),
