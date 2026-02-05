@@ -5,7 +5,7 @@ nixPkgs = ["python311", "bash"]
 cmds = ["pip install --no-cache-dir -r requirements.txt"]
 
 [start]
-cmd = "python arbitrage_main.py"
+cmd = "python start_arbitrage.py"
 
 [variables]
 PYTHON_VERSION = "3.11"
