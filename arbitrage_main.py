@@ -97,7 +97,7 @@ def print_banner():
     print()
 
 
-def print_startup_info(config: dict, use_real_api: bool = False):
+def print_startup_info(config: dict, use_real_api: bool = False, use_hybrid_mode: bool = False):
     """打印启动信息"""
     arb_config = config.get('arbitrage', {})
     notification_config = config.get('notification', {})
@@ -111,7 +111,9 @@ def print_startup_info(config: dict, use_real_api: bool = False):
     print(f"  Telegram通知: {'✓ 启用' if telegram_enabled else '✗ 未启用'}")
 
     print()
-    if use_real_api:
+    if use_hybrid_mode and not use_real_api:
+        print("运行模式: 混合模式 (Polymarket 真实数据 + Predict.fun 模拟数据)")
+    elif use_real_api:
         print("运行模式: 真实 API 模式 (使用实际市场数据)")
     else:
         print("运行模式: 模拟模式 (使用模拟数据)")
@@ -131,8 +133,10 @@ def main():
         return 1
 
     # 检查是否使用真实 API
-    # 默认使用模拟模式，因为真实 API 需要申请访问权限
+    # 支持混合模式：Polymarket（真实）+ Predict.fun（模拟）
+    # 默认使用混合模式，因为 Polymarket 无需 API Key
     use_real_api = os.getenv('USE_REAL_API', 'false').lower() == 'true'
+    use_hybrid_mode = os.getenv('USE_HYBRID_MODE', 'true').lower() == 'true'
 
     # 设置日志（必须在使用 logger 之前）
     logger = setup_logging(config)
@@ -140,13 +144,17 @@ def main():
     logger.info("套利监控系统启动")
     logger.info("=" * 50)
 
-    if use_real_api:
+    if use_hybrid_mode and not use_real_api:
+        logger.info("🔄 混合模式：Polymarket（真实数据）+ Predict.fun（模拟数据）")
+        logger.info("   - Polymarket: 使用真实 API（无需 API Key）")
+        logger.info("   - Predict.fun: 使用模拟数据（需要 API Key）")
+    elif use_real_api:
         logger.info("⚠️ 真实 API 模式：请确保已获得 API 访问权限")
         logger.info("   - Polymarket: https://gamma-api.polymarket.com（公开访问）")
         logger.info("   - Predict.fun: 需要通过 Discord 申请 API Key")
 
     # 打印启动信息
-    print_startup_info(config, use_real_api)
+    print_startup_info(config, use_real_api, use_hybrid_mode)
 
     # 导入模块
     try:
@@ -161,15 +169,24 @@ def main():
     # 创建组件
     logger.info("创建 API 客户端...")
 
-    # Predict.fun: 根据环境变量决定是否使用真实 API
-    predict_use_mock = not use_real_api
-    predict_client = create_api_client(config, use_mock=predict_use_mock)
-    logger.info(f"  Predict.fun: {'模拟数据' if predict_use_mock else '真实 API'}")
-
-    # Polymarket: 根据环境变量决定是否使用真实 API
-    polymarket_use_mock = not use_real_api
-    polymarket_client = create_polymarket_client(config, use_real=not polymarket_use_mock)
-    logger.info(f"  Polymarket: {'模拟数据' if polymarket_use_mock else '真实 API'}")
+    # 混合模式：Polymarket 真实 + Predict.fun 模拟
+    if use_hybrid_mode and not use_real_api:
+        polymarket_client = create_polymarket_client(config, use_real=True)
+        logger.info(f"  Polymarket: 真实 API（公开数据）")
+        predict_client = create_api_client(config, use_mock=True)
+        logger.info(f"  Predict.fun: 模拟数据（等待 API Key）")
+    # 完全真实模式
+    elif use_real_api:
+        polymarket_client = create_polymarket_client(config, use_real=True)
+        logger.info(f"  Polymarket: 真实 API")
+        predict_client = create_api_client(config, use_mock=False)
+        logger.info(f"  Predict.fun: 真实 API（需要 API Key）")
+    # 完全模拟模式
+    else:
+        polymarket_client = create_polymarket_client(config, use_real=False)
+        logger.info(f"  Polymarket: 模拟数据")
+        predict_client = create_api_client(config, use_mock=True)
+        logger.info(f"  Predict.fun: 模拟数据")
 
     logger.info("初始化套利监控器...")
     monitor = ArbitrageMonitor(config)
