@@ -79,49 +79,70 @@ class PredictAPIClient:
 
     def get_markets(self, active_only: bool = True, limit: int = 1000) -> List[Dict]:
         """
-        获取市场列表（全站监控）
+        获取市场列表（全站监控，支持分页）
 
         Args:
             active_only: 是否只返回活跃市场
             limit: 返回数量限制（默认1000，支持全站监控）
         """
         try:
-            params = {'active': active_only} if active_only else {}
-            # 添加 limit 参数以获取更多市场
-            params['limit'] = min(limit, 1000)
+            all_markets = []
+            cursor = None
+            page_size = 100  # 每页 100 个市场
+            max_pages = (limit // page_size) + 1  # 最多获取 limit 个市场
 
-            response = self.session.get(
-                f"{self.base_url}/{self.api_version}/markets",
-                params=params,
-                timeout=15
-            )
-            response.raise_for_status()
-            data = response.json()
+            for page in range(max_pages):
+                params = {'limit': page_size}
+                if cursor:
+                    params['cursor'] = cursor
+                if active_only:
+                    params['active'] = True
 
-            # 调试：记录原始响应格式
-            if isinstance(data, dict):
-                logger.debug(f"API 响应键: {list(data.keys())}")
-            elif isinstance(data, list):
-                logger.debug(f"API 响应为列表，首项类型: {type(data[0]) if data else 'empty'}")
+                response = self.session.get(
+                    f"{self.base_url}/{self.api_version}/markets",
+                    params=params,
+                    timeout=15
+                )
+                response.raise_for_status()
+                data = response.json()
 
-            # 处理不同的响应格式
-            if isinstance(data, dict):
-                markets = data.get('items', data.get('data', data.get('markets', [])))
-                # 处理分页
-                if isinstance(markets, list) and len(markets) > 0 and len(markets) < limit:
-                    # 如果返回了少于请求数量，可能需要分页
-                    pass
-                if not isinstance(markets, list):
-                    logger.warning(f"API 返回了意外的格式: {type(data)}")
-                    markets = []
-            elif isinstance(data, list):
-                markets = data
-            else:
-                logger.warning(f"API 返回了非列表/字典格式: {type(data)}")
-                markets = []
+                # 检查响应格式
+                if isinstance(data, dict):
+                    # Predict.fun API 格式: {success: True, cursor: "...", data: [...]}
+                    if not data.get('success', True):
+                        logger.warning(f"API 返回 success=False")
+                        break
 
-            logger.info(f"获取到 {len(markets)} 个市场")
-            return markets
+                    markets = data.get('data', data.get('items', data.get('markets', [])))
+                    cursor = data.get('cursor')
+
+                    if not isinstance(markets, list):
+                        logger.warning(f"API 返回了意外的格式: {type(markets)}")
+                        break
+
+                    all_markets.extend(markets)
+                    logger.debug(f"第 {page + 1} 页: 获取 {len(markets)} 个市场 (总计: {len(all_markets)})")
+
+                    # 检查是否还有更多数据
+                    if not cursor or len(markets) == 0:
+                        logger.debug(f"已到最后一页 (cursor: {cursor})")
+                        break
+
+                    # 检查是否已达到限制
+                    if len(all_markets) >= limit:
+                        all_markets = all_markets[:limit]
+                        break
+
+                elif isinstance(data, list):
+                    # 直接返回列表格式
+                    all_markets.extend(data)
+                    break
+                else:
+                    logger.warning(f"API 返回了非列表/字典格式: {type(data)}")
+                    break
+
+            logger.info(f"获取到 {len(all_markets)} 个市场")
+            return all_markets
 
         except Exception as e:
             logger.error(f"获取市场列表失败: {e}")
