@@ -131,7 +131,13 @@ def main():
         return 1
 
     # 检查是否使用真实 API
+    # 默认使用模拟模式，因为真实 API 需要申请访问权限
     use_real_api = os.getenv('USE_REAL_API', 'false').lower() == 'true'
+
+    if use_real_api:
+        logger.info("⚠️ 真实 API 模式：请确保已获得 API 访问权限")
+        logger.info("   - Polymarket: https://gamma-api.polymarket.com（公开访问）")
+        logger.info("   - Predict.fun: 需要通过 Discord 申请 API Key")
 
     # 设置日志
     logger = setup_logging(config)

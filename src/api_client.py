@@ -55,6 +55,7 @@ class PredictAPIClient:
         self.config = config
         self.api_key = config.get('api', {}).get('api_key', '')
         self.base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
+        self.api_version = 'v1'  # Predict.fun API v1
 
         # 设置会话
         import requests
@@ -84,7 +85,7 @@ class PredictAPIClient:
         """
         try:
             response = self.session.get(
-                f"{self.base_url}/markets",
+                f"{self.base_url}/{self.api_version}/markets",
                 params={'active': active_only} if active_only else {},
                 timeout=15
             )
@@ -186,7 +187,7 @@ class PredictAPIClient:
         """
         try:
             response = self.session.get(
-                f"{self.base_url}/markets/{market_id}/orderbook",
+                f"{self.base_url}/{self.api_version}/markets/{market_id}/orderbook",
                 timeout=10
             )
 
@@ -232,7 +233,7 @@ class PredictAPIClient:
 
             params = {'market_id': market_id} if market_id else {}
             response = self.session.get(
-                f"{self.base_url}/orders",
+                f"{self.base_url}/{self.api_version}/orders",
                 params=params,
                 timeout=10
             )
@@ -284,7 +285,7 @@ class PredictAPIClient:
             }
 
             response = self.session.post(
-                f"{self.base_url}/orders",
+                f"{self.base_url}/{self.api_version}/orders",
                 json=payload,
                 timeout=15
             )
@@ -319,7 +320,7 @@ class PredictAPIClient:
                 return False
 
             response = self.session.delete(
-                f"{self.base_url}/orders/{order_id}",
+                f"{self.base_url}/{self.api_version}/orders/{order_id}",
                 timeout=10
             )
             response.raise_for_status()

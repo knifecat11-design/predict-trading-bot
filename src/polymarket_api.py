@@ -42,8 +42,10 @@ class RealPolymarketClient:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # CLOB API 端点
-        self.host = "api.polymarket.com"
+        # Gamma API 端点（用于获取市场数据）
+        self.gamma_host = "gamma-api.polymarket.com"
+        # CLOB API 端点（用于交易）
+        self.host = "clob.polymarket.com"
         self.chain_id = POLYGON  # Polygon 网络
 
         # 初始化客户端（不需要私钥来读取市场数据）
@@ -70,7 +72,7 @@ class RealPolymarketClient:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        self.base_url = f"https://{self.host}"
+        self.base_url = f"https://{self.gamma_host}"  # 使用 Gamma API
 
         # 缓存
         self._markets_cache = {}
