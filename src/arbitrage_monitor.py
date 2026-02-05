@@ -2,14 +2,17 @@
 套利监控模块
 监控 Polymarket 和 Predict.fun 之间的套利机会
 策略：Yes价格 + No价格 < 100% 时存在套利空间
+支持 WebSocket 实时监控
 """
 
 import time
 import logging
-from typing import Dict, List, Optional, Tuple
+import asyncio
+from typing import Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass
 from enum import Enum
 from collections import defaultdict
+from datetime import datetime
 
 
 class ArbitrageType(Enum):
@@ -74,11 +77,18 @@ class ArbitrageMonitor:
         # 统计信息
         self.total_scans = 0
         self.opportunities_found = 0
+        self.realtime_updates = 0
 
         # 智能市场匹配器
         self.market_matcher = None
         self.market_map = {}
         self._matcher_initialized = False
+
+        # WebSocket 实时监控
+        self._ws_client = None
+        self._ws_running = False
+        self._realtime_opportunities = []
+        self._on_arbitrage_callback: Optional[Callable] = None
 
     def _initialize_matcher(self, poly_client, predict_client, probable_client):
         """初始化市场匹配器"""
@@ -359,4 +369,156 @@ class ArbitrageMonitor:
         if self.market_matcher:
             stats['market_matches'] = self.market_matcher.get_statistics()
 
+        # 添加 WebSocket 统计
+        if self._ws_client:
+            stats['websocket'] = self._ws_client.get_statistics()
+            stats['realtime_updates'] = self.realtime_updates
+
         return stats
+
+    async def start_realtime_monitoring(self,
+                                       poly_client,
+                                       predict_client,
+                                       probable_client=None,
+                                       duration_seconds: int = 3600):
+        """
+        启动 WebSocket 实时监控
+
+        Args:
+            poly_client: Polymarket客户端
+            predict_client: Predict客户端
+            probable_client: Probable客户端（可选）
+            duration_seconds: 监控持续时间（秒）
+
+        Returns:
+            发现的套利机会列表
+        """
+        try:
+            from .polymarket_websocket import create_websocket_client
+        except ImportError:
+            self.logger.error("无法导入 WebSocket 客户端")
+            return []
+
+        self.logger.info(f"启动 WebSocket 实时监控 ({duration_seconds} 秒)...")
+
+        # 初始化市场匹配器
+        if not self._matcher_initialized:
+            self._initialize_matcher(poly_client, predict_client, probable_client)
+
+        # 获取市场列表
+        markets = poly_client.get_all_markets(limit=1000, active_only=True)
+        self.logger.info(f"获取到 {len(markets)} 个活跃市场用于 WebSocket 监控")
+
+        # 创建 WebSocket 客户端
+        ws_config = self.config.get('websocket', {})
+        self._ws_client = create_websocket_client(
+            num_connections=ws_config.get('num_connections', 6),
+            markets_per_connection=ws_config.get('markets_per_connection', 250),
+            min_liquidity=ws_config.get('min_liquidity', 10000),
+            max_days=ws_config.get('max_days', 7)
+        )
+
+        # 注册回调
+        async def on_market_update(market_id, prices):
+            """实时检测套利机会"""
+            self.realtime_updates += 1
+
+            yes_price = prices.get('yes', 0)
+            no_price = prices.get('no', 0)
+
+            if yes_price > 0 and no_price > 0:
+                spread = yes_price + no_price
+
+                # 检查是否满足套利阈值
+                arbitrage = (1.0 - spread) * 100
+                if arbitrage >= self.arb_config.min_arbitrage_percent:
+                    # 获取市场信息
+                    market = poly_client.get_market_info(market_id)
+                    if market and hasattr(market, 'question_title'):
+                        opportunity = ArbitrageOpportunity(
+                            arbitrage_type=ArbitrageType.POLY_YES_PREDICT_NO,
+                            market_name=market.question_title,
+                            combined_price=spread * 100,
+                            arbitrage_percent=round(arbitrage, 2),
+                            platform1_name="Polymarket",
+                            platform1_yes_price=yes_price * 100,
+                            platform1_no_price=round((1 - yes_price) * 100, 1),
+                            platform1_action="买Yes",
+                            platform2_name="Polymarket",
+                            platform2_yes_price=round((1 - no_price) * 100, 1),
+                            platform2_no_price=no_price * 100,
+                            platform2_action="买No",
+                            timestamp=time.time()
+                        )
+
+                        self._realtime_opportunities.append(opportunity)
+                        self.opportunities_found += 1
+
+                        self.logger.info(
+                            f"[实时] 发现套利机会: {market.question_title[:50]}... "
+                            f"Spread={spread:.4f} ({arbitrage:.2f}%)"
+                        )
+
+                        # 触发回调
+                        if self._on_arbitrage_callback:
+                            try:
+                                if asyncio.iscoroutinefunction(self._on_arbitrage_callback):
+                                    await self._on_arbitrage_callback(opportunity)
+                                else:
+                                    self._on_arbitrage_callback(opportunity)
+                            except Exception as e:
+                                self.logger.error(f"回调函数错误: {e}")
+
+        self._ws_client.on_market_update(on_market_update)
+
+        # 启动监控
+        self._ws_running = True
+        monitor_task = asyncio.create_task(self._ws_client.connect(markets))
+
+        # 运行指定时间后停止
+        try:
+            await asyncio.sleep(duration_seconds)
+
+            self.logger.info("监控时间结束，正在停止...")
+            await self._ws_client.disconnect()
+            self._ws_running = False
+
+            # 等待任务完成
+            await asyncio.sleep(2)
+
+        except KeyboardInterrupt:
+            self.logger.info("用户中断监控")
+            await self._ws_client.disconnect()
+            self._ws_running = False
+
+        self.logger.info(f"实时监控结束，发现 {len(self._realtime_opportunities)} 个套利机会")
+
+        return self._realtime_opportunities
+
+    def on_arbitrage(self, callback: Callable):
+        """
+        注册套利机会回调函数
+
+        Args:
+            callback: 套利机会发生时调用的函数
+        """
+        self._on_arbitrage_callback = callback
+
+    def get_realtime_opportunities(self) -> List[ArbitrageOpportunity]:
+        """获取实时监控发现的套利机会"""
+        return self._realtime_opportunities
+
+    def clear_realtime_opportunities(self):
+        """清除实时套利机会缓存"""
+        self._realtime_opportunities.clear()
+
+    def is_realtime_monitoring_active(self) -> bool:
+        """检查实时监控是否活跃"""
+        return self._ws_running and self._ws_client and self._ws_client.is_connected()
+
+    async def stop_realtime_monitoring(self):
+        """停止 WebSocket 实时监控"""
+        if self._ws_client:
+            self._ws_running = False
+            await self._ws_client.disconnect()
+            self.logger.info("实时监控已停止")

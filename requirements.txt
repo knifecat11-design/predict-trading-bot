@@ -1,5 +1,6 @@
 requests>=2.31.0
 websocket-client>=1.6.0
+websockets>=16.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 py-clob-client>=0.24.0

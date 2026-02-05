@@ -54,6 +54,15 @@ arbitrage:
   scan_interval: 10             # 扫描间隔（秒）
   cooldown_minutes: 5           # 同一市场通知冷却时间（分钟）
 
+# WebSocket 实时监控配置
+websocket:
+  enabled: true                 # 是否启用 WebSocket 实时监控
+  num_connections: 6            # 并行 WebSocket 连接数（每个连接监控约 250 个市场）
+  markets_per_connection: 250   # 每个连接监控的市场数量
+  min_liquidity: 10000          # 最小流动性要求（美元）
+  max_days: 7                   # 最大结算天数（只监控即将结算的市场）
+  monitor_duration: 3600        # 每次监控持续时间（秒）
+
 # 智能市场匹配配置
 market_match:
   min_confidence: 0.2           # 最小匹配置信度（降低以提高匹配率）
