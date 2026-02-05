@@ -18,6 +18,8 @@ try:
     PY_CLOB_AVAILABLE = True
 except ImportError:
     PY_CLOB_AVAILABLE = False
+    # 定义默认值（如果未安装 py-clob-client）
+    POLYGON = 137  # Polygon chain ID
 
 
 logger = logging.getLogger(__name__)
