@@ -56,8 +56,8 @@ arbitrage:
 
 # 智能市场匹配配置
 market_match:
-  min_confidence: 0.4           # 最小匹配置信度（0-1），越严格数值越高
-  max_matches: 3                # 每个市场最大匹配候选数量
+  min_confidence: 0.2           # 最小匹配置信度（降低以提高匹配率）
+  max_matches: 10                # 每个市场最大匹配候选数量
   cache_minutes: 30             # 匹配结果缓存时间（分钟）
   # 手动市场映射（可选，用于覆盖自动匹配）
   # 格式：polymarket_id: {predict_id: "...", probable_id: "..."}

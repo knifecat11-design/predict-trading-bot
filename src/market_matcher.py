@@ -158,8 +158,8 @@ class MarketMatcher:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # 匹配阈值
-        self.min_confidence = config.get('market_match', {}).get('min_confidence', 0.4)
+        # 匹配阈值（降低以提高匹配成功率）
+        self.min_confidence = config.get('market_match', {}).get('min_confidence', 0.2)
         self.max_matches_per_market = config.get('market_match', {}).get('max_matches', 3)
 
         # 缓存

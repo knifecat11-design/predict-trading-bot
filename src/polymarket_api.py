@@ -112,9 +112,10 @@ class RealPolymarketClient:
     def get_all_markets(self, limit: int = 1000, active_only: bool = True) -> List[Dict]:
         """
         获取所有市场列表（使用公开 API）
+        优先获取当前活跃的市场，而不是过期市场
 
         Args:
-            limit: 返回数量限制（最大1000，支持全站监控）
+            limit: 返回数量限制（最大1000）
             active_only: 是否只返回活跃市场
 
         API 文档: https://docs.polymarket.com/quickstart/fetching-data
@@ -126,12 +127,9 @@ class RealPolymarketClient:
                 markets = self._markets_cache
             else:
                 # 使用公开的 Gamma API
-                params = {'limit': min(limit, 1000)}  # API 最大限制提高到1000
-                if active_only:
-                    params['active'] = True
-                if active_only is False:
-                    params['active'] = False
-                    params['closed'] = True
+                # 不使用 active 参数，因为该参数可能导致连接问题
+                # 而是获取更多市场后手动过滤
+                params = {'limit': min(limit, 1000)}
 
                 response = self.session.get(
                     f"{self.base_url}/markets",
@@ -140,6 +138,31 @@ class RealPolymarketClient:
                 )
                 response.raise_for_status()
                 markets = response.json()
+
+                # 手动过滤：只返回未关闭且有效期的市场
+                if active_only:
+                    current_time = time.time()
+                    # 过滤掉已关闭的市场或已过期的市场
+                    filtered_markets = []
+                    for market in markets:
+                        # 检查是否已关闭
+                        if market.get('closed', False):
+                            continue
+                        # 检查是否已过期（如果有结束日期）
+                        end_date = market.get('end_date')
+                        if end_date:
+                            try:
+                                from datetime import datetime
+                                if isinstance(end_date, str):
+                                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                                    # 如果已过期，跳过
+                                    if end_dt.timestamp() < current_time:
+                                        continue
+                            except:
+                                pass  # 日期解析失败，保留该市场
+                        filtered_markets.append(market)
+
+                    markets = filtered_markets
 
                 # 更新缓存
                 self._markets_cache = markets
