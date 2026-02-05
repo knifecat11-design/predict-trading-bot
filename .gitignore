@@ -39,6 +39,9 @@ logs/
 .env
 .env.local
 
+# Config files with sensitive data
+config.yaml
+
 # OS
 .DS_Store
 Thumbs.db
@@ -46,3 +49,14 @@ Thumbs.db
 # Temporary files
 *.tmp
 temp/
+
+# Local scripts (Windows only)
+start_monitoring.bat
+start_monitoring.vbs
+
+# Internal documentation (not for public repo)
+会话总结.md
+
+# Test files (optional to track)
+test_*.py
+simple_test.py

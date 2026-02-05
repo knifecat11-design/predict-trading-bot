@@ -1,6 +1,210 @@
-# Predict.fun 自动化交易与套利监控系统
+# 🎲 Polymarket ↔ Predict.fun 套利监控系统
 
-一个用于 predict.fun 预测市场的自动化交易、风险管理和跨平台套利监控工具。
+[![Railway](https://img.shields.io/badge/deployment-Railway-0e0c2e.svg)](https://railway.app/)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+> 跨平台预测市场套利机会实时监控工具 | 实时监控 Polymarket 和 Predict.fun 的价格差异，通过 Telegram 即时推送套利机会。
+
+## ✨ 核心特性
+
+### 🔍 智能套利监控
+- **实时监控**: 每 10 秒扫描一次市场价格
+- **双向检测**: Polymarket ↔ Predict.fun 双向套利机会
+- **智能通知**: Telegram 即时推送，避免重复提醒（5分钟冷却）
+- **灵活配置**: 自定义最小套利阈值（默认 2%）
+
+### 📊 支持的数据源
+
+| 平台 | API 状态 | 说明 |
+|------|---------|------|
+| **Polymarket** | ✅ 公开 API | 无需密钥，直接访问 [Gamma API](https://docs.polymarket.com/developers/gamma-markets-api/overview) |
+| **Predict.fun** | 🔑 需申请 | 通过 [Discord](https://dev.predict.fun/) 申请 API 密钥 |
+
+### 🎯 套利策略
+
+**核心原理**: 在预测市场中，`Yes价格 + No价格 = 100%`
+
+当 `Yes + No < 100%` 时，同时买入 Yes 和 No 可以锁定利润。
+
+**示例**:
+```
+Polymarket Yes价格: 40%
+Predict.fun No价格:  50%
+组合价格: 90% < 100%
+套利空间: 10%
+```
+
+## 🚀 快速开始
+
+### 方式 1: Railway 一键部署（推荐）
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/knifecat11-design/predict-trading-bot)
+
+1. 点击上方按钮
+2. 在 Railway 设置环境变量：
+   ```bash
+   TELEGRAM_BOT_TOKEN=你的Bot_Token
+   TELEGRAM_CHAT_ID=你的Chat_ID
+   ```
+3. 部署完成！自动开始监控
+
+### 方式 2: 本地运行
+
+#### 1. 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+#### 2. 配置 Telegram
+
+**获取 Bot Token:**
+1. Telegram 搜索 `@BotFather`
+2. 发送 `/newbot` 创建机器人
+3. 复制 Token（格式：`123456:ABC-DEF1234...`）
+
+**获取 Chat ID:**
+1. Telegram 搜索 `@userinfobot`
+2. 发送任意消息获取 ID
+
+#### 3. 运行程序
+```bash
+# 使用混合模式（推荐：Polymarket 真实 + Predict.fun 模拟）
+python arbitrage_main.py
+
+# 或使用启动包装器（更好的错误处理）
+python start_arbitrage.py
+```
+
+## ⚙️ 配置说明
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `TELEGRAM_BOT_TOKEN` | 必填 | Telegram Bot Token |
+| `TELEGRAM_CHAT_ID` | 必填 | Telegram Chat ID |
+| `USE_HYBRID_MODE` | `true` | 混合模式（Polymarket 真实 + Predict.fun 模拟） |
+| `USE_REAL_API` | `false` | 完全真实模式（需要两个 API 密钥） |
+| `MIN_ARBITRAGE_THRESHOLD` | `2.0` | 最小套利阈值（%） |
+| `SCAN_INTERVAL` | `10` | 扫描间隔（秒） |
+| `COOLDOWN_MINUTES` | `5` | 通知冷却时间（分钟） |
+| `PREDICT_API_KEY` | 可选 | Predict.fun API 密钥 |
+
+### 运行模式对比
+
+| 模式 | 配置 | Polymarket | Predict.fun | 推荐场景 |
+|------|------|-----------|-------------|----------|
+| **混合模式** | 默认 | 真实 API | 模拟数据 | ✅ **立即可用** |
+| **真实模式** | `USE_REAL_API=true` | 真实 API | 真实 API | 需要 API 密钥 |
+| **模拟模式** | `USE_HYBRID_MODE=false` | 模拟数据 | 模拟数据 | 开发测试 |
+
+## 📱 Telegram 通知示例
+
+```
+━━━━━━━━━━━━━━━━━━━━━
+📊 市场名称: 2026年某事件会发生
+
+📈 利差: 10.00%
+💵 组合价格: 90.0%
+
+🔄 套利方向: Polymarket 买Yes + Predict 买No
+
+━━━━━━━━━━━━━━━━━━━━━
+
+📍 Polymarket
+  操作: 买Yes
+  Yes价格: 40.0%
+  No价格: 60.0%
+
+📍 Predict.fun
+  操作: 买No
+  Yes价格: 50.0%
+  No价格: 50.0%
+
+━━━━━━━━━━━━━━━━━━━━━
+
+⏰ 时间: 2026-02-05 15:30:25
+⚡ 请尽快手动执行套利！
+```
+
+## 📁 项目结构
+
+```
+predict-trading-bot/
+├── arbitrage_main.py       # 套利监控主程序
+├── start_arbitrage.py      # 启动包装器
+├── monitor.py              # 本地监控工具
+├── health_check.py         # 健康检查
+├── config.yaml             # 配置文件
+├── requirements.txt        # Python 依赖
+├── nixpacks.toml           # Railway 构建配置
+├── docs/                   # 文档目录
+│   ├── API申请指南.md
+│   └── RAILWAY_DEPLOY.md
+└── src/
+    ├── api_client.py       # Predict.fun API 客户端
+    ├── polymarket_api.py   # Polymarket API 客户端
+    ├── arbitrage_monitor.py# 套利监控逻辑
+    ├── notifier.py         # Telegram 通知
+    └── config_helper.py    # 配置辅助
+```
+
+## 🔧 获取 API 密钥
+
+### Polymarket（公开访问，无需密钥）
+- 文档: https://docs.polymarket.com/developers/gamma-markets-api/overview
+- 直接访问 `https://gamma-api.polymarket.com/markets`
+
+### Predict.fun（需要申请）
+1. 访问 https://dev.predict.fun/
+2. 加入 Discord 服务器
+3. 开启工单申请 API 访问权限
+4. 获得密钥后设置环境变量 `PREDICT_API_KEY`
+
+详见 [docs/API申请指南.md](docs/API申请指南.md)
+
+## ⚠️ 风险提示
+
+- 套利机会转瞬即逝，需快速执行
+- 实际套利需考虑滑点、流动性、资金转移时间
+- 建议从小额开始测试
+- 确保两个平台都有足够流动性
+- 本工具仅提供监控和通知，不执行自动交易
+
+## 🛠️ 本地监控工具
+
+```bash
+# 查看运行统计
+python monitor.py stats
+
+# 查看最新日志
+python monitor.py logs
+
+# 查看错误信息
+python monitor.py errors
+```
+
+## 📚 相关文档
+
+- [API 申请指南](docs/API申请指南.md)
+- [Railway 部署指南](docs/RAILWAY_DEPLOY.md)
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📄 许可证
+
+MIT License
+
+---
+
+**注意**: 本工具仅供学习和研究使用。使用本工具进行实际交易的风险由使用者自行承担。
+
+**Links**:
+- [Polymarket](https://polymarket.com/) | [Predict.fun](https://predict.fun/)
+- [Railway](https://railway.app/) | [Telegram](https://telegram.org/)
 
 ## 功能特性
 
