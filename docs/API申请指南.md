@@ -96,8 +96,9 @@ import requests
 
 api_key = "你的API密钥"
 
+# ✅ 正确的认证方式：使用 x-api-key header
 headers = {
-    "Authorization": f"Bearer {api_key}",
+    "x-api-key": api_key,  # 注意：使用 x-api-key，不是 Authorization: Bearer
     "Content-Type": "application/json"
 }
 
@@ -112,8 +113,14 @@ if response.status_code == 200:
     markets = response.json()
     print(f"获取到 {len(markets)} 个市场")
 elif response.status_code == 401:
-    print("认证失败：请检查 API Key")
+    print("认证失败：请检查 API Key 是否正确")
 ```
+
+**⚠️ 重要提示**：
+- ❌ 不要使用 `Authorization: Bearer {api_key}`
+- ✅ 应该使用 `x-api-key: {api_key}`
+- 对于公共端点（如 `/v1/markets`），只需要 API Key
+- 对于私有操作（如下单），还需要 JWT Token（需要钱包签名）
 
 ---
 
