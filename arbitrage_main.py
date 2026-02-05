@@ -96,7 +96,7 @@ def print_banner():
     print()
 
 
-def print_startup_info(config: dict):
+def print_startup_info(config: dict, use_real_api: bool = False):
     """打印启动信息"""
     arb_config = config.get('arbitrage', {})
     notification_config = config.get('notification', {})
@@ -110,7 +110,10 @@ def print_startup_info(config: dict):
     print(f"  Telegram通知: {'✓ 启用' if telegram_enabled else '✗ 未启用'}")
 
     print()
-    print("运行模式: 模拟模式 (使用模拟数据)")
+    if use_real_api:
+        print("运行模式: 真实 API 模式 (使用实际市场数据)")
+    else:
+        print("运行模式: 模拟模式 (使用模拟数据)")
     print("-" * 60)
     print()
 
@@ -126,6 +129,9 @@ def main():
         print(f"错误: {e}")
         return 1
 
+    # 检查是否使用真实 API
+    use_real_api = os.getenv('USE_REAL_API', 'false').lower() == 'true'
+
     # 设置日志
     logger = setup_logging(config)
     logger.info("=" * 50)
@@ -133,7 +139,7 @@ def main():
     logger.info("=" * 50)
 
     # 打印启动信息
-    print_startup_info(config)
+    print_startup_info(config, use_real_api)
 
     # 导入模块
     try:
@@ -147,8 +153,16 @@ def main():
 
     # 创建组件
     logger.info("创建 API 客户端...")
-    predict_client = create_api_client(config, use_mock=True)
-    polymarket_client = create_polymarket_client(config, use_mock=True)
+
+    # Predict.fun: 根据环境变量决定是否使用真实 API
+    predict_use_mock = not use_real_api
+    predict_client = create_api_client(config, use_mock=predict_use_mock)
+    logger.info(f"  Predict.fun: {'模拟数据' if predict_use_mock else '真实 API'}")
+
+    # Polymarket: 根据环境变量决定是否使用真实 API
+    polymarket_use_mock = not use_real_api
+    polymarket_client = create_polymarket_client(config, use_real=not polymarket_use_mock)
+    logger.info(f"  Polymarket: {'模拟数据' if polymarket_use_mock else '真实 API'}")
 
     logger.info("初始化套利监控器...")
     monitor = ArbitrageMonitor(config)

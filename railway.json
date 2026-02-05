@@ -6,7 +6,7 @@
     "watchPatterns": ["**/*.py", "requirements.txt", "railway.json"]
   },
   "deploy": {
-    "startCommand": "python arbitrage_main.py",
+    "startCommand": "python start_arbitrage.py",
     "restartPolicyType": "ALWAYS",
     "healthcheckPath": "/",
     "healthcheckTimeout": 300,
