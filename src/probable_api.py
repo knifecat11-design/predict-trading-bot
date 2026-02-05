@@ -67,23 +67,21 @@ class ProbableAPIClient:
 
         logger.info(f"Probable.markets API 客户端初始化: {self.base_url}")
 
-    def get_markets(self, active_only: bool = True) -> List[Dict]:
+    def get_markets(self, active_only: bool = True, limit: int = 1000) -> List[Dict]:
         """
-        获取市场列表
+        获取市场列表（全站监控）
 
         Args:
             active_only: 是否只返回活跃市场
+            limit: 返回数量限制（默认1000，支持全站监控）
         """
         try:
-            # TODO: 确认正确的端点路径
-            # 可能的端点：
-            # - /public/api/v1/markets
-            # - /api/v1/markets
-            # - /markets
+            params = {'active': active_only} if active_only else {}
+            params['limit'] = min(limit, 1000)
 
             response = self.session.get(
                 f"{self.base_url}/{self.api_version}/markets",
-                params={'active': active_only} if active_only else {},
+                params=params,
                 timeout=15
             )
             response.raise_for_status()

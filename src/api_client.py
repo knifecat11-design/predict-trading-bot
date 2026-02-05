@@ -77,17 +77,22 @@ class PredictAPIClient:
 
         logger.info(f"Predict.fun API 客户端初始化: {self.base_url}")
 
-    def get_markets(self, active_only: bool = True) -> List[Dict]:
+    def get_markets(self, active_only: bool = True, limit: int = 1000) -> List[Dict]:
         """
-        获取市场列表
+        获取市场列表（全站监控）
 
         Args:
             active_only: 是否只返回活跃市场
+            limit: 返回数量限制（默认1000，支持全站监控）
         """
         try:
+            params = {'active': active_only} if active_only else {}
+            # 添加 limit 参数以获取更多市场
+            params['limit'] = min(limit, 1000)
+
             response = self.session.get(
                 f"{self.base_url}/{self.api_version}/markets",
-                params={'active': active_only} if active_only else {},
+                params=params,
                 timeout=15
             )
             response.raise_for_status()
@@ -101,8 +106,11 @@ class PredictAPIClient:
 
             # 处理不同的响应格式
             if isinstance(data, dict):
-                markets = data.get('items', data.get('data', []))
-                # 如果还是没有，可能 data 本身就是市场列表的包装
+                markets = data.get('items', data.get('data', data.get('markets', [])))
+                # 处理分页
+                if isinstance(markets, list) and len(markets) > 0 and len(markets) < limit:
+                    # 如果返回了少于请求数量，可能需要分页
+                    pass
                 if not isinstance(markets, list):
                     logger.warning(f"API 返回了意外的格式: {type(data)}")
                     markets = []

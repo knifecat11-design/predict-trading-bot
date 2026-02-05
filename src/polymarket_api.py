@@ -109,12 +109,12 @@ class RealPolymarketClient:
         self._price_cache: Dict[str, Tuple[float, float]] = {}  # {token_id: (price, timestamp)}
         self._price_cache_duration = 10  # 价格缓存 10 秒
 
-    def get_all_markets(self, limit: int = 100, active_only: bool = True) -> List[Dict]:
+    def get_all_markets(self, limit: int = 1000, active_only: bool = True) -> List[Dict]:
         """
         获取所有市场列表（使用公开 API）
 
         Args:
-            limit: 返回数量限制
+            limit: 返回数量限制（最大1000，支持全站监控）
             active_only: 是否只返回活跃市场
 
         API 文档: https://docs.polymarket.com/quickstart/fetching-data
@@ -126,7 +126,7 @@ class RealPolymarketClient:
                 markets = self._markets_cache
             else:
                 # 使用公开的 Gamma API
-                params = {'limit': min(limit, 500)}  # API 最大限制 500
+                params = {'limit': min(limit, 1000)}  # API 最大限制提高到1000
                 if active_only:
                     params['active'] = True
                 if active_only is False:

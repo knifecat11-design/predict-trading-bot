@@ -264,7 +264,7 @@ class MarketMatcher:
     def _get_polymarket_markets(self, poly_client) -> List[Dict]:
         """获取 Polymarket 市场列表"""
         try:
-            markets = poly_client.get_all_markets(limit=200)
+            markets = poly_client.get_all_markets(limit=1000)  # 全站监控
             # 过滤活跃市场
             return [m for m in markets if m.get('active', True)]
         except Exception as e:
@@ -272,7 +272,7 @@ class MarketMatcher:
             return []
 
     def _get_predict_markets(self, predict_client) -> List[Dict]:
-        """获取 Predict.fun 市场列表"""
+        """获取 Predict.fun 市场列表（全站监控）"""
         try:
             return predict_client.get_markets(active_only=True)
         except Exception as e:
@@ -280,7 +280,7 @@ class MarketMatcher:
             return []
 
     def _get_probable_markets(self, probable_client) -> List[Dict]:
-        """获取 Probable.markets 市场列表"""
+        """获取 Probable.markets 市场列表（全站监控）"""
         try:
             return probable_client.get_markets(active_only=True)
         except Exception as e:
