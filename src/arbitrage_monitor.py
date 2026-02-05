@@ -183,10 +183,31 @@ class ArbitrageMonitor:
             try:
                 # 获取市场数据
                 poly_market = poly_client.get_market_info(poly_market_id)
-                poly_orderbook = poly_client.get_order_book(poly_market_id)
-                predict_market = predict_client.get_market_data()
-
                 if not poly_market:
+                    self.logger.warning(f"无法获取市场信息: {poly_market_id}")
+                    continue
+
+                poly_orderbook = poly_client.get_order_book(poly_market_id)
+                if not poly_orderbook:
+                    self.logger.warning(f"无法获取订单簿: {poly_market_id}")
+                    continue
+
+                predict_market = predict_client.get_market_data()
+                if not predict_market:
+                    self.logger.warning(f"无法获取 Predict 市场数据")
+                    continue
+
+                # 检查必要的属性是否存在
+                if not all(hasattr(poly_market, attr) for attr in ['current_price', 'question_title']):
+                    self.logger.error(f"poly_market 缺少必要属性")
+                    continue
+
+                if not hasattr(poly_orderbook, 'yes_bid'):
+                    self.logger.error(f"poly_orderbook 缺少 yes_bid 属性")
+                    continue
+
+                if not all(hasattr(predict_market, attr) for attr in ['yes_bid', 'current_price']):
+                    self.logger.error(f"predict_market 缺少必要属性")
                     continue
 
                 # 方向1: Polymarket Yes + Predict No
@@ -213,8 +234,12 @@ class ArbitrageMonitor:
                     self.opportunities_found += 1
                     self.logger.info(f"发现套利机会: {opp2.market_name} (Predict Yes + Poly No)")
 
+            except AttributeError as e:
+                self.logger.error(f"扫描市场 {poly_market_id} 时属性错误: {e}")
+            except TypeError as e:
+                self.logger.error(f"扫描市场 {poly_market_id} 时类型错误: {e}")
             except Exception as e:
-                self.logger.error(f"扫描市场 {poly_market_id} 时出错: {e}")
+                self.logger.error(f"扫描市场 {poly_market_id} 时未知错误: {type(e).__name__}: {e}", exc_info=True)
 
         return opportunities
 

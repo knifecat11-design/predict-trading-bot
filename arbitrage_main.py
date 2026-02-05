@@ -33,7 +33,7 @@ def setup_logging(config: dict):
     handlers = [logging.StreamHandler(sys.stdout)]
 
     # 只在本地环境写入文件
-    if not os.getenv('RAILWAY_ENVIRONMENT'):
+    if not os.getenv('RAILWAY_ENVIRONMENT') and not os.getenv('RAILWAY_SERVICE_NAME'):
         try:
             Path(log_file).parent.mkdir(parents=True, exist_ok=True)
             handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
@@ -174,7 +174,7 @@ def main():
     scan_interval = config.get('arbitrage', {}).get('scan_interval', 10)
 
     # 信号处理（只在非 Railway 环境）
-    if HAS_SIGNAL and not os.getenv('RAILWAY_ENVIRONMENT'):
+    if HAS_SIGNAL and not os.getenv('RAILWAY_ENVIRONMENT') and not os.getenv('RAILWAY_SERVICE_NAME'):
         def signal_handler(sig, frame):
             nonlocal running
             logger.info("收到停止信号...")
@@ -186,6 +186,9 @@ def main():
     # 主循环
     logger.info("开始监控套利机会...")
 
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+
     try:
         while running:
             scan_count += 1
@@ -195,6 +198,7 @@ def main():
                 opportunities = monitor.scan_all_markets(
                     polymarket_client, predict_client
                 )
+                consecutive_errors = 0  # 重置错误计数
 
                 if opportunities:
                     logger.info(f"发现 {len(opportunities)} 个套利机会")
@@ -218,14 +222,31 @@ def main():
                             logger.error(f"发送通知失败: {e}")
                         last_notification_time[market_key] = now
 
-                # 定期输出统计
+                # 定期输出统计和心跳
                 if scan_count % 6 == 0:
                     stats = monitor.get_statistics()
                     logger.info(f"扫描统计: 总扫描 {stats['total_scans']} 次, "
-                              f"发现机会 {stats['opportunities_found']} 次")
+                              f"发现机会 {stats['opportunities_found']} 次 | 系统运行正常")
+                # 每小时输出一次心跳
+                elif scan_count % 360 == 0:
+                    logger.info(f"心跳: 系统运行中，已扫描 {scan_count} 次")
 
+            except requests.exceptions.RequestException as e:
+                consecutive_errors += 1
+                logger.error(f"网络请求失败 [{consecutive_errors}/{max_consecutive_errors}]: {type(e).__name__}: {e}")
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"连续错误过多 ({consecutive_errors})，等待 30 秒后重试...")
+                    time.sleep(30)
+                    consecutive_errors = 0
+            except KeyboardInterrupt:
+                raise
             except Exception as e:
-                logger.error(f"扫描过程出错: {e}", exc_info=True)
+                consecutive_errors += 1
+                logger.error(f"扫描过程出错 [{consecutive_errors}/{max_consecutive_errors}]: {type(e).__name__}: {e}", exc_info=True)
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"连续错误过多 ({consecutive_errors})，等待 30 秒后重试...")
+                    time.sleep(30)
+                    consecutive_errors = 0
 
             # 等待下一次扫描
             time.sleep(scan_interval)

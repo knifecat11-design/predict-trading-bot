@@ -128,21 +128,30 @@ class TelegramNotifier:
         url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
 
         try:
+            # 转义消息中的特殊字符
+            escaped_message = message.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
             response = requests.post(url, json={
                 'chat_id': self.config.chat_id,
-                'text': message,
-                'parse_mode': 'HTML'  # 不使用HTML格式，纯文本
-            }, timeout=10)
+                'text': escaped_message,
+                'parse_mode': 'HTML'
+            }, timeout=15)
 
             result = response.json()
 
             if result.get('ok'):
                 self.logger.info("Telegram 推送成功")
             else:
-                self.logger.error(f"Telegram 推送失败: {result}")
+                error_desc = result.get('description', 'Unknown error')
+                error_code = result.get('error_code', 'N/A')
+                self.logger.error(f"Telegram 推送失败 [{error_code}]: {error_desc}")
 
+        except requests.exceptions.Timeout:
+            self.logger.error("Telegram 推送超时")
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Telegram 网络错误: {e}")
         except Exception as e:
-            self.logger.error(f"Telegram 推送出错: {e}")
+            self.logger.error(f"Telegram 推送出错: {type(e).__name__}: {e}")
 
     def _format_timestamp(self, timestamp: float) -> str:
         """格式化时间戳"""
