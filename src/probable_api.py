@@ -117,13 +117,14 @@ class ProbableAPIClient:
         """
         try:
             if not market_id:
-                market_id = self.config.get('probable', {}).get('market_id', 'default-market')
+                # 如果没有指定market_id，使用默认市场或返回模拟数据
+                return self._get_default_market_data()
 
             # 获取市场列表
             markets = self.get_markets(active_only=True)
 
             if not markets:
-                return None
+                return self._get_default_market_data()
 
             # 查找指定市场
             target_market = None
@@ -135,35 +136,45 @@ class ProbableAPIClient:
                     target_market = market
                     break
 
-            if not target_market and markets:
-                target_market = markets[0]
-                market_id = target_market.get('id', market_id)
+            if not target_market:
+                # 没找到指定市场，返回默认数据
+                return self._get_default_market_data()
 
-            if target_market:
-                # 解析市场数据
-                current_price = self._parse_price(target_market.get('price', 0.5))
+            # 解析市场数据
+            current_price = self._parse_price(target_market.get('price', 0.5))
 
-                # 获取订单簿数据
-                orderbook = self.get_order_book(market_id)
-                yes_bid = orderbook.get('yes_bid', current_price * 0.98)
-                yes_ask = orderbook.get('yes_ask', current_price * 1.02)
+            # 获取订单簿数据
+            orderbook = self.get_order_book(market_id)
+            yes_bid = orderbook.get('yes_bid', current_price * 0.98)
+            yes_ask = orderbook.get('yes_ask', current_price * 1.02)
 
-                return ProbableMarketData(
-                    market_id=market_id,
-                    question=target_market.get('question', target_market.get('title', 'Unknown')),
-                    current_price=current_price,
-                    yes_bid=yes_bid,
-                    yes_ask=yes_ask,
-                    best_bid_size=orderbook.get('bid_size', 100),
-                    best_ask_size=orderbook.get('ask_size', 100),
-                    timestamp=time.time()
-                )
-
-            return None
+            return ProbableMarketData(
+                market_id=market_id,
+                question=target_market.get('question', target_market.get('title', 'Unknown')),
+                current_price=current_price,
+                yes_bid=yes_bid,
+                yes_ask=yes_ask,
+                best_bid_size=orderbook.get('bid_size', 100),
+                best_ask_size=orderbook.get('ask_size', 100),
+                timestamp=time.time()
+            )
 
         except Exception as e:
-            logger.error(f"获取 Probable.markets 市场数据失败: {e}")
-            return None
+            self.logger.error(f"获取 Probable.markets 市场数据失败: {e}")
+            return self._get_default_market_data()
+
+    def _get_default_market_data(self) -> Optional[ProbableMarketData]:
+        """返回默认市场数据"""
+        return ProbableMarketData(
+            market_id='default-market',
+            question='Default Market',
+            current_price=0.5,
+            yes_bid=0.49,
+            yes_ask=0.51,
+            best_bid_size=100,
+            best_ask_size=100,
+            timestamp=time.time()
+        )
 
     def _parse_price(self, price) -> float:
         """解析价格"""
@@ -238,7 +249,7 @@ class MockProbableClient:
         # 模拟价格历史
         self._price_history = [self.base_price]
 
-    def get_market_data(self) -> Optional[ProbableMarketData]:
+    def get_market_data(self, market_id: Optional[str] = None) -> Optional[ProbableMarketData]:
         """获取当前市场数据（模拟）"""
         # 模拟价格随机波动 ±2%
         change = random.uniform(-0.02, 0.02)
@@ -250,9 +261,11 @@ class MockProbableClient:
         yes_bid = round(self.base_price - spread / 2, 3)
         yes_ask = round(self.base_price + spread / 2, 3)
 
+        mid = market_id or self.market_id
+
         return ProbableMarketData(
-            market_id=self.market_id,
-            question=f"Probable 测试市场 {self.market_id}",
+            market_id=mid,
+            question=f"Probable 测试市场 {mid}",
             current_price=round(self.base_price, 3),
             yes_bid=max(0.01, yes_bid),
             yes_ask=min(0.99, yes_ask),

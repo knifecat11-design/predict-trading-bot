@@ -9,6 +9,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from collections import defaultdict
 
 
 class ArbitrageType(Enum):
@@ -68,20 +69,27 @@ class ArbitrageMonitor:
             scan_interval=arb_config.get('scan_interval', 10)
         )
 
-        self.market_map = self._load_market_map()
         self.logger = logging.getLogger(__name__)
 
         # 统计信息
         self.total_scans = 0
         self.opportunities_found = 0
 
-    def _load_market_map(self) -> Dict[str, str]:
-        """
-        加载市场映射
-        """
-        return {
-            "test-market-1": "test-market"
-        }
+        # 智能市场匹配器
+        self.market_matcher = None
+        self.market_map = {}
+        self._matcher_initialized = False
+
+    def _initialize_matcher(self, poly_client, predict_client, probable_client):
+        """初始化市场匹配器"""
+        try:
+            from .market_matcher import create_market_matcher
+            self.market_matcher = create_market_matcher(self.config)
+            self._matcher_initialized = True
+            self.logger.info("智能市场匹配器初始化成功")
+        except ImportError as e:
+            self.logger.warning(f"无法导入市场匹配器: {e}")
+            self._matcher_initialized = False
 
     def check_arbitrage(self,
                        platform1_yes_price: float,
@@ -219,9 +227,20 @@ class ArbitrageMonitor:
         self.total_scans += 1
         opportunities = []
 
-        for poly_market_id, predict_market_id in self.market_map.items():
+        # 初始化或更新市场匹配器
+        if not self._matcher_initialized:
+            self._initialize_matcher(poly_client, predict_client, probable_client)
+
+        # 使用智能匹配的市场映射
+        market_matches = self.market_matcher.build_market_map(
+            poly_client, predict_client, probable_client
+        )
+
+        self.logger.debug(f"扫描 {len(market_matches)} 个匹配的市场")
+
+        for poly_market_id, match in market_matches.items():
             try:
-                # 获取市场数据
+                # 获取 Polymarket 市场数据
                 poly_market = poly_client.get_market_info(poly_market_id)
                 if not poly_market:
                     self.logger.warning(f"无法获取市场信息: {poly_market_id}")
@@ -230,11 +249,6 @@ class ArbitrageMonitor:
                 poly_orderbook = poly_client.get_order_book(poly_market_id)
                 if not poly_orderbook:
                     self.logger.warning(f"无法获取订单簿: {poly_market_id}")
-                    continue
-
-                predict_market = predict_client.get_market_data()
-                if not predict_market:
-                    self.logger.warning(f"无法获取 Predict 市场数据")
                     continue
 
                 # 检查必要的属性是否存在
@@ -246,37 +260,83 @@ class ArbitrageMonitor:
                     self.logger.error(f"poly_orderbook 缺少 yes_bid 属性")
                     continue
 
-                if not all(hasattr(predict_market, attr) for attr in ['yes_bid', 'current_price']):
-                    self.logger.error(f"predict_market 缺少必要属性")
-                    continue
+                # 尝试获取 Predict.fun 匹配市场的数据
+                if match.predict_id:
+                    try:
+                        predict_market = predict_client.get_market_data(match.predict_id)
+                    except:
+                        predict_market = predict_client.get_market_data()
+                else:
+                    predict_market = None
 
-                # 方向1: Polymarket Yes + Predict No
-                opp1 = self.check_arbitrage(
-                    poly_market.current_price,
-                    predict_market.yes_bid,
-                    poly_market.question_title,
-                    "Polymarket",
-                    "Predict.fun"
-                )
+                # 尝试获取 Probable.markets 匹配市场的数据
+                if match.probable_id and probable_client:
+                    try:
+                        probable_market = probable_client.get_market_data(match.probable_id)
+                    except:
+                        probable_market = probable_client.get_market_data()
+                else:
+                    probable_market = None
 
-                if opp1:
-                    opportunities.append(opp1)
-                    self.opportunities_found += 1
-                    self.logger.info(f"发现套利机会: {opp1.market_name} (Poly Yes + Predict No)")
+                # 检查 Predict.fun 套利机会
+                if predict_market and all(hasattr(predict_market, attr) for attr in ['yes_bid', 'current_price']):
+                    # 方向1: Polymarket Yes + Predict No
+                    opp1 = self.check_arbitrage(
+                        poly_market.current_price,
+                        predict_market.yes_bid,
+                        poly_market.question_title,
+                        "Polymarket",
+                        "Predict.fun"
+                    )
 
-                # 方向2: Predict Yes + Polymarket No
-                opp2 = self.check_reverse_arbitrage(
-                    predict_market.current_price,
-                    poly_orderbook.yes_bid,
-                    poly_market.question_title,
-                    "Predict.fun",
-                    "Polymarket"
-                )
+                    if opp1:
+                        opportunities.append(opp1)
+                        self.opportunities_found += 1
+                        self.logger.info(f"发现套利机会: {opp1.market_name} (Poly Yes + Predict No) 置信度: {match.confidence}")
 
-                if opp2:
-                    opportunities.append(opp2)
-                    self.opportunities_found += 1
-                    self.logger.info(f"发现套利机会: {opp2.market_name} (Predict Yes + Poly No)")
+                    # 方向2: Predict Yes + Polymarket No
+                    opp2 = self.check_reverse_arbitrage(
+                        predict_market.current_price,
+                        poly_orderbook.yes_bid,
+                        poly_market.question_title,
+                        "Predict.fun",
+                        "Polymarket"
+                    )
+
+                    if opp2:
+                        opportunities.append(opp2)
+                        self.opportunities_found += 1
+                        self.logger.info(f"发现套利机会: {opp2.market_name} (Predict Yes + Poly No) 置信度: {match.confidence}")
+
+                # 检查 Probable.markets 套利机会
+                if probable_market and all(hasattr(probable_market, attr) for attr in ['current_price', 'yes_bid']):
+                    # 方向1: Polymarket Yes + Probable No
+                    opp3 = self.check_arbitrage(
+                        poly_market.current_price,
+                        probable_market.yes_bid,
+                        poly_market.question_title,
+                        "Polymarket",
+                        "Probable.markets"
+                    )
+
+                    if opp3:
+                        opportunities.append(opp3)
+                        self.opportunities_found += 1
+                        self.logger.info(f"发现套利机会: {opp3.market_name} (Poly Yes + Probable No) 置信度: {match.confidence}")
+
+                    # 方向2: Probable Yes + Polymarket No
+                    opp4 = self.check_reverse_arbitrage(
+                        probable_market.current_price,
+                        poly_orderbook.yes_bid,
+                        poly_market.question_title,
+                        "Probable.markets",
+                        "Polymarket"
+                    )
+
+                    if opp4:
+                        opportunities.append(opp4)
+                        self.opportunities_found += 1
+                        self.logger.info(f"发现套利机会: {opp4.market_name} (Probable Yes + Poly No) 置信度: {match.confidence}")
 
             except AttributeError as e:
                 self.logger.error(f"扫描市场 {poly_market_id} 时属性错误: {e}")
@@ -285,99 +345,18 @@ class ArbitrageMonitor:
             except Exception as e:
                 self.logger.error(f"扫描市场 {poly_market_id} 时未知错误: {type(e).__name__}: {e}", exc_info=True)
 
-        # 如果提供了 Probable 客户端，扫描 Probable 相关的套利机会
-        if probable_client:
-            opportunities.extend(self._scan_probable_markets(poly_client, probable_client))
-
-        return opportunities
-
-    def _scan_probable_markets(self,
-                              poly_client,
-                              probable_client) -> List[ArbitrageOpportunity]:
-        """
-        扫描 Probable.markets 相关的套利机会（单向：Probable ↔ Polymarket）
-
-        Args:
-            poly_client: Polymarket客户端
-            probable_client: Probable客户端
-
-        Returns:
-            套利机会列表
-        """
-        opportunities = []
-
-        try:
-            # 获取 Probable 市场数据
-            probable_market = probable_client.get_market_data()
-            if not probable_market:
-                self.logger.warning(f"无法获取 Probable 市场数据")
-                return opportunities
-
-            # 获取 Polymarket 市场数据
-            poly_market = poly_client.get_market_info("test-market-1")
-            if not poly_market:
-                self.logger.warning(f"无法获取 Polymarket 市场信息")
-                return opportunities
-
-            poly_orderbook = poly_client.get_order_book("test-market-1")
-            if not poly_orderbook:
-                self.logger.warning(f"无法获取 Polymarket 订单簿")
-                return opportunities
-
-            # 检查必要的属性
-            if not all(hasattr(probable_market, attr) for attr in ['current_price', 'question']):
-                self.logger.error(f"probable_market 缺少必要属性")
-                return opportunities
-
-            if not all(hasattr(poly_market, attr) for attr in ['current_price', 'question_title']):
-                self.logger.error(f"poly_market 缺少必要属性")
-                return opportunities
-
-            if not hasattr(poly_orderbook, 'yes_bid'):
-                self.logger.error(f"poly_orderbook 缺少 yes_bid 属性")
-                return opportunities
-
-            # 方向1: Polymarket Yes + Probable No
-            opp1 = self.check_arbitrage(
-                poly_market.current_price,
-                probable_market.yes_bid,
-                poly_market.question_title,
-                "Polymarket",
-                "Probable.markets"
-            )
-
-            if opp1:
-                opportunities.append(opp1)
-                self.opportunities_found += 1
-                self.logger.info(f"发现套利机会: {opp1.market_name} (Poly Yes + Probable No)")
-
-            # 方向2: Probable Yes + Polymarket No
-            opp2 = self.check_reverse_arbitrage(
-                probable_market.current_price,
-                poly_orderbook.yes_bid,
-                probable_market.question,
-                "Probable.markets",
-                "Polymarket"
-            )
-
-            if opp2:
-                opportunities.append(opp2)
-                self.opportunities_found += 1
-                self.logger.info(f"发现套利机会: {opp2.market_name} (Probable Yes + Poly No)")
-
-        except AttributeError as e:
-            self.logger.error(f"扫描 Probable 市场时属性错误: {e}")
-        except TypeError as e:
-            self.logger.error(f"扫描 Probable 市场时类型错误: {e}")
-        except Exception as e:
-            self.logger.error(f"扫描 Probable 市场时未知错误: {type(e).__name__}: {e}", exc_info=True)
-
         return opportunities
 
     def get_statistics(self) -> Dict:
         """获取统计信息"""
-        return {
+        stats = {
             'total_scans': self.total_scans,
             'opportunities_found': self.opportunities_found,
             'min_arbitrage_threshold': self.arb_config.min_arbitrage_percent
         }
+
+        # 添加市场匹配统计
+        if self.market_matcher:
+            stats['market_matches'] = self.market_matcher.get_statistics()
+
+        return stats

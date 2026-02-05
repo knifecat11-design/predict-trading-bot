@@ -54,6 +54,18 @@ arbitrage:
   scan_interval: 10             # 扫描间隔（秒）
   cooldown_minutes: 5           # 同一市场通知冷却时间（分钟）
 
+# 智能市场匹配配置
+market_match:
+  min_confidence: 0.4           # 最小匹配置信度（0-1），越严格数值越高
+  max_matches: 3                # 每个市场最大匹配候选数量
+  cache_minutes: 30             # 匹配结果缓存时间（分钟）
+  # 手动市场映射（可选，用于覆盖自动匹配）
+  # 格式：polymarket_id: {predict_id: "...", probable_id: "..."}
+  manual_mappings:
+    # "0x1234567890abcdef":
+    #   predict_id: "market-abc-123"
+    #   probable_id: "market-xyz-789"
+
 # 通知配置
 notification:
   telegram:

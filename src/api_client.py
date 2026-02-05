@@ -119,7 +119,7 @@ class PredictAPIClient:
             logger.error(f"获取市场列表失败: {e}")
             return []
 
-    def get_market_data(self, market_id: Optional[str] = None) -> MarketData:
+    def get_market_data(self, market_id: Optional[str] = None) -> Optional[MarketData]:
         """
         获取市场数据（用于套利监控）
 
