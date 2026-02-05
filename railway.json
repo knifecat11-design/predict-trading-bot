@@ -8,7 +8,7 @@
   "deploy": {
     "startCommand": "python start_arbitrage.py",
     "restartPolicyType": "ALWAYS",
-    "healthcheckPath": "/",
+    "healthcheckPath": null,
     "healthcheckTimeout": 300,
     "cron": null
   }
