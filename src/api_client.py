@@ -444,15 +444,149 @@ class MockAPIClient:
             timestamp=time.time()
         )
 
-    def get_markets(self, active_only: bool = True) -> List[Dict]:
-        """获取市场列表（模拟）"""
-        return [{
-            'id': 'test-market-1',
-            'slug': 'test-market',
-            'question': '测试市场：某事件将在2026年发生',
-            'price': self.base_price,
-            'active': True
-        }]
+    def get_markets(self, active_only: bool = True, limit: int = 1000) -> List[Dict]:
+        """
+        获取市场列表（模拟全站监控）
+        生成多个模拟市场用于测试套利逻辑
+
+        Args:
+            active_only: 是否只返回活跃市场
+            limit: 返回数量限制（最多500个）
+        """
+        # 模拟市场数据模板（更多市场以匹配 Polymarket 的规模）
+        market_templates = [
+            # Politics
+            {'question': 'Will Trump win 2024 election?', 'base_price': 0.55, 'category': 'politics'},
+            {'question': 'Will Biden run for reelection in 2024?', 'base_price': 0.35, 'category': 'politics'},
+            {'question': 'Will Republicans control Senate in 2025?', 'base_price': 0.52, 'category': 'politics'},
+            {'question': 'Will UK elect Labour government in 2026?', 'base_price': 0.58, 'category': 'politics'},
+            {'question': 'Will Ukraine war end in 2026?', 'base_price': 0.55, 'category': 'politics'},
+            {'question': 'Will Israel normalize relations with Saudi Arabia?', 'base_price': 0.42, 'category': 'politics'},
+            {'question': 'Will China invade Taiwan by 2027?', 'base_price': 0.15, 'category': 'politics'},
+            {'question': 'Will Putin remain president in 2026?', 'base_price': 0.75, 'category': 'politics'},
+            {'question': 'Will Macron win reelection in France?', 'base_price': 0.45, 'category': 'politics'},
+            {'question': 'Will Germany elect CDU chancellor in 2025?', 'base_price': 0.62, 'category': 'politics'},
+            {'question': 'Will India reelect Modi in 2029?', 'base_price': 0.68, 'category': 'politics'},
+            {'question': 'Will Brazil reelect Lula in 2026?', 'base_price': 0.48, 'category': 'politics'},
+            {'question': 'Will North Korea conduct nuclear test in 2026?', 'base_price': 0.38, 'category': 'politics'},
+            {'question': 'Will Iran nuclear deal be restored?', 'base_price': 0.22, 'category': 'politics'},
+            {'question': 'Will Brexit be reversed by 2030?', 'base_price': 0.18, 'category': 'politics'},
+
+            # Crypto & Finance
+            {'question': 'Will Bitcoin reach $100k in 2026?', 'base_price': 0.65, 'category': 'crypto'},
+            {'question': 'Will Ethereum surpass $5k in 2026?', 'base_price': 0.45, 'category': 'crypto'},
+            {'question': 'Will Bitcoin ETF exceed $50B AUM?', 'base_price': 0.72, 'category': 'crypto'},
+            {'question': 'Will Solana reach $500?', 'base_price': 0.42, 'category': 'crypto'},
+            {'question': 'Will XRP relist on major US exchanges?', 'base_price': 0.58, 'category': 'crypto'},
+            {'question': 'Will Cardano reach $5?', 'base_price': 0.32, 'category': 'crypto'},
+            {'question': 'Will Dogecoin reach $1?', 'base_price': 0.25, 'category': 'crypto'},
+            {'question': 'Will US recession happen in 2026?', 'base_price': 0.40, 'category': 'finance'},
+            {'question': 'Will Fed cut rates below 3%?', 'base_price': 0.55, 'category': 'finance'},
+            {'question': 'Will Tesla stock reach $500?', 'base_price': 0.50, 'category': 'finance'},
+            {'question': 'Will NVIDIA reach $2000?', 'base_price': 0.68, 'category': 'finance'},
+            {'question': 'Will Apple reach $250?', 'base_price': 0.62, 'category': 'finance'},
+            {'question': 'Will Amazon acquire a major company?', 'base_price': 0.42, 'category': 'finance'},
+            {'question': 'Will Meta stock hit $1000?', 'base_price': 0.48, 'category': 'finance'},
+            {'question': 'Will Google split its stock?', 'base_price': 0.35, 'category': 'finance'},
+            {'question': 'Will Microsoft acquire OpenAI?', 'base_price': 0.28, 'category': 'finance'},
+            {'question': 'Will US ban crypto mining?', 'base_price': 0.12, 'category': 'crypto'},
+            {'question': 'Will EU regulate stablecoins?', 'base_price': 0.78, 'category': 'crypto'},
+            {'question': 'Will China launch CBDC?', 'base_price': 0.85, 'category': 'crypto'},
+            {'question': 'Will DeFi TVL exceed $500B?', 'base_price': 0.45, 'category': 'crypto'},
+
+            # Technology
+            {'question': 'Will AI pass Turing test by 2027?', 'base_price': 0.35, 'category': 'tech'},
+            {'question': 'Will Google achieve AGI by 2028?', 'base_price': 0.30, 'category': 'tech'},
+            {'question': 'Will GPT-5 be released in 2026?', 'base_price': 0.72, 'category': 'tech'},
+            {'question': 'Will Apple release AR glasses?', 'base_price': 0.70, 'category': 'tech'},
+            {'question': 'Will SpaceX land on Mars by 2030?', 'base_price': 0.25, 'category': 'tech'},
+            {'question': 'Will Tesla release Robotaxi in 2026?', 'base_price': 0.55, 'category': 'tech'},
+            {'question': 'Will quantum computers break encryption?', 'base_price': 0.20, 'category': 'tech'},
+            {'question': 'Will Apple launch foldable iPhone?', 'base_price': 0.52, 'category': 'tech'},
+            {'question': 'Will NVIDIA release new GPU architecture?', 'base_price': 0.88, 'category': 'tech'},
+            {'question': 'Will Intel regain market share?', 'base_price': 0.38, 'category': 'tech'},
+            {'question': 'Will AMD surpass Intel in revenue?', 'base_price': 0.65, 'category': 'tech'},
+            {'question': 'Will Samsung release holographic TV?', 'base_price': 0.22, 'category': 'tech'},
+            {'question': 'Will 6G launch commercially by 2030?', 'base_price': 0.45, 'category': 'tech'},
+            {'question': 'Will flying cars be legal by 2028?', 'base_price': 0.08, 'category': 'tech'},
+            {'question': 'Will brain implants become mainstream?', 'base_price': 0.15, 'category': 'tech'},
+
+            # Sports & Entertainment
+            {'question': 'Will Saudi Arabia host World Cup?', 'base_price': 0.75, 'category': 'sports'},
+            {'question': 'Will Lakers win NBA championship in 2026?', 'base_price': 0.35, 'category': 'sports'},
+            {'question': 'Will Messi play in MLS in 2026?', 'base_price': 0.65, 'category': 'sports'},
+            {'question': 'Will Olympics be held in LA?', 'base_price': 0.82, 'category': 'sports'},
+            {'question': 'Will a movie gross $3B in 2026?', 'base_price': 0.42, 'category': 'entertainment'},
+            {'question': 'Will Netflix lose 5M+ subscribers?', 'base_price': 0.28, 'category': 'entertainment'},
+            {'question': 'Will Disney+ surpass Netflix?', 'base_price': 0.32, 'category': 'entertainment'},
+            {'question': 'Will a video game sell 50M copies?', 'base_price': 0.55, 'category': 'entertainment'},
+            {'question': 'Will Taylor Swift tour in 2026?', 'base_price': 0.78, 'category': 'entertainment'},
+            {'question': 'Will FIFA ban video technology?', 'base_price': 0.18, 'category': 'sports'},
+            {'question': 'Will NFL expand to Europe?', 'base_price': 0.35, 'category': 'sports'},
+            {'question': 'Will an eSports athlete earn $10M?', 'base_price': 0.48, 'category': 'sports'},
+            {'question': 'Will a VR game win Game of the Year?', 'base_price': 0.52, 'category': 'entertainment'},
+            {'question': 'Will a TikTok star win Oscar?', 'base_price': 0.22, 'category': 'entertainment'},
+            {'question': 'Will a YouTube video hit 10B views?', 'base_price': 0.38, 'category': 'entertainment'},
+
+            # Science & Environment
+            {'question': 'Will global temperature rise exceed 1.5C?', 'base_price': 0.65, 'category': 'science'},
+            {'question': 'Will carbon emissions peak by 2026?', 'base_price': 0.42, 'category': 'environment'},
+            {'question': 'Will renewable energy exceed 50%?', 'base_price': 0.58, 'category': 'environment'},
+            {'question': 'Will China land on moon by 2027?', 'base_price': 0.60, 'category': 'science'},
+            {'question': 'Will SpaceX starship succeed in 2026?', 'base_price': 0.72, 'category': 'science'},
+            {'question': 'Will James Webb telescope find life?', 'base_price': 0.25, 'category': 'science'},
+            {'question': 'Will fusion energy become commercial?', 'base_price': 0.18, 'category': 'science'},
+            {'question': 'Will electric vehicles exceed 50% sales?', 'base_price': 0.55, 'category': 'environment'},
+            {'question': 'Will lab-grown meat be approved?', 'base_price': 0.48, 'category': 'science'},
+            {'question': 'Will a hurricane hit NYC in 2026?', 'base_price': 0.32, 'category': 'environment'},
+            {'question': 'Will California have magnitude 7+ quake?', 'base_price': 0.38, 'category': 'science'},
+            {'question': 'Will Arctic be ice-free in summer?', 'base_price': 0.45, 'category': 'environment'},
+            {'question': 'Will a species go extinct in 2026?', 'base_price': 0.65, 'category': 'environment'},
+            {'question': 'Will ocean cleanup remove 1000 tons?', 'base_price': 0.52, 'category': 'environment'},
+            {'question': 'Will a new virus emerge in 2026?', 'base_price': 0.42, 'category': 'science'},
+
+            # Business & Economy
+            {'question': 'Will Meta layoff 10000+ employees?', 'base_price': 0.35, 'category': 'business'},
+            {'question': 'Will Amazon acquire a major company?', 'base_price': 0.42, 'category': 'business'},
+            {'question': 'Will US minimum wage reach $15?', 'base_price': 0.58, 'category': 'economy'},
+            {'question': 'Will unemployment exceed 8%?', 'base_price': 0.32, 'category': 'economy'},
+            {'question': 'Will inflation fall below 2%?', 'base_price': 0.45, 'category': 'economy'},
+            {'question': 'Will GDP growth exceed 5%?', 'base_price': 0.38, 'category': 'economy'},
+            {'question': 'Will housing prices crash 20%?', 'base_price': 0.25, 'category': 'economy'},
+            {'question': 'Will gold reach $3000?', 'base_price': 0.52, 'category': 'finance'},
+            {'question': 'Will oil exceed $150?', 'base_price': 0.42, 'category': 'energy'},
+            {'question': 'Will a unicorn IPO in 2026?', 'base_price': 0.68, 'category': 'business'},
+            {'question': 'Will a bank fail in 2026?', 'base_price': 0.28, 'category': 'finance'},
+            {'question': 'Will Bitcoin become legal tender?', 'base_price': 0.22, 'category': 'crypto'},
+            {'question': 'Will US national debt exceed $40T?', 'base_price': 0.78, 'category': 'economy'},
+            {'question': 'Will China economy grow 6%?', 'base_price': 0.45, 'category': 'economy'},
+            {'question': 'Will Eurozone avoid recession?', 'base_price': 0.55, 'category': 'economy'},
+        ]
+
+        markets = []
+        num_markets = min(len(market_templates), limit, 500)  # 最多500个市场
+
+        for i, template in enumerate(market_templates[:num_markets]):
+            # 为每个市场添加一些价格随机性（±5%）
+            price_variation = random.uniform(-0.05, 0.05)
+            price = max(0.05, min(0.95, template['base_price'] + price_variation))
+
+            # 随机生成交易量
+            volume = random.randint(10000, 500000)
+
+            market = {
+                'id': f'predict-market-{i+1}',
+                'slug': f'predict-market-{i+1}',
+                'question': template['question'],
+                'price': round(price, 3),
+                'active': True,
+                'volume': volume,
+                'end_date': '2026-12-31T23:59:59Z',
+                'category': template.get('category', 'other')
+            }
+            markets.append(market)
+
+        return markets
 
     def get_open_orders(self) -> List[Order]:
         """获取当前所有挂单"""
