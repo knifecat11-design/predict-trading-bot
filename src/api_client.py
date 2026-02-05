@@ -62,9 +62,10 @@ class PredictAPIClient:
         self.session = requests.Session()
 
         # 设置认证头
+        # Predict.fun 使用 x-api-key header，不是 Bearer token
         if self.api_key:
             self.session.headers.update({
-                'Authorization': f'Bearer {self.api_key}',
+                'x-api-key': self.api_key,
                 'Content-Type': 'application/json'
             })
         else:
