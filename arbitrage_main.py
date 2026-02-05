@@ -92,7 +92,7 @@ def print_banner():
     print()
     print("=" * 60)
     print("  多平台套利监控系统")
-    print("  平台: Polymarket ↔ Predict.fun ↔ Probable.markets")
+    print("  平台: Polymarket ↔ Predict.fun")
     print("  策略: Yes + No < 100% 时套利")
     print("=" * 60)
     print()
@@ -161,7 +161,6 @@ def main():
     try:
         from src.api_client import create_api_client
         from src.polymarket_api import create_polymarket_client
-        from src.probable_api import create_probable_client
         from src.arbitrage_monitor import ArbitrageMonitor
         from src.notifier import TelegramNotifier
     except ImportError as e:
@@ -171,30 +170,27 @@ def main():
     # 创建组件
     logger.info("创建 API 客户端...")
 
-    # 混合模式：Polymarket 真实 + Predict.fun 模拟 + Probable.markets 模拟
+    # 混合模式：Polymarket 真实 + Predict.fun 模拟
     if use_hybrid_mode and not use_real_api:
         polymarket_client = create_polymarket_client(config, use_real=True)
         logger.info(f"  Polymarket: 真实 API（公开数据）")
         predict_client = create_api_client(config, use_mock=True)
         logger.info(f"  Predict.fun: 模拟数据（等待 API Key）")
-        probable_client = create_probable_client(config, use_mock=True)
-        logger.info(f"  Probable.markets: 模拟数据（需要 API Key）")
+        probable_client = None  # Probable.markets 已弃用
     # 完全真实模式
     elif use_real_api:
         polymarket_client = create_polymarket_client(config, use_real=True)
         logger.info(f"  Polymarket: 真实 API")
         predict_client = create_api_client(config, use_mock=False)
         logger.info(f"  Predict.fun: 真实 API（需要 API Key）")
-        probable_client = create_probable_client(config, use_mock=False)
-        logger.info(f"  Probable.markets: 真实 API（需要 API Key）")
+        probable_client = None  # Probable.markets 已弃用
     # 完全模拟模式
     else:
         polymarket_client = create_polymarket_client(config, use_real=False)
         logger.info(f"  Polymarket: 模拟数据")
         predict_client = create_api_client(config, use_mock=True)
         logger.info(f"  Predict.fun: 模拟数据")
-        probable_client = create_probable_client(config, use_mock=True)
-        logger.info(f"  Probable.markets: 模拟数据")
+        probable_client = None  # Probable.markets 已弃用
 
     logger.info("初始化套利监控器...")
     monitor = ArbitrageMonitor(config)
@@ -240,9 +236,9 @@ def main():
             scan_count += 1
 
             try:
-                # 扫描套利机会
+                # 扫描套利机会（传入 None 作为 probable_client）
                 opportunities = monitor.scan_all_markets(
-                    polymarket_client, predict_client, probable_client
+                    polymarket_client, predict_client, None
                 )
                 consecutive_errors = 0  # 重置错误计数
 

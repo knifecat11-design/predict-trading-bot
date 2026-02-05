@@ -195,11 +195,10 @@ class MarketMatcher:
         # 获取各平台市场列表
         poly_markets = self._get_polymarket_markets(poly_client)
         predict_markets = self._get_predict_markets(predict_client)
-        probable_markets = self._get_probable_markets(probable_client)
+        probable_markets = self._get_probable_markets(probable_client)  # 返回空列表
 
         self.logger.info(f"Polymarket: {len(poly_markets)} 个市场")
         self.logger.info(f"Predict.fun: {len(predict_markets)} 个市场")
-        self.logger.info(f"Probable.markets: {len(probable_markets)} 个市场")
 
         # 构建匹配
         market_map = {}
@@ -219,20 +218,14 @@ class MarketMatcher:
                 'question'
             )
 
-            # 查找 Probable.markets 匹配
-            probable_match = self._find_best_match(
-                poly_title,
-                probable_markets,
-                'id',
-                'question'
-            )
+            # Probable.markets 已弃用，跳过匹配
+            probable_match = None
 
             # 计算置信度
             confidence = 0.5  # Polymarket 基础分
             if predict_match:
                 confidence += predict_match['score'] * 0.25
-            if probable_match:
-                confidence += probable_match['score'] * 0.25
+            # 移除 probable_match 的置信度加成
 
             # 只保留高置信度匹配
             if confidence >= self.min_confidence:
@@ -241,8 +234,8 @@ class MarketMatcher:
                     polymarket_title=poly_title,
                     predict_id=predict_match['id'] if predict_match else None,
                     predict_title=predict_match['title'] if predict_match else None,
-                    probable_id=probable_match['id'] if probable_match else None,
-                    probable_title=probable_match['title'] if probable_match else None,
+                    probable_id=None,  # Probable.markets 已弃用
+                    probable_title=None,  # Probable.markets 已弃用
                     confidence=round(confidence, 2)
                 )
                 market_map[poly_id] = match
@@ -250,8 +243,7 @@ class MarketMatcher:
                 self.logger.debug(
                     f"匹配: {poly_title[:40]}... "
                     f"(置信度: {confidence:.2f}, "
-                    f"Predict: {bool(predict_match)}, "
-                    f"Probable: {bool(probable_match)})"
+                    f"Predict: {bool(predict_match)})"
                 )
 
         # 更新缓存
@@ -280,12 +272,8 @@ class MarketMatcher:
             return []
 
     def _get_probable_markets(self, probable_client) -> List[Dict]:
-        """获取 Probable.markets 市场列表（全站监控）"""
-        try:
-            return probable_client.get_markets(active_only=True)
-        except Exception as e:
-            self.logger.error(f"获取 Probable.markets 市场失败: {e}")
-            return []
+        """Probable.markets 已弃用，返回空列表"""
+        return []
 
     def _find_best_match(self,
                          target_title: str,
@@ -343,16 +331,14 @@ class MarketMatcher:
     def get_statistics(self) -> Dict:
         """获取匹配统计信息"""
         if not self._match_cache:
-            return {'total': 0, 'with_predict': 0, 'with_probable': 0}
+            return {'total': 0, 'with_predict': 0}
 
         with_predict = sum(1 for m in self._match_cache.values() if m.predict_id)
-        with_probable = sum(1 for m in self._match_cache.values() if m.probable_id)
         avg_confidence = sum(m.confidence for m in self._match_cache.values()) / len(self._match_cache)
 
         return {
             'total': len(self._match_cache),
             'with_predict': with_predict,
-            'with_probable': with_probable,
             'avg_confidence': round(avg_confidence, 2)
         }
 

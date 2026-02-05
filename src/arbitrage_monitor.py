@@ -19,10 +19,6 @@ class ArbitrageType(Enum):
     """套利类型"""
     POLY_YES_PREDICT_NO = "poly_yes_predict_no"      # Poly买Yes + Predict买No
     PREDICT_YES_POLY_NO = "predict_yes_poly_no"      # Predict买Yes + Poly买No
-    POLY_YES_PROBABLE_NO = "poly_yes_probable_no"    # Poly买Yes + Probable买No
-    PROBABLE_YES_POLY_NO = "probable_yes_poly_no"    # Probable买Yes + Poly买No
-    PROBABLE_YES_PREDICT_NO = "probable_yes_predict_no"  # Probable买Yes + Predict买No
-    PREDICT_YES_PROBABLE_NO = "predict_yes_probable_no"  # Predict买Yes + Probable买No
 
 
 @dataclass
@@ -135,10 +131,6 @@ class ArbitrageMonitor:
             # 确定套利类型
             if platform1_name == "Polymarket" and platform2_name == "Predict.fun":
                 arb_type = ArbitrageType.POLY_YES_PREDICT_NO
-            elif platform1_name == "Polymarket" and platform2_name == "Probable.markets":
-                arb_type = ArbitrageType.POLY_YES_PROBABLE_NO
-            elif platform1_name == "Probable.markets" and platform2_name == "Predict.fun":
-                arb_type = ArbitrageType.PROBABLE_YES_PREDICT_NO
             else:
                 arb_type = ArbitrageType.POLY_YES_PREDICT_NO
 
@@ -194,10 +186,6 @@ class ArbitrageMonitor:
             # 确定套利类型
             if platform1_name == "Predict.fun" and platform2_name == "Polymarket":
                 arb_type = ArbitrageType.PREDICT_YES_POLY_NO
-            elif platform1_name == "Probable.markets" and platform2_name == "Polymarket":
-                arb_type = ArbitrageType.PROBABLE_YES_POLY_NO
-            elif platform1_name == "Predict.fun" and platform2_name == "Probable.markets":
-                arb_type = ArbitrageType.PREDICT_YES_PROBABLE_NO
             else:
                 arb_type = ArbitrageType.PREDICT_YES_POLY_NO
 
@@ -279,14 +267,7 @@ class ArbitrageMonitor:
                 else:
                     predict_market = None
 
-                # 尝试获取 Probable.markets 匹配市场的数据
-                if match.probable_id and probable_client:
-                    try:
-                        probable_market = probable_client.get_market_data(match.probable_id)
-                    except:
-                        probable_market = probable_client.get_market_data()
-                else:
-                    probable_market = None
+                # Probable.markets 已弃用，跳过相关逻辑
 
                 # 检查 Predict.fun 套利机会
                 if predict_market and all(hasattr(predict_market, attr) for attr in ['yes_bid', 'current_price']):
@@ -317,36 +298,6 @@ class ArbitrageMonitor:
                         opportunities.append(opp2)
                         self.opportunities_found += 1
                         self.logger.info(f"发现套利机会: {opp2.market_name} (Predict Yes + Poly No) 置信度: {match.confidence}")
-
-                # 检查 Probable.markets 套利机会
-                if probable_market and all(hasattr(probable_market, attr) for attr in ['current_price', 'yes_bid']):
-                    # 方向1: Polymarket Yes + Probable No
-                    opp3 = self.check_arbitrage(
-                        poly_market.current_price,
-                        probable_market.yes_bid,
-                        poly_market.question_title,
-                        "Polymarket",
-                        "Probable.markets"
-                    )
-
-                    if opp3:
-                        opportunities.append(opp3)
-                        self.opportunities_found += 1
-                        self.logger.info(f"发现套利机会: {opp3.market_name} (Poly Yes + Probable No) 置信度: {match.confidence}")
-
-                    # 方向2: Probable Yes + Polymarket No
-                    opp4 = self.check_reverse_arbitrage(
-                        probable_market.current_price,
-                        poly_orderbook.yes_bid,
-                        poly_market.question_title,
-                        "Probable.markets",
-                        "Polymarket"
-                    )
-
-                    if opp4:
-                        opportunities.append(opp4)
-                        self.opportunities_found += 1
-                        self.logger.info(f"发现套利机会: {opp4.market_name} (Probable Yes + Poly No) 置信度: {match.confidence}")
 
             except AttributeError as e:
                 self.logger.error(f"扫描市场 {poly_market_id} 时属性错误: {e}")

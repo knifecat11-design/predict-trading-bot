@@ -138,31 +138,21 @@ class RealPolymarketClient:
                 )
                 response.raise_for_status()
                 markets = response.json()
+                self.logger.info(f"原始 API 返回 {len(markets)} 个市场")
 
-                # 手动过滤：只返回未关闭且有效期的市场
+                # 手动过滤：只返回活跃的市场
+                # 注意：API 的 'closed' 字段似乎都已为 True，改用 'active' 字段
                 if active_only:
-                    current_time = time.time()
-                    # 过滤掉已关闭的市场或已过期的市场
+                    # 过滤活跃市场，使用 'active' 字段而不是 'closed'
                     filtered_markets = []
                     for market in markets:
-                        # 检查是否已关闭
-                        if market.get('closed', False):
-                            continue
-                        # 检查是否已过期（如果有结束日期）
-                        end_date = market.get('end_date')
-                        if end_date:
-                            try:
-                                from datetime import datetime
-                                if isinstance(end_date, str):
-                                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                                    # 如果已过期，跳过
-                                    if end_dt.timestamp() < current_time:
-                                        continue
-                            except:
-                                pass  # 日期解析失败，保留该市场
-                        filtered_markets.append(market)
+                        # 使用 active 字段判断市场是否活跃
+                        # 不再检查 closed 字段（因为所有市场的 closed 都为 True）
+                        if market.get('active', False):
+                            filtered_markets.append(market)
 
                     markets = filtered_markets
+                    self.logger.info(f"过滤后 {len(filtered_markets)} 个活跃市场")
 
                 # 更新缓存
                 self._markets_cache = markets
