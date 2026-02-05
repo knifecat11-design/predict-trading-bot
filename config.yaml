@@ -35,6 +35,17 @@ polymarket:
   base_url: "https://api.polymarket.com"
   enabled: true                 # 是否启用Polymarket数据
 
+# Probable.markets 配置
+probable:
+  base_url: "https://api.probable.markets"
+  api_key: ""                   # Probable API Key（从开发者平台获取）
+  secret: ""                    # API Secret（生成后不可恢复）
+  passphrase: ""                # API Passphrase
+  wallet_address: ""            # 钱包地址（用于签名）
+  chain_id: 1                   # 链ID
+  market_id: "default-market"   # 默认市场ID
+  enabled: false                # 是否启用Probable.markets（默认关闭，等待API）
+
 # 套利监控配置
 arbitrage:
   enabled: true                 # 是否启用套利监控

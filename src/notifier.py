@@ -74,18 +74,15 @@ class TelegramNotifier:
         格式化套利机会消息
 
         格式要求：
-        - 标注Polymarket买Yes还是No
-        - 标注Predict买Yes还是No
+        - 标注平台1买Yes还是No
+        - 标注平台2买Yes还是No
         - 利差（套利空间）
         - 市场名称
         - 两平台对应价格
         """
 
         # 套利方向描述
-        if opp.arbitrage_type.value == "poly_yes_predict_no":
-            direction_desc = "Polymarket 买Yes + Predict 买No"
-        else:
-            direction_desc = "Predict 买Yes + Polymarket 买No"
+        direction_desc = f"{opp.platform1_name} {opp.platform1_action} + {opp.platform2_name} {opp.platform2_action}"
 
         message = f"""━━━━━━━━━━━━━━━━━━━━━
 📊 市场名称: {opp.market_name}
@@ -97,15 +94,15 @@ class TelegramNotifier:
 
 ━━━━━━━━━━━━━━━━━━━━━
 
-📍 Polymarket
-  操作: {opp.poly_action}
-  Yes价格: {opp.poly_yes_price:.1f}%
-  No价格: {opp.poly_no_price:.1f}%
+📍 {opp.platform1_name}
+  操作: {opp.platform1_action}
+  Yes价格: {opp.platform1_yes_price:.1f}%
+  No价格: {opp.platform1_no_price:.1f}%
 
-📍 Predict.fun
-  操作: {opp.predict_action}
-  Yes价格: {opp.predict_yes_price:.1f}%
-  No价格: {opp.predict_no_price:.1f}%
+📍 {opp.platform2_name}
+  操作: {opp.platform2_action}
+  Yes价格: {opp.platform2_yes_price:.1f}%
+  No价格: {opp.platform2_no_price:.1f}%
 
 ━━━━━━━━━━━━━━━━━━━━━
 

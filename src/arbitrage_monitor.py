@@ -15,6 +15,10 @@ class ArbitrageType(Enum):
     """套利类型"""
     POLY_YES_PREDICT_NO = "poly_yes_predict_no"      # Poly买Yes + Predict买No
     PREDICT_YES_POLY_NO = "predict_yes_poly_no"      # Predict买Yes + Poly买No
+    POLY_YES_PROBABLE_NO = "poly_yes_probable_no"    # Poly买Yes + Probable买No
+    PROBABLE_YES_POLY_NO = "probable_yes_poly_no"    # Probable买Yes + Poly买No
+    PROBABLE_YES_PREDICT_NO = "probable_yes_predict_no"  # Probable买Yes + Predict买No
+    PREDICT_YES_PROBABLE_NO = "predict_yes_probable_no"  # Predict买Yes + Probable买No
 
 
 @dataclass
@@ -27,15 +31,17 @@ class ArbitrageOpportunity:
     combined_price: float          # Yes + No 的总价格
     arbitrage_percent: float       # 套利空间（100% - combined_price）
 
-    # Polymarket 信息
-    poly_yes_price: float          # Polymarket Yes价格
-    poly_no_price: float           # Polymarket No价格 (1 - yes_price)
-    poly_action: str               # "买Yes" 或 "买No"
+    # 平台1信息 (Polymarket 或 Probable)
+    platform1_name: str            # 平台名称
+    platform1_yes_price: float     # 平台1 Yes价格
+    platform1_no_price: float      # 平台1 No价格
+    platform1_action: str          # "买Yes" 或 "买No"
 
-    # Predict 信息
-    predict_yes_price: float       # Predict Yes价格
-    predict_no_price: float        # Predict No价格
-    predict_action: str            # "买Yes" 或 "买No"
+    # 平台2信息 (Predict 或 Probable)
+    platform2_name: str            # 平台名称
+    platform2_yes_price: float     # 平台2 Yes价格
+    platform2_no_price: float      # 平台2 No价格
+    platform2_action: str          # "买Yes" 或 "买No"
 
     timestamp: float
 
@@ -78,86 +84,118 @@ class ArbitrageMonitor:
         }
 
     def check_arbitrage(self,
-                       poly_yes_price: float,
-                       predict_no_price: float,
-                       market_name: str) -> Optional[ArbitrageOpportunity]:
+                       platform1_yes_price: float,
+                       platform2_no_price: float,
+                       market_name: str,
+                       platform1_name: str = "Polymarket",
+                       platform2_name: str = "Predict.fun") -> Optional[ArbitrageOpportunity]:
         """
-        检查套利机会：Polymarket Yes + Predict No
+        检查套利机会：平台1 Yes + 平台2 No
 
         Args:
-            poly_yes_price: Polymarket Yes价格
-            predict_no_price: Predict No价格
+            platform1_yes_price: 平台1 Yes价格
+            platform2_no_price: 平台2 No价格
             market_name: 市场名称
+            platform1_name: 平台1名称
+            platform2_name: 平台2名称
 
         Returns:
             套利机会（如果存在）
         """
         # No价格转换为小数形式（如果输入是百分比如50，需要除以100）
-        if predict_no_price > 1:
-            predict_no_price = predict_no_price / 100
+        if platform2_no_price > 1:
+            platform2_no_price = platform2_no_price / 100
 
         # 计算组合价格
-        combined = poly_yes_price + predict_no_price
+        combined = platform1_yes_price + platform2_no_price
 
         # 计算套利空间
         arbitrage = (1.0 - combined) * 100  # 转换为百分比
 
         # 检查是否满足阈值
         if arbitrage >= self.arb_config.min_arbitrage_percent:
+            # 确定套利类型
+            if platform1_name == "Polymarket" and platform2_name == "Predict.fun":
+                arb_type = ArbitrageType.POLY_YES_PREDICT_NO
+            elif platform1_name == "Polymarket" and platform2_name == "Probable.markets":
+                arb_type = ArbitrageType.POLY_YES_PROBABLE_NO
+            elif platform1_name == "Probable.markets" and platform2_name == "Predict.fun":
+                arb_type = ArbitrageType.PROBABLE_YES_PREDICT_NO
+            else:
+                arb_type = ArbitrageType.POLY_YES_PREDICT_NO
+
             return ArbitrageOpportunity(
-                arbitrage_type=ArbitrageType.POLY_YES_PREDICT_NO,
+                arbitrage_type=arb_type,
                 market_name=market_name,
                 combined_price=combined * 100,  # 转换为百分比显示
                 arbitrage_percent=round(arbitrage, 2),
-                poly_yes_price=poly_yes_price * 100,  # 转换为百分比显示
-                poly_no_price=round((1 - poly_yes_price) * 100, 1),
-                poly_action="买Yes",
-                predict_yes_price=round((1 - predict_no_price) * 100, 1),
-                predict_no_price=predict_no_price * 100,
-                predict_action="买No",
+                platform1_name=platform1_name,
+                platform1_yes_price=platform1_yes_price * 100,  # 转换为百分比显示
+                platform1_no_price=round((1 - platform1_yes_price) * 100, 1),
+                platform1_action="买Yes",
+                platform2_name=platform2_name,
+                platform2_yes_price=round((1 - platform2_no_price) * 100, 1),
+                platform2_no_price=platform2_no_price * 100,
+                platform2_action="买No",
                 timestamp=time.time()
             )
 
         return None
 
     def check_reverse_arbitrage(self,
-                               predict_yes_price: float,
-                               poly_no_price: float,
-                               market_name: str) -> Optional[ArbitrageOpportunity]:
+                               platform1_yes_price: float,
+                               platform2_no_price: float,
+                               market_name: str,
+                               platform1_name: str = "Predict.fun",
+                               platform2_name: str = "Polymarket") -> Optional[ArbitrageOpportunity]:
         """
-        检查反向套利机会：Predict Yes + Polymarket No
+        检查反向套利机会：平台1 Yes + 平台2 No
 
         Args:
-            predict_yes_price: Predict Yes价格
-            poly_no_price: Polymarket No价格
+            platform1_yes_price: 平台1 Yes价格
+            platform2_no_price: 平台2 No价格
             market_name: 市场名称
+            platform1_name: 平台1名称
+            platform2_name: 平台2名称
 
         Returns:
             套利机会（如果存在）
         """
         # No价格转换
-        if poly_no_price > 1:
-            poly_no_price = poly_no_price / 100
+        if platform2_no_price > 1:
+            platform2_no_price = platform2_no_price / 100
 
         # 计算组合价格
-        combined = predict_yes_price + poly_no_price
+        combined = platform1_yes_price + platform2_no_price
 
         # 计算套利空间
         arbitrage = (1.0 - combined) * 100
 
         # 检查是否满足阈值
         if arbitrage >= self.arb_config.min_arbitrage_percent:
+            # 确定套利类型
+            if platform1_name == "Predict.fun" and platform2_name == "Polymarket":
+                arb_type = ArbitrageType.PREDICT_YES_POLY_NO
+            elif platform1_name == "Probable.markets" and platform2_name == "Polymarket":
+                arb_type = ArbitrageType.PROBABLE_YES_POLY_NO
+            elif platform1_name == "Predict.fun" and platform2_name == "Probable.markets":
+                arb_type = ArbitrageType.PREDICT_YES_PROBABLE_NO
+            else:
+                arb_type = ArbitrageType.PREDICT_YES_POLY_NO
+
             return ArbitrageOpportunity(
-                arbitrage_type=ArbitrageType.PREDICT_YES_POLY_NO,
+                arbitrage_type=arb_type,
                 market_name=market_name,
                 combined_price=combined * 100,
                 arbitrage_percent=round(arbitrage, 2),
-                poly_yes_price=round((1 - poly_no_price) * 100, 1),
-                poly_no_price=poly_no_price * 100,
-                poly_action="买No",
-                predict_yes_price=predict_yes_price * 100,
-                predict_no_price=round((1 - predict_yes_price) * 100, 1),
-                predict_action="买Yes",
+                platform1_name=platform1_name,
+                platform1_yes_price=platform1_yes_price * 100,
+                platform1_no_price=round((1 - platform1_yes_price) * 100, 1),
+                platform1_action="买Yes",
+                platform2_name=platform2_name,
+                platform2_yes_price=round((1 - platform2_no_price) * 100, 1),
+                platform2_no_price=platform2_no_price * 100,
+                platform2_action="买No",
                 timestamp=time.time()
             )
 
@@ -165,13 +203,15 @@ class ArbitrageMonitor:
 
     def scan_all_markets(self,
                         poly_client,
-                        predict_client) -> List[ArbitrageOpportunity]:
+                        predict_client,
+                        probable_client=None) -> List[ArbitrageOpportunity]:
         """
         扫描所有市场寻找套利机会
 
         Args:
             poly_client: Polymarket客户端
             predict_client: Predict客户端
+            probable_client: Probable客户端（可选）
 
         Returns:
             套利机会列表
@@ -213,8 +253,10 @@ class ArbitrageMonitor:
                 # 方向1: Polymarket Yes + Predict No
                 opp1 = self.check_arbitrage(
                     poly_market.current_price,
-                    predict_market.yes_bid,  # Predict的No价格 = 1 - Yes_bid价格
-                    poly_market.question_title
+                    predict_market.yes_bid,
+                    poly_market.question_title,
+                    "Polymarket",
+                    "Predict.fun"
                 )
 
                 if opp1:
@@ -225,8 +267,10 @@ class ArbitrageMonitor:
                 # 方向2: Predict Yes + Polymarket No
                 opp2 = self.check_reverse_arbitrage(
                     predict_market.current_price,
-                    poly_orderbook.yes_bid,  # Poly的No价格 = 1 - Yes_bid价格
-                    poly_market.question_title
+                    poly_orderbook.yes_bid,
+                    poly_market.question_title,
+                    "Predict.fun",
+                    "Polymarket"
                 )
 
                 if opp2:
@@ -240,6 +284,93 @@ class ArbitrageMonitor:
                 self.logger.error(f"扫描市场 {poly_market_id} 时类型错误: {e}")
             except Exception as e:
                 self.logger.error(f"扫描市场 {poly_market_id} 时未知错误: {type(e).__name__}: {e}", exc_info=True)
+
+        # 如果提供了 Probable 客户端，扫描 Probable 相关的套利机会
+        if probable_client:
+            opportunities.extend(self._scan_probable_markets(poly_client, probable_client))
+
+        return opportunities
+
+    def _scan_probable_markets(self,
+                              poly_client,
+                              probable_client) -> List[ArbitrageOpportunity]:
+        """
+        扫描 Probable.markets 相关的套利机会（单向：Probable ↔ Polymarket）
+
+        Args:
+            poly_client: Polymarket客户端
+            probable_client: Probable客户端
+
+        Returns:
+            套利机会列表
+        """
+        opportunities = []
+
+        try:
+            # 获取 Probable 市场数据
+            probable_market = probable_client.get_market_data()
+            if not probable_market:
+                self.logger.warning(f"无法获取 Probable 市场数据")
+                return opportunities
+
+            # 获取 Polymarket 市场数据
+            poly_market = poly_client.get_market_info("test-market-1")
+            if not poly_market:
+                self.logger.warning(f"无法获取 Polymarket 市场信息")
+                return opportunities
+
+            poly_orderbook = poly_client.get_order_book("test-market-1")
+            if not poly_orderbook:
+                self.logger.warning(f"无法获取 Polymarket 订单簿")
+                return opportunities
+
+            # 检查必要的属性
+            if not all(hasattr(probable_market, attr) for attr in ['current_price', 'question']):
+                self.logger.error(f"probable_market 缺少必要属性")
+                return opportunities
+
+            if not all(hasattr(poly_market, attr) for attr in ['current_price', 'question_title']):
+                self.logger.error(f"poly_market 缺少必要属性")
+                return opportunities
+
+            if not hasattr(poly_orderbook, 'yes_bid'):
+                self.logger.error(f"poly_orderbook 缺少 yes_bid 属性")
+                return opportunities
+
+            # 方向1: Polymarket Yes + Probable No
+            opp1 = self.check_arbitrage(
+                poly_market.current_price,
+                probable_market.yes_bid,
+                poly_market.question_title,
+                "Polymarket",
+                "Probable.markets"
+            )
+
+            if opp1:
+                opportunities.append(opp1)
+                self.opportunities_found += 1
+                self.logger.info(f"发现套利机会: {opp1.market_name} (Poly Yes + Probable No)")
+
+            # 方向2: Probable Yes + Polymarket No
+            opp2 = self.check_reverse_arbitrage(
+                probable_market.current_price,
+                poly_orderbook.yes_bid,
+                probable_market.question,
+                "Probable.markets",
+                "Polymarket"
+            )
+
+            if opp2:
+                opportunities.append(opp2)
+                self.opportunities_found += 1
+                self.logger.info(f"发现套利机会: {opp2.market_name} (Probable Yes + Poly No)")
+
+        except AttributeError as e:
+            self.logger.error(f"扫描 Probable 市场时属性错误: {e}")
+        except TypeError as e:
+            self.logger.error(f"扫描 Probable 市场时类型错误: {e}")
+        except Exception as e:
+            self.logger.error(f"扫描 Probable 市场时未知错误: {type(e).__name__}: {e}", exc_info=True)
 
         return opportunities
 
