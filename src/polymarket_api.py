@@ -127,9 +127,13 @@ class RealPolymarketClient:
                 markets = self._markets_cache
             else:
                 # 使用公开的 Gamma API
-                # 不使用 active 参数，因为该参数可能导致连接问题
-                # 而是获取更多市场后手动过滤
+                # 直接请求活跃市场，避免获取到已关闭的历史市场
                 params = {'limit': min(limit, 1000)}
+
+                # 添加过滤条件获取真正的活跃市场
+                if active_only:
+                    params['active'] = 'true'
+                    params['closed'] = 'false'
 
                 response = self.session.get(
                     f"{self.base_url}/markets",
@@ -138,21 +142,19 @@ class RealPolymarketClient:
                 )
                 response.raise_for_status()
                 markets = response.json()
-                self.logger.info(f"原始 API 返回 {len(markets)} 个市场")
+                self.logger.info(f"API 返回 {len(markets)} 个市场")
 
-                # 手动过滤：只返回活跃的市场
-                # 注意：API 的 'closed' 字段似乎都已为 True，改用 'active' 字段
+                # 二次过滤：确保只保留活跃且有流动性的市场
                 if active_only:
-                    # 过滤活跃市场，使用 'active' 字段而不是 'closed'
                     filtered_markets = []
                     for market in markets:
-                        # 使用 active 字段判断市场是否活跃
-                        # 不再检查 closed 字段（因为所有市场的 closed 都为 True）
-                        if market.get('active', False):
+                        # 确保市场未关闭且有流动性
+                        liquidity = float(market.get('liquidity', 0) or 0)
+                        if not market.get('closed', True) and liquidity > 0:
                             filtered_markets.append(market)
 
                     markets = filtered_markets
-                    self.logger.info(f"过滤后 {len(filtered_markets)} 个活跃市场")
+                    self.logger.info(f"过滤后 {len(filtered_markets)} 个活跃市场（有流动性）")
 
                 # 更新缓存
                 self._markets_cache = markets
@@ -376,15 +378,26 @@ class RealPolymarketClient:
 
             # 查找指定市场
             for market in markets:
-                condition_id = market.get('condition_id')
-                if condition_id == market_id or market.get('question_id') == market_id:
+                # 兼容驼峰和蛇形命名
+                condition_id = market.get('conditionId') or market.get('condition_id')
+                question_id = market.get('questionId') or market.get('question_id')
+                if condition_id == market_id or question_id == market_id:
                     # 获取精确价格
                     token_price = self.get_market_price(condition_id, "BUY")
                     if token_price is None:
-                        # 回退到市场数据中的价格
-                        token_price = market.get('price', 0.5)
-                        if isinstance(token_price, str):
-                            token_price = float(token_price)
+                        # 从 outcomePrices JSON 字符串解析价格
+                        import json
+                        outcome_prices_str = market.get('outcomePrices', '[]')
+                        try:
+                            outcome_prices = json.loads(outcome_prices_str)
+                            if outcome_prices and len(outcome_prices) >= 1:
+                                token_price = float(outcome_prices[0])
+                            else:
+                                token_price = 0.5
+                        except (json.JSONDecodeError, ValueError, IndexError):
+                            token_price = market.get('lastTradePrice', 0.5)
+                            if isinstance(token_price, str):
+                                token_price = float(token_price)
                         token_price = max(0.01, min(0.99, token_price))
 
                     @dataclass
@@ -502,30 +515,51 @@ class RealPolymarketClient:
                 except Exception as e:
                     self.logger.debug(f"CLOB API 获取订单簿失败: {e}")
 
-            # 回退：使用价格 API 估算订单簿
-            yes_price = self.get_market_price(market_id, "BUY")
-            no_price = self.get_market_price(market_id, "SELL")
+            # 回退：使用市场数据中的 bestBid 和 bestAsk
+            markets = self.get_all_markets(limit=1000)
+            for market in markets:
+                # 兼容驼峰和蛇形命名
+                condition_id = market.get('conditionId') or market.get('condition_id')
+                question_id = market.get('questionId') or market.get('question_id')
+                if condition_id == market_id or question_id == market_id:
+                    best_bid = market.get('bestBid')
+                    best_ask = market.get('bestAsk')
 
-            if yes_price and no_price:
-                # Yes 价格即为买价，No 价格的倒数即为卖价
+                    if best_bid and best_ask:
+                        return PolymarketOrderBook(
+                            yes_bid=round(float(best_bid), 4),
+                            yes_ask=round(float(best_ask), 4),
+                            yes_bid_size=100.0,
+                            yes_ask_size=100.0
+                        )
+
+                    # 如果没有 bestBid/bestAsk，从 outcomePrices 解析
+                    import json
+                    outcome_prices_str = market.get('outcomePrices', '[]')
+                    try:
+                        outcome_prices = json.loads(outcome_prices_str)
+                        if outcome_prices and len(outcome_prices) >= 2:
+                            yes_price = float(outcome_prices[0])
+                            spread = max(0.005, yes_price * 0.01)  # 至少 0.5% 价差
+                            return PolymarketOrderBook(
+                                yes_bid=round(max(0.01, yes_price - spread / 2), 4),
+                                yes_ask=round(min(0.99, yes_price + spread / 2), 4),
+                                yes_bid_size=100.0,
+                                yes_ask_size=100.0
+                            )
+                    except:
+                        pass
+
+            # 最后回退：使用 get_market_price 估算
+            yes_price = self.get_market_price(market_id, "BUY")
+            if yes_price:
+                spread = 0.01  # 默认 1% 价差
                 return PolymarketOrderBook(
-                    yes_bid=round(yes_price, 4),
-                    yes_ask=round(1 - no_price, 4),
+                    yes_bid=round(max(0.01, yes_price - spread / 2), 4),
+                    yes_ask=round(min(0.99, yes_price + spread / 2), 4),
                     yes_bid_size=100.0,
                     yes_ask_size=100.0
                 )
-
-            # 最后回退：使用市场数据估算
-            market = self.get_market_info(market_id)
-            spread = 0.01  # 默认 1% 价差
-            base_price = market.current_price
-
-            return PolymarketOrderBook(
-                yes_bid=round(max(0.01, base_price - spread / 2), 4),
-                yes_ask=round(min(0.99, base_price + spread / 2), 4),
-                yes_bid_size=100.0,
-                yes_ask_size=100.0
-            )
 
         except Exception as e:
             self.logger.error(f"获取订单簿失败 {market_id}: {e}")
