@@ -141,6 +141,12 @@ class PredictAPIClient:
                     logger.warning(f"API 返回了非列表/字典格式: {type(data)}")
                     break
 
+            # 如果需要活跃市场，过滤掉已结算的
+            if active_only:
+                active_markets = [m for m in all_markets if m.get('status') == 'OPEN']
+                logger.info(f"过滤后: {len(active_markets)} 个活跃市场（原始: {len(all_markets)} 个）")
+                return active_markets
+
             logger.info(f"获取到 {len(all_markets)} 个市场")
             return all_markets
 
