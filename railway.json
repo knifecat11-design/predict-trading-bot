@@ -13,7 +13,11 @@
     "cron": null
   },
   "variables": {
-    "USE_REAL_API": "true",
-    "USE_HYBRID_MODE": "false"
+    "USE_REAL_API": "false",
+    "USE_HYBRID_MODE": "true",
+    "MIN_ARBITRAGE_THRESHOLD": "2.0",
+    "SCAN_INTERVAL": "10",
+    "COOLDOWN_MINUTES": "5",
+    "LOG_LEVEL": "INFO"
   }
 }
