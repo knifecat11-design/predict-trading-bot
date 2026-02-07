@@ -201,33 +201,51 @@ class CrossPlatformMonitor:
                 poly_market = match['poly_market']
                 kalshi_market = match['kalshi_market']
 
-                # 获取 Polymarket 价格
-                import json
-                outcome_prices_str = poly_market.get('outcomePrices', '[]')
-                if isinstance(outcome_prices_str, str):
-                    outcome_prices = json.loads(outcome_prices_str)
+                # 获取 Polymarket 订单簿价格（重要：使用 bestBid/bestAsk）
+                # 买 Yes 用 bestAsk（卖一价），买 No 用 bestBid（买一价）
+                best_bid = poly_market.get('bestBid')
+                best_ask = poly_market.get('bestAsk')
+
+                if best_bid is not None and best_ask is not None:
+                    # 使用真实订单簿价格
+                    poly_yes_ask = float(best_ask)  # 买 Yes 的价格（卖一价）
+                    poly_no_bid = float(best_bid)    # 买 No 的价格（买一价，等于买 Yes 的反向）
+                    poly_yes_price = (best_bid + best_ask) / 2  # 中间价仅用于参考
+                    poly_no_price = 1.0 - poly_yes_price
                 else:
-                    outcome_prices = outcome_prices_str
+                    # 回退：使用 outcomePrices（中间价，不准确）
+                    import json
+                    outcome_prices_str = poly_market.get('outcomePrices', '[]')
+                    if isinstance(outcome_prices_str, str):
+                        outcome_prices = json.loads(outcome_prices_str)
+                    else:
+                        outcome_prices = outcome_prices_str
 
-                if len(outcome_prices) < 2:
-                    continue
+                    if len(outcome_prices) < 2:
+                        continue
 
-                poly_yes_price = float(outcome_prices[0])
-                poly_no_price = float(outcome_prices[1])
+                    self.logger.debug(f"市场 {poly_market.get('question', '')[:30]}... 没有 bestBid/bestAsk，使用 outcomePrices（可能不准确）")
+                    poly_yes_price = float(outcome_prices[0])
+                    poly_no_price = float(outcome_prices[1])
+                    # 为中间价添加价差估算
+                    spread = max(0.01, poly_yes_price * 0.02)
+                    poly_yes_ask = poly_yes_price + spread / 2  # 估算卖一价
+                    poly_no_bid = poly_no_price - spread / 2     # 估算买一价
 
                 # 获取 Kalshi 价格
                 kalshi_yes_price = float(kalshi_market.get('yes_price', 0.5))
                 kalshi_no_price = 1.0 - kalshi_yes_price
 
-                # 检查方向 1: Poly Yes + Kalshi No
-                arb1 = self.check_arbitrage(poly_yes_price, kalshi_no_price, match['poly_title'])
+                # 检查方向 1: 买 Poly Yes + 买 Kalshi No
+                # 使用 poly_yes_ask（实际买入价格）
+                arb1 = self.check_arbitrage(poly_yes_ask, kalshi_no_price, match['poly_title'])
                 if arb1 is not None:
                     opportunities.append(CrossPlatformOpportunity(
                         arbitrage_type=CrossPlatformArbitrageType.POLY_YES_KALSHI_NO,
                         market_name=match['poly_title'][:60],
-                        combined_price=(poly_yes_price + kalshi_no_price) * 100,
+                        combined_price=(poly_yes_ask + kalshi_no_price) * 100,
                         arbitrage_percent=round(arb1, 2),
-                        poly_yes_price=poly_yes_price * 100,
+                        poly_yes_price=poly_yes_ask * 100,     # 使用实际买入价格
                         poly_no_price=poly_no_price * 100,
                         poly_action="买Yes",
                         kalshi_yes_price=kalshi_yes_price * 100,
@@ -240,16 +258,17 @@ class CrossPlatformMonitor:
                     ))
                     self.opportunities_found += 1
 
-                # 检查方向 2: Kalshi Yes + Poly No
-                arb2 = self.check_arbitrage(kalshi_yes_price, poly_no_price, match['kalshi_title'])
+                # 检查方向 2: 买 Kalshi Yes + 买 Poly No
+                # 使用 poly_no_bid（实际买入价格，等于 1 - bestBid）
+                arb2 = self.check_arbitrage(kalshi_yes_price, poly_no_bid, match['kalshi_title'])
                 if arb2 is not None:
                     opportunities.append(CrossPlatformOpportunity(
                         arbitrage_type=CrossPlatformArbitrageType.KALSHI_YES_POLY_NO,
                         market_name=match['kalshi_title'][:60],
-                        combined_price=(kalshi_yes_price + poly_no_price) * 100,
+                        combined_price=(kalshi_yes_price + poly_no_bid) * 100,
                         arbitrage_percent=round(arb2, 2),
                         poly_yes_price=poly_yes_price * 100,
-                        poly_no_price=poly_no_price * 100,
+                        poly_no_price=poly_no_bid * 100,        # 使用实际买入价格
                         poly_action="买No",
                         kalshi_yes_price=kalshi_yes_price * 100,
                         kalshi_no_price=kalshi_no_price * 100,

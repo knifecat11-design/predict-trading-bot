@@ -470,66 +470,26 @@ class RealPolymarketClient:
     def get_order_book(self, market_id: str) -> Optional[PolymarketOrderBook]:
         """
         获取订单簿数据（用于套利监控）
+        重要：使用 Gamma API 的 bestBid/bestAsk，而不是 outcomePrices
 
         Args:
             market_id: 市场 ID
         """
         try:
-            # 尝试从 CLOB API 获取真实订单簿
-            if self.client:
-                try:
-                    # 获取市场的订单簿
-                    order_book = self.client.get_order_book(market_id)
+            # 从市场列表中获取最新数据（包含 bestBid/bestAsk）
+            markets = self.get_all_markets(limit=1000, active_only=True)
 
-                    if order_book and isinstance(order_book, dict):
-                        # 解析 Yes token 订单簿
-                        yes_token_id = f"{market_id}_YES"
-
-                        # 获取买一卖一
-                        bids = order_book.get('bids', [])
-                        asks = order_book.get('asks', [])
-
-                        yes_bid = 0.49
-                        yes_ask = 0.51
-                        bid_size = 100.0
-                        ask_size = 100.0
-
-                        if bids:
-                            best_bid = bids[0]
-                            yes_bid = float(best_bid.get('price', yes_bid))
-                            # 价格转换（如果需要）
-                            if yes_bid > 1:
-                                yes_bid = yes_bid / 10000
-                            bid_size = float(best_bid.get('size', 100))
-
-                        if asks:
-                            best_ask = asks[0]
-                            yes_ask = float(best_ask.get('price', yes_ask))
-                            if yes_ask > 1:
-                                yes_ask = yes_ask / 10000
-                            ask_size = float(best_ask.get('size', 100))
-
-                        return PolymarketOrderBook(
-                            yes_bid=round(max(0.01, yes_bid), 4),
-                            yes_ask=round(min(0.99, yes_ask), 4),
-                            yes_bid_size=bid_size,
-                            yes_ask_size=ask_size
-                        )
-
-                except Exception as e:
-                    self.logger.debug(f"CLOB API 获取订单簿失败: {e}")
-
-            # 回退：使用市场数据中的 bestBid 和 bestAsk
-            markets = self.get_all_markets(limit=1000)
             for market in markets:
                 # 兼容驼峰和蛇形命名
                 condition_id = market.get('conditionId') or market.get('condition_id')
                 question_id = market.get('questionId') or market.get('question_id')
+
                 if condition_id == market_id or question_id == market_id:
+                    # 优先使用 bestBid/bestAsk（真实订单簿价格）
                     best_bid = market.get('bestBid')
                     best_ask = market.get('bestAsk')
 
-                    if best_bid and best_ask:
+                    if best_bid is not None and best_ask is not None:
                         return PolymarketOrderBook(
                             yes_bid=round(float(best_bid), 4),
                             yes_ask=round(float(best_ask), 4),
@@ -537,14 +497,15 @@ class RealPolymarketClient:
                             yes_ask_size=100.0
                         )
 
-                    # 如果没有 bestBid/bestAsk，从 outcomePrices 解析
+                    # 回退：从 outcomePrices 计算（添加价差）
                     import json
                     outcome_prices_str = market.get('outcomePrices', '[]')
                     try:
                         outcome_prices = json.loads(outcome_prices_str)
                         if outcome_prices and len(outcome_prices) >= 2:
                             yes_price = float(outcome_prices[0])
-                            spread = max(0.005, yes_price * 0.01)  # 至少 0.5% 价差
+                            # 添加合理的买卖价差（通常 1-2%）
+                            spread = max(0.01, yes_price * 0.02)
                             return PolymarketOrderBook(
                                 yes_bid=round(max(0.01, yes_price - spread / 2), 4),
                                 yes_ask=round(min(0.99, yes_price + spread / 2), 4),
@@ -554,16 +515,9 @@ class RealPolymarketClient:
                     except:
                         pass
 
-            # 最后回退：使用 get_market_price 估算
-            yes_price = self.get_market_price(market_id, "BUY")
-            if yes_price:
-                spread = 0.01  # 默认 1% 价差
-                return PolymarketOrderBook(
-                    yes_bid=round(max(0.01, yes_price - spread / 2), 4),
-                    yes_ask=round(min(0.99, yes_price + spread / 2), 4),
-                    yes_bid_size=100.0,
-                    yes_ask_size=100.0
-                )
+            # 如果找不到市场，返回 None
+            self.logger.warning(f"未找到市场 {market_id}")
+            return None
 
         except Exception as e:
             self.logger.error(f"获取订单簿失败 {market_id}: {e}")
