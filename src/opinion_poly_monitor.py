@@ -168,7 +168,7 @@ class OpinionPolyMonitor:
                     # 使用真实订单簿价格
                     poly_yes_ask = float(best_ask)  # 买 Yes 的价格
                     poly_no_bid = float(best_bid)    # 买 No 的价格
-                    poly_yes_price = (best_bid + best_ask) / 2
+                    poly_yes_price = (poly_no_bid + poly_yes_ask) / 2
                     poly_no_price = 1.0 - poly_yes_price
                 else:
                     # 回退：使用 outcomePrices

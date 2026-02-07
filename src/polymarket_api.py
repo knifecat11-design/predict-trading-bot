@@ -149,8 +149,8 @@ class RealPolymarketClient:
                     filtered_markets = []
                     for market in markets:
                         # 确保市场未关闭且有流动性
-                        # 修复：closed 字段不存在时默认为 False（市场是活跃的）
-                        is_closed = market.get('closed', market.get('active', True))
+                        # closed 字段不存在时默认为 False（市场是活跃的）
+                        is_closed = market.get('closed', False)
                         liquidity = float(market.get('liquidity', 0) or 0)
                         # 兼容 active 字段（如果 active=True 则市场是活跃的）
                         is_active = market.get('active', not is_closed)
@@ -256,9 +256,9 @@ class RealPolymarketClient:
             markets = self.get_all_markets(limit=200, active_only=True)
 
             # 过滤即将到期的市场
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             deadline = now + timedelta(hours=hours)
 
             closing_soon = []

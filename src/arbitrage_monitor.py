@@ -132,7 +132,7 @@ class ArbitrageMonitor:
             if platform1_name == "Polymarket" and platform2_name == "Predict.fun":
                 arb_type = ArbitrageType.POLY_YES_PREDICT_NO
             else:
-                arb_type = ArbitrageType.POLY_YES_PREDICT_NO
+                arb_type = ArbitrageType.PREDICT_YES_POLY_NO
 
             return ArbitrageOpportunity(
                 arbitrage_type=arb_type,
@@ -187,7 +187,7 @@ class ArbitrageMonitor:
             if platform1_name == "Predict.fun" and platform2_name == "Polymarket":
                 arb_type = ArbitrageType.PREDICT_YES_POLY_NO
             else:
-                arb_type = ArbitrageType.PREDICT_YES_POLY_NO
+                arb_type = ArbitrageType.POLY_YES_PREDICT_NO
 
             return ArbitrageOpportunity(
                 arbitrage_type=arb_type,

@@ -273,7 +273,7 @@ class MarketMatcher:
     def _get_predict_markets(self, predict_client) -> List[Dict]:
         """获取 Predict.fun 市场列表（全站监控）"""
         try:
-            return predict_client.get_markets(active_only=True)
+            return predict_client.get_markets(status='open')
         except Exception as e:
             self.logger.error(f"获取 Predict.fun 市场失败: {e}")
             return []

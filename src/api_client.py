@@ -278,8 +278,9 @@ class MockAPIClient:
             ])
         ]
 
-    def get_market_data(self) -> MarketData:
-        return MarketData(self.market_id, 'Mock', 0.5, 0.49, 0.51, 100, 100, 0, 0, time.time())
+    def get_market_data(self, market_id: Optional[str] = None) -> MarketData:
+        mid = market_id or self.market_id
+        return MarketData(mid, 'Mock', 0.5, 0.49, 0.51, 100, 100, 0, 0, time.time())
 
     def get_open_orders(self) -> List[Order]:
         return list(self._orders.values())
