@@ -5,6 +5,13 @@ Polymarket 单次扫描测试
 import requests
 import json
 from datetime import datetime
+import sys
+import io
+
+# 设置 UTF-8 编码输出
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 print("=" * 80)
 print("  Polymarket 套利机会扫描")

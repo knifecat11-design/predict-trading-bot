@@ -204,11 +204,18 @@ class MarketMatcher:
         market_map = {}
 
         for poly_market in poly_markets:
-            poly_id = poly_market.get('condition_id') or poly_market.get('question_id', '')
+            # 兼容驼峰和蛇形命名
+            poly_id = (poly_market.get('conditionId') or
+                       poly_market.get('condition_id') or
+                       poly_market.get('questionId') or
+                       poly_market.get('question_id', ''))
             if not poly_id:
                 continue
 
-            poly_title = poly_market.get('question', '')
+            # 兼容不同的标题字段名
+            poly_title = (poly_market.get('question') or
+                         poly_market.get('title') or
+                         poly_market.get('description') or '')
 
             # 查找 Predict.fun 匹配
             predict_match = self._find_best_match(

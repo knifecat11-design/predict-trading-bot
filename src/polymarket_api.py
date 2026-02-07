@@ -149,8 +149,12 @@ class RealPolymarketClient:
                     filtered_markets = []
                     for market in markets:
                         # 确保市场未关闭且有流动性
+                        # 修复：closed 字段不存在时默认为 False（市场是活跃的）
+                        is_closed = market.get('closed', market.get('active', True))
                         liquidity = float(market.get('liquidity', 0) or 0)
-                        if not market.get('closed', True) and liquidity > 0:
+                        # 兼容 active 字段（如果 active=True 则市场是活跃的）
+                        is_active = market.get('active', not is_closed)
+                        if not is_closed and is_active and liquidity > 0:
                             filtered_markets.append(market)
 
                     markets = filtered_markets

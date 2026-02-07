@@ -229,7 +229,11 @@ class ArbitrageMonitor:
         if not self._matcher_initialized:
             self._initialize_matcher(poly_client, predict_client, probable_client)
 
-        # 使用智能匹配的市场映射
+        # 使用智能匹配的市场映射（检查 market_matcher 是否可用）
+        if self.market_matcher is None:
+            self.logger.warning("市场匹配器未初始化，跳过扫描")
+            return []
+
         market_matches = self.market_matcher.build_market_map(
             poly_client, predict_client, probable_client
         )
@@ -262,10 +266,20 @@ class ArbitrageMonitor:
                 if match.predict_id:
                     try:
                         predict_market = predict_client.get_market_data(match.predict_id)
-                    except:
-                        predict_market = predict_client.get_market_data()
+                    except Exception as e:
+                        self.logger.debug(f"获取 Predict.fun 市场数据失败 {match.predict_id}: {e}，使用默认市场")
+                        try:
+                            predict_market = predict_client.get_market_data()
+                        except Exception as e2:
+                            self.logger.warning(f"获取默认市场数据也失败: {e2}")
+                            predict_market = None
                 else:
-                    predict_market = None
+                    # 如果没有匹配的市场，尝试获取任意活跃市场进行监控
+                    try:
+                        predict_market = predict_client.get_market_data()
+                    except Exception as e:
+                        self.logger.debug(f"获取默认市场数据失败: {e}")
+                        predict_market = None
 
                 # Probable.markets 已弃用，跳过相关逻辑
 
