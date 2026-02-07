@@ -6,6 +6,12 @@ api:
   api_key: "1b0c25d4-8ca6-4aa8-8910-cd72b311e4f6"
   ws_url: "wss://api.predict.fun/ws"
 
+# Opinion.trade API 配置
+opinion:
+  base_url: "https://proxy.opinion.trade:8443/openapi"
+  api_key: ""  # 请申请: https://docs.opinion.trade/developer-guide/opinion-open-api/overview
+  cache_seconds: 60
+
 # 市场配置
 market:
   market_id: "YOUR_MARKET_ID"  # 目标市场ID
@@ -35,23 +41,17 @@ polymarket:
   base_url: "https://api.polymarket.com"
   enabled: true                 # 是否启用Polymarket数据
 
-# Probable.markets 配置
-probable:
-  base_url: "https://api.probable.markets"
-  api_key: ""                   # Probable API Key（从开发者平台获取）
-  secret: ""                    # API Secret（生成后不可恢复）
-  passphrase: ""                # API Passphrase
-  wallet_address: ""            # 钱包地址（用于签名）
-  chain_id: 1                   # 链ID
-  market_id: "default-market"   # 默认市场ID
-  enabled: false                # 是否启用Probable.markets（默认关闭，等待API）
-
 # 套利监控配置
 arbitrage:
   enabled: true                 # 是否启用套利监控
-  min_arbitrage_threshold: 2.0  # 最小套利空间阈值（%），Yes+No < 100-2% 时通知
+  min_arbitrage_threshold: 5.0  # 最小套利空间阈值（%），修改为5%
   scan_interval: 10             # 扫描间隔（秒）
   cooldown_minutes: 5           # 同一市场通知冷却时间（分钟）
+
+# Opinion-Polymarket 跨平台监控
+opinion_poly:
+  min_arbitrage_threshold: 5.0  # 最小套利空间 5%
+  min_confidence: 0.2            # 最小匹配置信度
 
 # 通知配置
 notification:

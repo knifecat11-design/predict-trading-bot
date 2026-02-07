@@ -1,6 +1,6 @@
 """
 持续套利监控 - 支持多平台组合
-监控 Polymarket ↔ Predict.fun ↔ Kalshi
+监控 Polymarket ↔ Predict.fun ↔ Opinion.trade
 通过 Telegram 发送套利机会通知
 """
 
@@ -68,24 +68,24 @@ def send_telegram_notification(message, config):
         logging.error(f"发送 Telegram 通知失败: {e}")
         return False
 
-def scan_kalshi_poly(logger, config):
-    """扫描 Kalshi <-> Polymarket 套利"""
+def scan_opinion_poly(logger, config):
+    """扫描 Opinion ↔ Polymarket 套利"""
     try:
         from src.polymarket_api import RealPolymarketClient
-        from src.kalshi_api import create_kalshi_client
-        from src.cross_platform_monitor import create_cross_platform_monitor
+        from src.opinion_api import create_opinion_client
+        from src.opinion_poly_monitor import create_opinion_poly_monitor
 
         poly_client = RealPolymarketClient(config)
-        kalshi_client = create_kalshi_client(config, use_mock=True)  # 使用模拟模式测试
-        monitor = create_cross_platform_monitor(config)
+        opinion_client = create_opinion_client(config, use_mock=True)  # Opinion API 申请中
+        monitor = create_opinion_poly_monitor(config)
 
-        opportunities = monitor.scan_cross_platform_arbitrage(poly_client, kalshi_client)
+        opportunities = monitor.scan_opinion_poly_arbitrage(poly_client, opinion_client)
 
-        return opportunities, "Kalshi <-> Polymarket"
+        return opportunities, "Opinion <-> Polymarket"
 
     except Exception as e:
-        logger.error(f"Kalshi <-> Polymarket 扫描失败: {e}")
-        return [], "Kalshi <-> Polymarket"
+        logger.error(f"Opinion ↔ Polymarket 扫描失败: {e}")
+        return [], "Opinion <-> Polymarket"
 
 def scan_poly_predict(logger, config):
     """扫描 Polymarket ↔ Predict.fun 套利"""
@@ -103,29 +103,53 @@ def scan_poly_predict(logger, config):
         return opportunities, "Polymarket <-> Predict.fun"
 
     except Exception as e:
-        logger.error(f"Polymarket <-> Predict.fun 扫描失败: {e}")
+        logger.error(f"Polymarket ↔ Predict.fun 扫描失败: {e}")
         return [], "Polymarket <-> Predict.fun"
 
 def format_opportunity_message(opp, platform_pair, scan_count):
     """格式化套利机会通知消息"""
-    from src.cross_platform_monitor import format_cross_platform_opportunity
-    from src.hedged_arbitrage_monitor import format_hedged_opportunity
+    from src.opinion_poly_monitor import OpinionPolyOpportunity, OpinionPolyArbitrageType
+    from src.hedged_arbitrage_monitor import HedgedArbitrageOpportunity
 
     header = f"<b>🎯 套利机会 #{scan_count}</b>\n"
     header += f"<b>平台:</b> {platform_pair}\n"
     header += f"<b>时间:</b> {datetime.now().strftime('%H:%M:%S')}\n"
 
     # 根据类型格式化
-    if hasattr(opp, 'strategy'):
-        # HedgedArbitrageOpportunity
-        body = format_hedged_opportunity(opp).replace('🎯', '').strip()
-    else:
-        # CrossPlatformOpportunity
-        body = format_cross_platform_opportunity(opp).replace('🔄', '').strip()
+    if isinstance(opp, HedgedArbitrageOpportunity):
+        body = f"<b>市场:</b> {opp.market_name}\n"
+        body += f"<b>策略:</b> {opp.strategy.value}\n"
+        body += f"<b>套利空间:</b> {opp.arbitrage_percent:.2f}%\n"
+        body += f"<b>组合价格:</b> {opp.combined_price:.2f}%\n\n"
 
-    # 转换为 HTML 格式
-    body = body.replace('<', '&lt;').replace('>', '&gt;')
-    body = body.replace('\n', '\n')  # 保持换行
+        body += f"<b>Polymarket:</b>\n"
+        body += f"  Yes: {opp.poly_yes_price:.2f}¢ No: {opp.poly_no_price:.2f}¢\n"
+        body += f"  操作: {opp.poly_action}\n\n"
+
+        body += f"<b>Predict.fun:</b>\n"
+        body += f"  Yes: {opp.predict_yes_price:.2f}¢ No: {opp.predict_no_price:.2f}¢\n"
+        body += f"  操作: {opp.predict_action}\n\n"
+
+        body += f"<b>风险敞口:</b> {opp.exposure:.4f}\n"
+        body += f"<b>风险评分:</b> {opp.risk_score:.1f}/100"
+
+    elif isinstance(opp, OpinionPolyOpportunity):
+        body = f"<b>市场:</b> {opp.market_name}\n"
+        body += f"<b>策略:</b> {opp.arbitrage_type.value}\n"
+        body += f"<b>套利空间:</b> {opp.arbitrage_percent:.2f}%\n"
+        body += f"<b>组合价格:</b> {opp.combined_price:.2f}%\n\n"
+
+        body += f"<b>Polymarket:</b>\n"
+        body += f"  Yes: {opp.poly_yes_price:.2f}¢ No: {opp.poly_no_price:.2f}¢\n"
+        body += f"  操作: {opp.poly_action}\n\n"
+
+        body += f"<b>Opinion:</b>\n"
+        body += f"  Yes: {opp.opinion_yes_price:.2f}¢ No: {opp.opinion_no_price:.2f}¢\n"
+        body += f"  操作: {opp.opinion_action}\n\n"
+
+        body += f"<b>置信度:</b> {opp.match_confidence:.2f}"
+    else:
+        body = str(opp)
 
     return f"{header}\n{body}"
 
@@ -134,7 +158,7 @@ def main():
     print()
     print("=" * 70)
     print("  持续套利监控系统")
-    print("  平台: Polymarket ↔ Predict.fun ↔ Kalshi")
+    print("  平台: Polymarket ↔ Predict.fun ↔ Opinion.trade")
     print("  通知: Telegram")
     print("=" * 70)
     print()
@@ -155,7 +179,7 @@ def main():
     send_telegram_notification(
         f"🚀 <b>套利监控系统启动</b>\n"
         f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"监控: Polymarket ↔ Predict.fun ↔ Kalshi\n"
+        f"监控: Polymarket ↔ Predict.fun ↔ Opinion\n"
         f"阈值: {arb_config.get('min_arbitrage_threshold', 5.0)}%",
         config
     )
@@ -190,7 +214,7 @@ def main():
 
             # 扫描各个平台组合
             scanners = [
-                scan_kalshi_poly,
+                scan_opinion_poly,
                 scan_poly_predict,
             ]
 
