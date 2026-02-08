@@ -1,502 +1,298 @@
-# Predict.fun 自动挂单脚本 - 浏览器 F12 版本
+# Predict.fun 自动挂单脚本 v2.0 - 浏览器 F12 版
 
-本文档提供两个 JavaScript 脚本，用于在 Predict.fun 网站上实现自动挂单功能。
-
-## 📋 目录
-
-1. [页面分析工具](#页面分析工具) - 先运行此脚本分析页面结构
-2. [自动挂单脚本](#自动挂单脚本) - 根据分析结果调整后使用
+> **适合代码小白** - 只需复制粘贴，无需安装任何软件
 
 ---
 
-## 🔍 页面分析工具
+## 这个脚本能做什么？
 
-### 使用方法
+| 功能 | 说明 |
+|------|------|
+| 查看订单簿 | 实时显示买一/卖一价格和深度 |
+| 查看持仓 | 查看你当前持有的头寸 |
+| 挂单 | 指定价格和数量下限价单 |
+| 撤单 | 撤销一个或全部挂单 |
+| 网格挂单 | 按价格梯度自动批量挂单 |
+| 状态面板 | 页面右上角实时显示信息 |
 
-1. 打开 Predict.fun 市场：https://predict.fun/markets/
-2. 按 **F12** 打开开发者工具
-3. 切换到 **Console** 标签
-4. 复制下面的脚本并运行
-5. 查看输出的页面结构信息
+---
 
-### 脚本代码
+## 快速开始（5 步完成）
 
-```javascript
-/**
- * Predict.fun 页面分析工具
- *
- * 使用方法：
- * 1. 打开 Predict.fun 市场：https://predict.fun/markets/
- * 2. 按 F12 打开开发者工具
- * 3. 切换到 Console 标签
- * 4. 复制粘贴本脚本并运行
- * 5. 查看输出的页面结构和 API 信息
- */
+### 第 1 步：打开 Predict.fun 并登录
 
-(function() {
-    console.log(`🔍 开始分析 Predict.fun 页面...`);
+1. 用浏览器（推荐 Chrome）打开 https://predict.fun
+2. 登录你的账号
+3. 点进你想交易的市场（比如某个具体的预测问题）
 
-    // 1. 分析页面结构
-    console.log(`\n📊 === 页面结构分析 ===\n`);
+### 第 2 步：打开浏览器控制台
 
-    // 查找价格相关元素
-    console.log(`💰 价格元素：`);
-    const priceElements = document.querySelectorAll('*');
-    const priceMatches = [];
-    priceElements.forEach(el => {
-        const text = el.textContent?.trim();
-        if (text && /^\d+(\.\d+)?%/.test(text)) {
-            priceMatches.push({
-                tag: el.tagName,
-                class: el.className,
-                text: text,
-                id: el.id,
-                parent: el.parentElement?.className
-            });
-        }
-    });
+**Windows / Linux：** 按键盘上的 `F12` 键
+**Mac：** 按 `Cmd + Option + J`
 
-    // 显示前 10 个价格元素
-    priceMatches.slice(0, 10).forEach((match, i) => {
-        console.log(`${i + 1}. <${match.tag} class="${match.class}"> ${match.text}`);
-    });
+会弹出一个窗口，点击上面的 **Console**（控制台）标签：
 
-    // 2. 查找按钮
-    console.log(`\n🔘 按钮元素：`);
-    const buttons = document.querySelectorAll('button, [role="button"]');
-    const buyButtons = [];
-    const sellButtons = [];
-    const orderButtons = [];
-
-    buttons.forEach(btn => {
-        const text = btn.textContent?.trim().toLowerCase();
-        const classList = Array.from(btn.classList || []).join(' ');
-
-        if (text.includes('buy') || text.includes('yes') || classList.includes('buy')) {
-            buyButtons.push({ text: btn.textContent?.trim(), class: classList });
-        } else if (text.includes('sell') || text.includes('no') || classList.includes('sell')) {
-            sellButtons.push({ text: btn.textContent?.trim(), class: classList });
-        } else if (text.includes('order') || classList.includes('order')) {
-            orderButtons.push({ text: btn.textContent?.trim(), class: classList });
-        }
-    });
-
-    console.log(`买入按钮: ${buyButtons.length}`);
-    buyButtons.slice(0, 3).forEach((btn, i) => console.log(`  ${i + 1}. "${btn.text}"`));
-
-    console.log(`卖出按钮: ${sellButtons.length}`);
-    sellButtons.slice(0, 3).forEach((btn, i) => console.log(`  ${i + 1}. "${btn.text}"`));
-
-    console.log(`订单按钮: ${orderButtons.length}`);
-    orderButtons.slice(0, 3).forEach((btn, i) => console.log(`  ${i + 1}. "${btn.text}"`));
-
-    // 3. 分析网络请求（需要先开启网络监听）
-    console.log(`\n🌐 === API 分析 ===\n`);
-    console.log(`💡 提示：切换到 Network 标签，刷新页面，然后执行交易操作`);
-    console.log(`💡 查找包含 "order", "trade", "market" 的请求`);
-
-    // 4. 查找 React/Vue 状态
-    console.log(`\n⚛️  === 应用状态分析 ===\n`);
-
-    // 尝试获取 React 内部状态
-    const rootElement = document.querySelector('#root, #__next, [data-reactroot]');
-    if (rootElement) {
-        console.log(`✅ 找到根元素:`, rootElement);
-
-        // 尝试获取 React fiber
-        const fiberKey = Object.keys(rootElement).find(key => key.startsWith('__reactFiber'));
-        if (fiberKey) {
-            console.log(`✅ 找到 React Fiber: ${fiberKey}`);
-            console.log(`💡 可以访问: rootElement['${fiberKey}']`);
-        }
-    } else {
-        console.log(`⚠️ 未找到 React 根元素`);
-    }
-
-    // 查找全局状态对象
-    const possibleStores = ['__state__', '__store__', 'store', 'state'];
-    possibleStores.forEach(key => {
-        if (window[key]) {
-            console.log(`✅ 找到全局状态: window.${key}`);
-        }
-    });
-
-    // 5. 查找输入框
-    console.log(`\n📝 === 输入框分析 ===\n`);
-    const inputs = document.querySelectorAll('input[type="number"], input[type="text"]');
-    console.log(`找到 ${inputs.length} 个输入框：`);
-    inputs.slice(0, 5).forEach((input, i) => {
-        console.log(`${i + 1}. ${input.placeholder || input.name || '无名称'} - ${input.type}`);
-    });
-
-    // 6. 创建监控函数
-    window.monitorPredict = () => {
-        console.log(`🎯 开始监控 Predict.fun 页面...`);
-        console.log(`💡 按 Ctrl+C 停止监控`);
-
-        let count = 0;
-        const interval = setInterval(() => {
-            count++;
-            const priceElement = document.querySelector('[class*="price"], [class*="Price"]');
-            if (priceElement) {
-                const text = priceElement.textContent?.trim();
-                console.log(`[${new Date().toLocaleTimeString()}] 价格: ${text}`);
-            }
-            if (count > 100) clearInterval(interval);
-        }, 2000);
-
-        console.log(`✅ 监控已启动，每 2 秒更新一次`);
-        return interval;
-    };
-
-    console.log(`\n✅ 分析完成！\n`);
-    console.log(`💡 可用命令：`);
-    console.log(`   - monitorPredict() - 开始监控价格变化`);
-
-})();
+```
+┌─────────────────────────────────────────────┐
+│  Elements   Console   Network   Sources     │
+│            ^^^^^^^^                         │
+│             点这里                           │
+│                                             │
+│  >  _                                       │
+│     ↑ 这里是输入区域，你要在这里粘贴脚本     │
+└─────────────────────────────────────────────┘
 ```
 
-### 预期输出
+### 第 3 步：复制脚本
 
-脚本会输出：
-- 💰 价格元素的 class 名称
-- 🔘 买入/卖出按钮的选择器
-- ⚛️ React/Vue 应用结构
-- 📝 输入框信息
+打开项目中的 `predict_f12_trader.js` 文件，**全选并复制**里面的所有内容。
+
+或者直接在 GitHub 仓库中找到 `predict_f12_trader.js` 文件复制。
+
+### 第 4 步：粘贴并运行
+
+1. 在 Console 输入区域点一下
+2. 按 `Ctrl + V`（Mac: `Cmd + V`）粘贴
+3. 按 `Enter` 回车运行
+
+> 如果浏览器提示 "allow pasting"，输入 `allow pasting` 再按回车，然后重新粘贴。
+
+### 第 5 步：开始使用
+
+脚本会自动：
+- 在页面右上角显示一个状态面板
+- 开始捕获你的认证信息
+- 提示你可以使用的命令
+
+在控制台输入 `pft.help()` 查看所有命令。
 
 ---
 
-## 🤖 自动挂单脚本
+## 命令大全
 
-### 使用方法
+在控制台输入以下命令（输完按回车）：
 
-**重要**: 首先需要运行上面的分析工具，获取正确的页面元素选择器，然后调整下面的脚本。
-
-### 基础版本
+### 认证相关
 
 ```javascript
-/**
- * Predict.fun 自动挂单脚本 - 基础版本
- *
- * ⚠️ 注意：这是一个模板脚本，需要根据实际页面结构调整
- */
+// 查看认证状态（API Key 和 JWT 是否已捕获）
+pft.authStatus()
 
-class PredictAutoTrader {
-    constructor(config = {}) {
-        this.config = {
-            // 挂单策略
-            spreadPercent: config.spreadPercent || 6,  // 挂单范围 ±6%
-            maxOrders: config.maxOrders || 3,          // 每侧最大挂单数
-            orderSize: config.orderSize || 10,         // 每单大小
+// 如果自动捕获失败，手动设置 API Key
+pft.setApiKey("你的API Key")
 
-            // 风险控制
-            cancelThreshold: config.cancelThreshold || 0.5,  // 撤单阈值
-            maxExposure: config.maxExposure || 100,    // 最大风险敞口
+// 手动设置 JWT Token
+pft.setJwt("你的JWT Token")
+```
 
-            // 运行模式
-            dryRun: config.dryRun !== undefined ? config.dryRun : true,  // 默认模拟
-            refreshInterval: config.refreshInterval || 5000,  // 刷新间隔
+**如何获取 API Key？**
+- 通常脚本会自动从页面请求中捕获
+- 如果失败，可以：按 F12 → Network 标签 → 刷新页面 → 找到任意 predict.fun 请求 → 查看请求头中的 `x-api-key`
+- 或者去 Predict.fun 的 Discord 申请：https://discord.gg/predictdotfun
 
-            // TODO: 根据分析工具的结果，填入正确的选择器
-            selectors: {
-                priceInput: config.priceInput || 'input[type="number"]',
-                buyButton: config.buyButton || 'button:has-text("Buy Yes")',
-                sellButton: config.sellButton || 'button:has-text("Sell No")',
-                priceDisplay: config.priceDisplay || '[class*="price"]'
-            }
-        };
+### 查看数据
 
-        this.orders = [];
-        this.isRunning = false;
-        this.intervalId = null;
+```javascript
+// 查看市场列表（前 20 个）
+pft.markets()
 
-        console.log(`🎲 Predict.fun 自动挂单脚本已加载`);
-        console.log(`📊 当前模式: ${this.config.dryRun ? '🧪 模拟运行' : '💰 实盘运行'}`);
-    }
+// 查看当前市场的订单簿
+pft.orderbook()
 
-    /**
-     * 获取当前价格
-     * TODO: 根据实际页面调整选择器
-     */
-    getCurrentPrice() {
-        const priceElement = document.querySelector(this.config.selectors.priceDisplay);
-        if (priceElement) {
-            const text = priceElement.textContent?.trim();
-            const match = text.match(/(\d+\.?\d*)%/);
-            if (match) {
-                return parseFloat(match[1]) / 100;
-            }
-        }
-        return null;
-    }
+// 查看指定市场的订单簿
+pft.orderbook("市场ID")
 
-    /**
-     * 计算挂单价格
-     */
-    calculateOrderPrices(currentPrice) {
-        if (!currentPrice) return null;
+// 查看我的持仓
+pft.positions()
 
-        const spread = this.config.spreadPercent / 100;
-        return {
-            buy: Math.max(0.01, currentPrice - spread),      // 买单价
-            sell: Math.min(0.99, currentPrice + spread)      // 卖单价
-        };
-    }
+// 查看我的挂单
+pft.orders()
 
-    /**
-     * 模拟下单
-     * TODO: 实现真实的下单逻辑
-     */
-    async placeOrder(side, price, size) {
-        const order = {
-            id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            side,
-            price,
-            size,
-            timestamp: Date.now(),
-            status: 'open'
-        };
+// 分析当前页面的按钮和输入框
+pft.analyze()
+```
 
-        if (this.config.dryRun) {
-            console.log(`🧪 [模拟] ${side.toUpperCase()} ${size} @ ${(price * 100).toFixed(1)}%`);
-            return order;
-        } else {
-            // TODO: 实现真实的下单逻辑
-            // 1. 找到价格输入框并输入价格
-            // 2. 找到数量输入框并输入数量
-            // 3. 点击买入/卖出按钮
+### 下单操作
 
-            console.log(`💰 [实盘] ${side.toUpperCase()} ${size} @ ${(price * 100).toFixed(1)}%`);
-            return order;
-        }
-    }
+```javascript
+// 买 Yes，价格 0.45（即 45 美分），数量 10 份
+pft.buy("yes", 0.45, 10)
 
-    /**
-     * 主循环
-     */
-    async tick() {
-        const currentPrice = this.getCurrentPrice();
+// 买 No，价格 0.55（即 55 美分），数量 10 份
+pft.buy("no", 0.55, 10)
+```
 
-        if (!currentPrice) {
-            console.warn(`⚠️ 无法获取当前价格`);
-            return;
-        }
+> 默认是模拟模式，不会真正下单。切换实盘见下文。
 
-        console.log(`📊 当前价格: ${(currentPrice * 100).toFixed(1)}%`);
+### 撤单操作
 
-        // 管理挂单
-        await this.manageOrders(currentPrice);
+```javascript
+// 撤销指定订单（需要订单 ID，可以通过 pft.orders() 查看）
+pft.cancel("订单ID")
 
-        // 显示当前挂单
-        console.log(`📋 当前挂单数: ${this.orders.filter(o => o.status === 'open').length}`);
-    }
+// 撤销所有挂单
+pft.cancelAll()
+```
 
-    /**
-     * 管理挂单
-     */
-    async manageOrders(currentPrice) {
-        const prices = this.calculateOrderPrices(currentPrice);
-        if (!prices) return;
+### 网格挂单（批量下单）
 
-        // TODO: 实现挂单管理逻辑
-        // 1. 检查现有订单是否需要撤单
-        // 2. 检查是否需要新挂单
-    }
+```javascript
+// 网格挂单：买 Yes，中心价 0.40，每层间隔 0.02，共 3 层，每层 5 份
+pft.grid("yes", 0.40, 0.02, 3, 5)
+```
 
-    /**
-     * 开始运行
-     */
-    start() {
-        if (this.isRunning) {
-            console.warn(`⚠️ 脚本已在运行中`);
-            return;
-        }
+这会自动在以下价格挂单：
+- 第 1 层：0.38 (0.40 - 0.02)
+- 第 2 层：0.36 (0.40 - 0.04)
+- 第 3 层：0.34 (0.40 - 0.06)
 
-        this.isRunning = true;
-        console.log(`🚀 开始自动挂单...`);
-        console.log(`🔄 刷新间隔: ${this.config.refreshInterval / 1000} 秒`);
+每层 5 份，总共挂 3 单。
 
-        this.tick();
-        this.intervalId = setInterval(() => this.tick(), this.config.refreshInterval);
-    }
+### 模式切换
 
-    /**
-     * 停止运行
-     */
-    stop() {
-        if (!this.isRunning) return;
+```javascript
+// 切换模拟/实盘模式
+pft.toggleMode()
 
-        this.isRunning = false;
-        if (this.intervalId) {
-            clearInterval(this.intervalId);
-            this.intervalId = null;
-        }
+// 显示/隐藏状态面板
+pft.showPanel()
+pft.hidePanel()
 
-        console.log(`🛑 自动挂单已停止`);
-    }
-
-    /**
-     * 切换实盘/模拟模式
-     */
-    setDryRun(dryRun) {
-        this.config.dryRun = dryRun;
-        console.log(`🔄 切换模式: ${dryRun ? '🧪 模拟运行' : '💰 实盘运行'}`);
-    }
-
-    /**
-     * 获取状态
-     */
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            mode: this.config.dryRun ? '模拟' : '实盘',
-            orders: this.orders.filter(o => o.status === 'open'),
-            config: this.config
-        };
-    }
-}
-
-// 使用示例
-console.log(`
-╔════════════════════════════════════════════════════════════╗
-║     🎲 Predict.fun 自动挂单脚本 v1.0                       ║
-║     浏览器 F12 控制台版本                                   ║
-╚════════════════════════════════════════════════════════════╝
-
-📖 使用方法：
-
-1. 创建实例（默认模拟模式）：
-   const trader = new PredictAutoTrader();
-
-2. 自定义配置：
-   const trader = new PredictAutoTrader({
-       spreadPercent: 8,      // 挂单范围 ±8%
-       maxOrders: 5,          // 每侧最多 5 个单
-       orderSize: 20,         // 每单 20 个
-       dryRun: true           // 模拟模式
-   });
-
-3. 开始运行：
-   trader.start();
-
-4. 停止运行：
-   trader.stop();
-
-5. 查看状态：
-   trader.getStatus();
-
-6. 切换到实盘（谨慎！）：
-   trader.setDryRun(false);
-
-⚠️  重要提示：
-- 默认是模拟模式，不会实际下单
-- 切换到实盘前请先测试
-- 建议从小额开始
-- 确保页面保持打开状态
-`);
-
-// 导出类
-window.PredictAutoTrader = PredictAutoTrader;
+// 手动刷新面板
+pft.refresh()
 ```
 
 ---
 
-## 📝 使用步骤
+## 模拟模式 vs 实盘模式
 
-### 第一步：运行分析工具
+| | 模拟模式 | 实盘模式 |
+|---|---------|---------|
+| 默认 | **是**（安全） | 否 |
+| 下单 | 只在控制台打印，不真正下单 | 真正操作页面下单 |
+| 撤单 | 只在控制台打印 | 通过 API 真正撤单 |
+| 面板标签 | 红色"模拟" | 绿色"实盘" |
 
-1. 打开 https://predict.fun/markets/
-2. F12 → Console
-3. 粘贴**页面分析工具**脚本并运行
-4. 记录输出的选择器信息
-
-### 第二步：调整自动挂单脚本
-
-根据第一步的分析结果，调整 `PredictAutoTrader` 类中的 `selectors` 配置。
-
-### 第三步：测试运行（模拟模式）
-
-```javascript
-const trader = new PredictAutoTrader({
-    dryRun: true,  // 模拟模式
-    spreadPercent: 6,
-    maxOrders: 3,
-    orderSize: 10
-});
-
-trader.start();
-```
-
-### 第四步：实盘运行（谨慎！）
+**切换到实盘前，请务必先在模拟模式下测试！**
 
 ```javascript
 // 确认无误后切换到实盘
-trader.setDryRun(false);
+pft.toggleMode()
 ```
 
 ---
 
-## ⚠️ 重要注意事项
+## 常见问题
 
-### 风险提示
+### Q: 粘贴脚本后浏览器说 "allow pasting"？
 
-- 🧪 **务必先在模拟模式测试**
-- 💰 **从小额开始**
-- 📊 **实时监控运行状态**
-- 🔄 **定期检查页面是否正常**
-- 🚫 **不要长时间无人值守**
+在控制台输入 `allow pasting` 按回车，然后重新粘贴脚本。
 
-### 技术限制
+### Q: 提示"获取订单簿失败"？
 
-- ⚠️ 页面结构可能随时变化
-- ⚠️ 需要保持浏览器标签页打开
-- ⚠️ 可能触发网站风控
-- ⚠️ 频繁操作可能导致 IP 被限制
+1. 先在页面上随便点击几下（查看市场、切换选项卡），让脚本捕获到 API Key
+2. 输入 `pft.authStatus()` 检查认证状态
+3. 如果 API Key 显示 "❌"，需要手动设置
 
-### 建议
+### Q: 如何找到 API Key？
 
-- ✅ 使用 Railway 持续监控（更稳定）
-- ✅ 浏览器脚本用于辅助手动操作
-- ✅ 定期检查页面元素是否有更新
+1. 按 F12 打开开发者工具
+2. 切换到 **Network**（网络）标签
+3. 在页面上做任意操作（点击市场等）
+4. 在网络请求列表中找到发往 `api.predict.fun` 的请求
+5. 点击该请求，查看 **Headers**（请求头）
+6. 找到 `x-api-key` 的值，复制它
+7. 回到 Console，输入 `pft.setApiKey("粘贴的值")`
+
+### Q: 页面刷新后脚本还在吗？
+
+不在了。**页面刷新后需要重新粘贴脚本**。这是浏览器的安全机制。
+
+### Q: 下单失败怎么办？
+
+1. 确保已切换到实盘模式：`pft.toggleMode()`
+2. 确保在市场详情页面（不是市场列表页）
+3. 确保交易面板已打开（页面上能看到 Yes/No 按钮和输入框）
+4. 运行 `pft.analyze()` 检查页面元素是否被正确识别
+
+### Q: 网格挂单时报错？
+
+网格挂单每两单之间间隔 2 秒。如果中间出错：
+1. 检查页面是否正常
+2. 检查交易面板是否打开
+3. 减少层数，先测试 1-2 层
 
 ---
 
-## 🔧 进阶功能
+## 工作原理
 
-### API 直接调用（如果找到 API 端点）
-
-如果通过分析工具找到了 Predict.fun 的 API 端点，可以直接使用：
-
-```javascript
-// 示例（需要根据实际 API 调整）
-async function placeOrderViaAPI(side, price, size) {
-    const response = await fetch('https://api.predict.fun/v1/orders', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer YOUR_API_TOKEN'
-        },
-        body: JSON.stringify({
-            side: side,
-            price: price,
-            size: size
-        })
-    });
-
-    return response.json();
-}
+```
+┌─────────────────────────────────────────────┐
+│  你的浏览器（已登录 Predict.fun）            │
+│                                             │
+│  ┌─────────────┐    ┌────────────────────┐  │
+│  │ Predict.fun │◄──►│ 我们的 F12 脚本     │  │
+│  │ 网页        │    │                    │  │
+│  └──────┬──────┘    │ 1. 嗅探 API Key    │  │
+│         │           │ 2. 调用 REST API   │  │
+│         │           │ 3. 操作页面元素     │  │
+│         ▼           │ 4. 显示状态面板     │  │
+│  ┌──────────────┐   └────────────────────┘  │
+│  │ Predict.fun  │                           │
+│  │ API 服务器   │                           │
+│  └──────────────┘                           │
+└─────────────────────────────────────────────┘
 ```
 
----
-
-## 📚 相关文档
-
-- [API申请指南.md](API申请指南.md)
-- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
+**核心原理：**
+1. **网络嗅探** - 自动捕获页面发出的请求中的认证信息（API Key, JWT）
+2. **API 调用** - 用捕获的认证信息直接调用 Predict.fun REST API（查看数据、撤单）
+3. **UI 自动化** - 通过操作页面上的输入框和按钮来下单（最可靠，因为复用了网站自身的签名机制）
 
 ---
 
-**创建日期**: 2026-02-05
-**版本**: v1.0
+## Predict.fun API 参考
 
-⚠️ **免责声明**: 本脚本仅供学习和研究使用。使用本脚本进行实际交易的风险由使用者自行承担。
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/v1/markets` | GET | 获取市场列表 |
+| `/v1/markets/{id}` | GET | 获取单个市场 |
+| `/v1/markets/{id}/orderbook` | GET | 获取订单簿 |
+| `/v1/markets/{id}/statistics` | GET | 获取市场统计 |
+| `/v1/orders` | POST | 创建订单（需要 EIP-712 签名）|
+| `/v1/orders/remove` | POST | 撤销订单 |
+| `/v1/positions` | GET | 获取持仓 |
+| `/v1/auth/message` | GET | 获取认证消息 |
+| `/v1/auth` | POST | 获取 JWT Token |
+
+- **Base URL**: `https://api.predict.fun`
+- **认证**: `x-api-key` 请求头 + `Authorization: Bearer JWT` 请求头
+- **限流**: 每分钟 240 个请求
+- **区块链**: BNB Chain (BSC)
+- **抵押品**: USDT
+- **完整文档**: https://dev.predict.fun
+
+---
+
+## 文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `predict_f12_trader.js` | 主脚本，复制到浏览器控制台运行 |
+| `docs/PREDICT_AUTO_ORDER.md` | 本文档（使用说明） |
+
+---
+
+## 风险提示
+
+- 预测市场交易有风险，请只用你能承受损失的资金
+- 自动化脚本可能因页面更新而失效
+- 请勿长时间无人值守运行
+- 务必先在模拟模式下充分测试
+- 建议从小额开始
+
+---
+
+**版本**: v2.0
+**更新日期**: 2026-02-08
+**免责声明**: 本脚本仅供学习和研究使用。使用本脚本进行实际交易的风险由使用者自行承担。
