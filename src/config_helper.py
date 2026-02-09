@@ -29,6 +29,15 @@ def load_config(config_path: str = 'config.yaml') -> dict:
         'api': {
             'api_key': os.getenv('PREDICT_API_KEY', config.get('api', {}).get('api_key', ''))
         },
+        'opinion': {
+            'base_url': config.get('opinion', {}).get('base_url', 'https://proxy.opinion.trade:8443/openapi'),
+            'api_key': os.getenv('OPINION_API_KEY', config.get('opinion', {}).get('api_key', '')),
+            'cache_seconds': int(config.get('opinion', {}).get('cache_seconds', 60))
+        },
+        'opinion_poly': {
+            'min_arbitrage_threshold': float(os.getenv('OPINION_POLY_THRESHOLD', config.get('opinion_poly', {}).get('min_arbitrage_threshold', 2.0))),
+            'min_confidence': float(config.get('opinion_poly', {}).get('min_confidence', 0.2))
+        },
         'notification': {
             'telegram': {
                 'enabled': os.getenv('TELEGRAM_ENABLED', 'true').lower() == 'true',

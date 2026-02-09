@@ -76,7 +76,7 @@ def scan_opinion_poly(logger, config):
         from src.opinion_poly_monitor import create_opinion_poly_monitor
 
         poly_client = RealPolymarketClient(config)
-        opinion_client = create_opinion_client(config, use_mock=True)  # Opinion API 申请中
+        opinion_client = create_opinion_client(config, use_mock=False)  # Opinion API 已激活
         monitor = create_opinion_poly_monitor(config)
 
         opportunities = monitor.scan_opinion_poly_arbitrage(poly_client, opinion_client)

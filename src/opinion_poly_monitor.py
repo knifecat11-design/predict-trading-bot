@@ -1,6 +1,6 @@
 """
 Opinion.trade ↔ Polymarket 跨平台套利监控
-最小利润阈值: 5%
+最小利润阈值: 2%
 """
 
 import time
@@ -58,9 +58,9 @@ class OpinionPolyMonitor:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # 配置参数 - 5% 最小套利阈值
+        # 配置参数 - 2% 最小套利阈值
         arb_config = config.get('opinion_poly', {})
-        self.min_arbitrage_threshold = arb_config.get('min_arbitrage_threshold', 5.0)
+        self.min_arbitrage_threshold = arb_config.get('min_arbitrage_threshold', 2.0)
         self.min_confidence = arb_config.get('min_confidence', 0.2)
 
         # 统计信息

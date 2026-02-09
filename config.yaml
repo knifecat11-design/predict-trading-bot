@@ -9,7 +9,7 @@ api:
 # Opinion.trade API 配置
 opinion:
   base_url: "https://proxy.opinion.trade:8443/openapi"
-  api_key: ""  # 请申请: https://docs.opinion.trade/developer-guide/opinion-open-api/overview
+  api_key: "JycT63x2kYkqtTrlCnpR58O57agzKouz"  # EOA: 0x138fad69eb759f4460de2e3fb79173b034142021
   cache_seconds: 60
 
 # 市场配置
@@ -50,7 +50,7 @@ arbitrage:
 
 # Opinion-Polymarket 跨平台监控
 opinion_poly:
-  min_arbitrage_threshold: 5.0  # 最小套利空间 5%
+  min_arbitrage_threshold: 2.0  # 最小套利空间 2%
   min_confidence: 0.2            # 最小匹配置信度
 
 # 通知配置
