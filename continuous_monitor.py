@@ -158,7 +158,7 @@ def main():
     print()
     print("=" * 70)
     print("  持续套利监控系统")
-    print("  平台: Polymarket ↔ Predict.fun ↔ Opinion.trade")
+    print("  平台: Opinion.trade ↔ Polymarket")
     print("  通知: Telegram")
     print("=" * 70)
     print()
@@ -213,9 +213,9 @@ def main():
             all_opportunities = []
 
             # 扫描各个平台组合
+            # Predict.fun 暂停（模拟数据无意义）
             scanners = [
                 scan_opinion_poly,
-                scan_poly_predict,
             ]
 
             for scanner in scanners:
