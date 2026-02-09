@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prediction Market Arbitrage Monitor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0e17;
+            color: #e0e6ed;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 100%);
+            border-bottom: 1px solid #21262d;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+        .header h1 span { color: #58a6ff; }
+        .header-info {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: #8b949e;
+        }
+        .header-info .val { color: #58a6ff; font-weight: 600; }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+        /* Platform status cards */
+        .platforms {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .platform-card {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .platform-card .name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            font-size: 15px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.active { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+        .status-dot.error { background: #f85149; box-shadow: 0 0 6px #f85149; }
+        .status-dot.no_key { background: #d29922; box-shadow: 0 0 6px #d29922; }
+        .status-dot.unknown { background: #484f58; }
+        .platform-stats {
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+            color: #8b949e;
+        }
+        .platform-stats .num { color: #f0f6fc; font-weight: 600; }
+
+        /* Arbitrage section */
+        .section-title {
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .arb-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #161b22;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #21262d;
+            margin-bottom: 24px;
+        }
+        .arb-table th {
+            background: #1c2128;
+            padding: 10px 14px;
+            text-align: left;
+            font-size: 12px;
+            font-weight: 600;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .arb-table td {
+            padding: 10px 14px;
+            border-top: 1px solid #21262d;
+            font-size: 13px;
+        }
+        .arb-table tr:hover td { background: #1c2128; }
+        .arb-pct {
+            font-weight: 700;
+            font-size: 14px;
+        }
+        .arb-pct.high { color: #3fb950; }
+        .arb-pct.mid { color: #d29922; }
+        .arb-pct.low { color: #8b949e; }
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .tag.poly { background: #1f3a5f; color: #58a6ff; }
+        .tag.opinion { background: #3b2f1a; color: #d29922; }
+        .tag.predict { background: #1a3b2f; color: #3fb950; }
+        .direction { font-size: 12px; color: #8b949e; }
+
+        /* Market list */
+        .market-lists {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+        .market-list {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .market-list-header {
+            padding: 12px 14px;
+            background: #1c2128;
+            font-weight: 600;
+            font-size: 14px;
+            border-bottom: 1px solid #21262d;
+        }
+        .market-item {
+            padding: 8px 14px;
+            border-bottom: 1px solid #21262d;
+            font-size: 12px;
+        }
+        .market-item:last-child { border-bottom: none; }
+        .market-item .title {
+            color: #c9d1d9;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .market-item .prices {
+            display: flex;
+            gap: 12px;
+            color: #8b949e;
+            font-size: 11px;
+        }
+        .market-item .prices .yes { color: #3fb950; }
+        .market-item .prices .no { color: #f85149; }
+
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: #484f58;
+        }
+        .pulse { animation: pulse 2s ease-in-out infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        @media (max-width: 768px) {
+            .platforms, .market-lists { grid-template-columns: 1fr; }
+            .header { flex-direction: column; gap: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Prediction Market <span>Arbitrage Monitor</span></h1>
+        <div class="header-info">
+            <div>Scans: <span class="val" id="scan-count">0</span></div>
+            <div>Threshold: <span class="val" id="threshold">2.0</span>%</div>
+            <div>Updated: <span class="val" id="last-scan">-</span></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Platform Status -->
+        <div class="platforms">
+            <div class="platform-card" id="card-polymarket">
+                <div class="name">
+                    <span class="status-dot unknown" id="dot-polymarket"></span>
+                    Polymarket
+                </div>
+                <div class="platform-stats">
+                    <div>Markets: <span class="num" id="count-polymarket">-</span></div>
+                    <div>Status: <span class="num" id="status-polymarket">...</span></div>
+                </div>
+            </div>
+            <div class="platform-card" id="card-opinion">
+                <div class="name">
+                    <span class="status-dot unknown" id="dot-opinion"></span>
+                    Opinion.trade
+                </div>
+                <div class="platform-stats">
+                    <div>Markets: <span class="num" id="count-opinion">-</span></div>
+                    <div>Status: <span class="num" id="status-opinion">...</span></div>
+                </div>
+            </div>
+            <div class="platform-card" id="card-predict">
+                <div class="name">
+                    <span class="status-dot unknown" id="dot-predict"></span>
+                    Predict.fun
+                </div>
+                <div class="platform-stats">
+                    <div>Markets: <span class="num" id="count-predict">-</span></div>
+                    <div>Status: <span class="num" id="status-predict">...</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Arbitrage Opportunities -->
+        <div class="section-title">Arbitrage Opportunities</div>
+        <table class="arb-table">
+            <thead>
+                <tr>
+                    <th>Market</th>
+                    <th>Platforms</th>
+                    <th>Direction</th>
+                    <th>Platform A</th>
+                    <th>Platform B</th>
+                    <th>Combined</th>
+                    <th>Arbitrage</th>
+                    <th>Confidence</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody id="arb-body">
+                <tr><td colspan="9" class="empty-state pulse">Scanning markets...</td></tr>
+            </tbody>
+        </table>
+
+        <!-- Market Lists -->
+        <div class="section-title">Top Markets by Platform</div>
+        <div class="market-lists">
+            <div class="market-list">
+                <div class="market-list-header">Polymarket</div>
+                <div id="list-polymarket"><div class="empty-state">Loading...</div></div>
+            </div>
+            <div class="market-list">
+                <div class="market-list-header">Opinion.trade</div>
+                <div id="list-opinion"><div class="empty-state">Loading...</div></div>
+            </div>
+            <div class="market-list">
+                <div class="market-list-header">Predict.fun</div>
+                <div id="list-predict"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusLabels = {
+            active: 'Active',
+            error: 'Error',
+            no_key: 'No API Key',
+            unknown: 'Loading...'
+        };
+
+        function platformTag(name) {
+            const cls = name.toLowerCase().includes('poly') ? 'poly' :
+                        name.toLowerCase().includes('opinion') ? 'opinion' : 'predict';
+            return `<span class="tag ${cls}">${name}</span>`;
+        }
+
+        function arbClass(pct) {
+            return pct >= 5 ? 'high' : pct >= 2 ? 'mid' : 'low';
+        }
+
+        function renderMarkets(containerId, markets) {
+            const el = document.getElementById(containerId);
+            if (!markets || markets.length === 0) {
+                el.innerHTML = '<div class="empty-state">No data</div>';
+                return;
+            }
+            el.innerHTML = markets.slice(0, 10).map(m => `
+                <div class="market-item">
+                    <div class="title">${m.title}</div>
+                    <div class="prices">
+                        <span>Yes: <span class="yes">${(m.yes * 100).toFixed(1)}c</span></span>
+                        <span>No: <span class="no">${(m.no * 100).toFixed(1)}c</span></span>
+                        <span>Vol: $${Math.round(m.volume).toLocaleString()}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function update() {
+            fetch('/api/state')
+                .then(r => r.json())
+                .then(data => {
+                    // Header
+                    document.getElementById('scan-count').textContent = data.scan_count || 0;
+                    document.getElementById('threshold').textContent = data.threshold || 2.0;
+                    document.getElementById('last-scan').textContent = data.last_scan || '-';
+
+                    // Platforms
+                    ['polymarket', 'opinion', 'predict'].forEach(p => {
+                        const info = data.platforms[p] || {};
+                        const dot = document.getElementById(`dot-${p}`);
+                        dot.className = `status-dot ${info.status || 'unknown'}`;
+                        document.getElementById(`count-${p}`).textContent = info.count || 0;
+                        document.getElementById(`status-${p}`).textContent = statusLabels[info.status] || info.status;
+                        renderMarkets(`list-${p}`, info.markets);
+                    });
+
+                    // Arbitrage
+                    const tbody = document.getElementById('arb-body');
+                    const arbs = data.arbitrage || [];
+                    if (arbs.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
+                    } else {
+                        tbody.innerHTML = arbs.map(a => `
+                            <tr>
+                                <td>${a.market}</td>
+                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
+                                <td class="direction">${a.direction}</td>
+                                <td>Y:${a.a_yes}c N:${a.a_no}c</td>
+                                <td>Y:${a.b_yes}c N:${a.b_no}c</td>
+                                <td>${a.combined}c</td>
+                                <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
+                                <td>${(a.confidence * 100).toFixed(0)}%</td>
+                                <td>${a.timestamp}</td>
+                            </tr>
+                        `).join('');
+                    }
+                })
+                .catch(e => console.error('Update error:', e));
+        }
+
+        // Initial + auto refresh
+        update();
+        setInterval(update, 10000);
+    </script>
+</body>
+</html>
