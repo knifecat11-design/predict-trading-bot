@@ -122,6 +122,9 @@ class OpinionAPIClient:
                 elif response.status_code == 401:
                     logger.error("Opinion API 认证失败，请检查 API Key")
                     break
+                elif response.status_code == 404:
+                    logger.warning("Opinion API endpoint not found (404)")
+                    break
                 elif response.status_code == 429:
                     logger.warning("Opinion API 速率限制，暂停获取")
                     break
@@ -147,11 +150,12 @@ class OpinionAPIClient:
         """
         获取 Trending 市场列表（按 tags 分类）
 
-        API URL: https://app.opinion.trade/trending?tags=Culture&homeType=Market
+        注意：Opinion API 可能没有 /trending 端点
+        我们使用 /market 端点代替
 
         Args:
             tags: 标签列表，可选: Macro, Pre-TG, Crypto, Business, Politics, NBA, Sports, Tech, Culture
-                 如果为 None，获取所有标签
+                 如果为 None，获取所有市场（不过滤标签）
             limit: 每个标签返回的市场数量
 
         Returns:
@@ -159,51 +163,59 @@ class OpinionAPIClient:
         """
         all_markets = []
 
+        # 如果没有指定tags，直接获取所有活跃市场
+        if tags is None:
+            try:
+                return self.get_markets(status='activated', sort_by=5, limit=limit)
+            except Exception as e:
+                logger.error(f"获取 Opinion 市场失败: {e}")
+                return []
+
         # 可用标签
         available_tags = ['Macro', 'Pre-TG', 'Crypto', 'Business', 'Politics', 'NBA', 'Sports', 'Tech', 'Culture']
+        tags = [t for t in tags if t in available_tags]
 
-        if tags is None:
-            tags = available_tags
-        else:
-            # 过滤无效标签
-            tags = [t for t in tags if t in available_tags]
-
+        # 尝试使用trending端点
         try:
             for tag in tags:
                 params = {
-                    'tags': tag,
-                    'homeType': 'Market'
+                    'status': 'activated',
+                    'sortBy': 5,  # 24h Volume
+                    'limit': limit,
                 }
 
+                # 尝试使用trending端点
                 response = self.session.get(
                     f"{self.base_url}/trending",
-                    params=params,
+                    params={**params, 'tags': tag, 'homeType': 'Market'},
                     timeout=15
                 )
+
+                if response.status_code == 404:
+                    # trending端点不存在，回退到普通market端点
+                    logger.info("Opinion /trending 端点不存在，使用 /market 端点")
+                    return self.get_markets(status='activated', sort_by=5, limit=limit)
 
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('code') == 0:
                         markets = data.get('result', {}).get('list', data.get('result', []))
                         if markets:
-                            # 为每个市场添加标签信息
                             for m in markets:
                                 m['_tag'] = tag
                             all_markets.extend(markets)
                             logger.info(f"Opinion Trending [{tag}]: 获取到 {len(markets)} 个市场")
-                    else:
-                        logger.warning(f"Opinion Trending [{tag}] API 错误: {data.get('msg')}")
                 elif response.status_code == 401:
-                    logger.error("Opinion Trending API 认证失败，请检查 API Key")
+                    logger.error("Opinion Trending API 认证失败")
                     break
                 elif response.status_code == 429:
                     logger.warning("Opinion Trending API 速率限制")
                     break
-                else:
-                    logger.warning(f"Opinion Trending [{tag}] HTTP {response.status_code}")
 
         except Exception as e:
-            logger.error(f"获取 Opinion Trending 市场失败: {e}")
+            logger.warning(f"获取 Opinion Trending 失败，使用标准API: {e}")
+            # 回退到标准API
+            return self.get_markets(status='activated', sort_by=5, limit=limit)
 
         # 按 24h Volume 降序排序
         all_markets.sort(key=lambda m: float(m.get('volume24h', m.get('volume', 0))), reverse=True)
