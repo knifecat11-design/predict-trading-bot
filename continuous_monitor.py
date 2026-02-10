@@ -293,7 +293,7 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
 
             if end_a and end_b:
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 30:  # 超过 30 天不匹配
+                if time_diff > 5:  # 超过 5 天不匹配
                     continue
 
             # Direction 1: A Yes + B No
