@@ -24,6 +24,15 @@ class OpinionMarket:
     status: str
 
 
+@dataclass
+class OpinionOrderBook:
+    """Opinion 订单簿"""
+    yes_bid: float
+    yes_ask: float
+    yes_bid_size: float
+    yes_ask_size: float
+
+
 class OpinionAPIClient:
     """
     Opinion.trade 市场监测客户端
@@ -165,6 +174,49 @@ class OpinionAPIClient:
 
         return None
 
+    def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
+        """
+        获取订单簿
+
+        Args:
+            token_id: Token ID
+
+        Returns:
+            OpinionOrderBook 或 None
+        """
+        try:
+            params = {'token_id': token_id}
+            response = self.session.get(
+                f"{self.base_url}/token/orderbook",
+                params=params,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0:
+                    result = data.get('result', {})
+
+                    bids = result.get('bids', [])
+                    asks = result.get('asks', [])
+
+                    yes_bid = float(bids[0]['price']) if bids else 0.49
+                    yes_ask = float(asks[0]['price']) if asks else 0.51
+                    bid_size = float(bids[0]['size']) if bids else 100
+                    ask_size = float(asks[0]['size']) if asks else 100
+
+                    return OpinionOrderBook(
+                        yes_bid=yes_bid,
+                        yes_ask=yes_ask,
+                        yes_bid_size=bid_size,
+                        yes_ask_size=ask_size
+                    )
+
+        except Exception as e:
+            logger.debug(f"获取订单簿失败 {token_id}: {e}")
+
+        return None
+
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
         """
         获取市场详细信息
@@ -278,6 +330,17 @@ class MockOpinionClient:
         change = random.uniform(-0.02, 0.02)
         self.base_price = max(0.01, min(0.99, self.base_price * (1 + change)))
         return self.base_price
+
+    def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
+        """获取模拟订单簿"""
+        import random
+        spread = random.uniform(0.01, 0.03)
+        return OpinionOrderBook(
+            yes_bid=round(max(0.01, self.base_price - spread / 2), 3),
+            yes_ask=round(min(0.99, self.base_price + spread / 2), 3),
+            yes_bid_size=random.uniform(100, 1000),
+            yes_ask_size=random.uniform(100, 1000)
+        )
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
         """获取模拟市场信息"""

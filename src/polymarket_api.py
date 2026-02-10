@@ -25,6 +25,15 @@ class PolymarketMarket:
     tags: List[str] = None
 
 
+@dataclass
+class PolymarketOrderBook:
+    """Polymarket 订单簿"""
+    yes_bid: float
+    yes_ask: float
+    yes_bid_size: float = 100.0
+    yes_ask_size: float = 100.0
+
+
 class PolymarketClient:
     """
     Polymarket 市场监测客户端
@@ -268,6 +277,63 @@ class PolymarketClient:
         except Exception as e:
             logger.error(f"搜索市场失败: {e}")
             return []
+
+    def get_order_book(self, condition_id: str) -> Optional[PolymarketOrderBook]:
+        """
+        获取订单簿数据（用于套利监控）
+
+        Args:
+            condition_id: 市场 ID
+
+        Returns:
+            PolymarketOrderBook 或 None
+        """
+        try:
+            import json
+
+            # 从市场列表中获取最新数据（包含 bestBid/bestAsk）
+            markets = self.get_markets(limit=1000, active_only=True)
+
+            for market in markets:
+                cid = market.get('conditionId') or market.get('condition_id')
+
+                if cid == condition_id:
+                    # 优先使用 bestBid/bestAsk（真实订单簿价格）
+                    best_bid = market.get('bestBid')
+                    best_ask = market.get('bestAsk')
+
+                    if best_bid is not None and best_ask is not None:
+                        return PolymarketOrderBook(
+                            yes_bid=round(float(best_bid), 4),
+                            yes_ask=round(float(best_ask), 4),
+                            yes_bid_size=100.0,
+                            yes_ask_size=100.0
+                        )
+
+                    # 回退：从 outcomePrices 计算（添加价差）
+                    outcome_prices_str = market.get('outcomePrices', '[]')
+                    try:
+                        outcome_prices = json.loads(outcome_prices_str)
+                        if outcome_prices and len(outcome_prices) >= 2:
+                            yes_price = float(outcome_prices[0])
+                            # 添加合理的买卖价差（通常 1-2%）
+                            spread = max(0.01, yes_price * 0.02)
+                            return PolymarketOrderBook(
+                                yes_bid=round(max(0.01, yes_price - spread / 2), 4),
+                                yes_ask=round(min(0.99, yes_price + spread / 2), 4),
+                                yes_bid_size=100.0,
+                                yes_ask_size=100.0
+                            )
+                    except:
+                        pass
+
+            # 如果找不到市场，返回 None
+            logger.warning(f"未找到市场 {condition_id}")
+            return None
+
+        except Exception as e:
+            logger.error(f"获取订单簿失败 {condition_id}: {e}")
+            return None
 
     def clear_cache(self):
         """清除缓存"""
