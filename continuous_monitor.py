@@ -307,6 +307,7 @@ def main():
     print("=" * 70)
     print("  Cross-Platform Arbitrage Monitor")
     print("  Polymarket | Opinion.trade | Predict.fun")
+    print("  Version: v2.0 (2026-02-10) - Fixed Opinion API")
     print("=" * 70)
     print()
 

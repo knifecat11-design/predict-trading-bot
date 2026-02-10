@@ -2,6 +2,8 @@
 Opinion.trade 市场监测 API（只读模式 + SDK 交易模式）
 专注于数据监测，不支持交易
 API 文档: https://docs.opinion.trade/developer-guide/opinion-open-api/overview
+
+版本: v2.0 (2026-02-10) - 修复 HTTP 认证和响应解析
 """
 
 import time
