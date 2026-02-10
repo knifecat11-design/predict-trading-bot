@@ -244,7 +244,6 @@ class OpinionAPIClient:
                     if len(batch) < page_size:
                         break
                 elif response.status_code == 401:
-                elif response.status_code == 401:
                     logger.error("Opinion API 认证失败，请检查 API Key")
                     break
                 elif response.status_code == 429:
