@@ -73,55 +73,68 @@ class OpinionAPIClient:
     def get_markets(self,
                     status: str = 'activated',
                     sort_by: int = 5,  # 按 24h 交易量排序
-                    limit: int = 100) -> List[Dict]:
+                    limit: int = 500) -> List[Dict]:
         """
-        获取市场列表
+        获取市场列表（分页抓取全站）
 
         Args:
             status: 市场状态 ('activated', 'closed', etc.)
             sort_by: 排序方式 (5 = 按 24h 交易量)
             limit: 返回数量限制
 
-        Returns:
-            市场列表
+        Opinion API 每页最多 20 条，通过 offset 分页。
         """
         try:
             # 检查缓存
             if time.time() - self._cache_time < self._cache_duration and self._markets_cache:
                 return self._markets_cache[:limit]
 
-            params = {
-                'status': status,
-                'sortBy': sort_by,
-                'limit': min(limit, 100)
-            }
+            all_markets = []
+            page_size = 20  # Opinion API max per page
+            max_pages = (limit + page_size - 1) // page_size
 
-            response = self.session.get(
-                f"{self.base_url}/market",
-                params=params,
-                timeout=15
-            )
+            for page in range(max_pages):
+                params = {
+                    'status': status,
+                    'sortBy': sort_by,
+                    'limit': page_size,
+                    'offset': page * page_size,
+                }
 
-            if response.status_code == 200:
-                data = response.json()
+                response = self.session.get(
+                    f"{self.base_url}/market",
+                    params=params,
+                    timeout=15
+                )
 
-                # Opinion API 响应格式: {code: 0, msg: "success", result: {...}}
-                if data.get('code') == 0:
-                    result = data.get('result', {})
-                    markets = result.get('list', [])
-
-                    self._markets_cache = markets
-                    self._cache_time = time.time()
-
-                    logger.info(f"Opinion: 获取到 {len(markets)} 个市场")
-                    return markets[:limit]
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('code') == 0:
+                        batch = data.get('result', {}).get('list', [])
+                        if not batch:
+                            break
+                        all_markets.extend(batch)
+                        if len(batch) < page_size:
+                            break  # 最后一页
+                    else:
+                        logger.error(f"Opinion API 错误: {data.get('msg')}")
+                        break
+                elif response.status_code == 401:
+                    logger.error("Opinion API 认证失败，请检查 API Key")
+                    break
+                elif response.status_code == 429:
+                    logger.warning("Opinion API 速率限制，暂停获取")
+                    break
                 else:
-                    logger.error(f"Opinion API 错误: {data.get('msg')}")
+                    logger.error(f"Opinion API HTTP {response.status_code}")
+                    break
 
-            elif response.status_code == 401:
-                logger.error("Opinion API 认证失败，请检查 API Key")
-            elif response.status_code == 429:
-                logger.error("Opinion API 速率限制 exceeded")
+            if all_markets:
+                self._markets_cache = all_markets
+                self._cache_time = time.time()
+                logger.info(f"Opinion: 获取到 {len(all_markets)} 个市场")
+
+            return all_markets[:limit]
 
         except Exception as e:
             logger.error(f"获取 Opinion 市场失败: {e}")
