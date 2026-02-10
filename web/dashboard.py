@@ -45,6 +45,7 @@ _state = {
     'threshold': 2.0,
     'last_scan': '-',
     'error': None,
+    'last_sent_opportunities': {},  # Track last sent opportunities for deduplication
 }
 _lock = threading.Lock()
 
@@ -121,6 +122,7 @@ def fetch_polymarket_data(config):
                     'volume': float(m.get('volume24hr', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'polymarket',
+                    'end_date': m.get('endDate', ''),  # Add end date for validation
                 })
             except:
                 continue
@@ -191,6 +193,7 @@ def fetch_opinion_data(config):
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
                     'platform': 'opinion',
+                    'end_date': m.get('cutoff_at', ''),  # Add end date for validation
                 })
             except:
                 continue
@@ -244,6 +247,7 @@ def fetch_predict_data(config):
                     'volume': float(m.get('volume', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'predict',
+                    'end_date': '',  # Predict may not have this field
                 })
             except:
                 continue
@@ -264,6 +268,22 @@ def extract_keywords(title):
     stop_words = {'will', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'it', 'or', 'and'}
     words = re.findall(r'\b\w+\b', title.lower())
     return {w for w in words if len(w) > 2 and w not in stop_words}
+
+
+def parse_end_date(date_str):
+    """Parse end date string for validation"""
+    if not date_str:
+        return None
+    try:
+        if isinstance(date_str, str):
+            if date_str.isdigit():
+                return datetime.fromtimestamp(int(date_str))
+            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        elif isinstance(date_str, (int, float)):
+            return datetime.fromtimestamp(date_str)
+    except:
+        pass
+    return None
 
 
 def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
@@ -287,6 +307,14 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             if similarity < 0.2:
                 continue
 
+            # Check end date similarity
+            end_a = parse_end_date(ma.get('end_date', ''))
+            end_b = parse_end_date(mb.get('end_date', ''))
+            if end_a and end_b:
+                time_diff = abs((end_a - end_b).days)
+                if time_diff > 5:  # More than 5 days difference, skip
+                    continue
+
             # Direction 1: Buy Yes on A + Buy No on B
             combined1 = ma['yes'] + mb['no']
             arb1 = (1.0 - combined1) * 100
@@ -294,6 +322,9 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             # Direction 2: Buy Yes on B + Buy No on A
             combined2 = mb['yes'] + ma['no']
             arb2 = (1.0 - combined2) * 100
+
+            # Create unique market key for deduplication
+            market_key_base = f"{platform_a_name}-{platform_b_name}-{','.join(sorted(intersection))}"
 
             if arb1 >= threshold:
                 opportunities.append({
@@ -309,6 +340,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                     'arbitrage': round(arb1, 2),
                     'confidence': round(similarity, 2),
                     'timestamp': datetime.now().strftime('%H:%M:%S'),
+                    'market_key': f"{market_key_base}-yes1_no2",
                 })
 
             if arb2 >= threshold:
@@ -325,6 +357,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                     'arbitrage': round(arb2, 2),
                     'confidence': round(similarity, 2),
                     'timestamp': datetime.now().strftime('%H:%M:%S'),
+                    'market_key': f"{market_key_base}-yes2_no1",
                 })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
@@ -387,7 +420,27 @@ def background_scanner():
                     'count': len(predict_markets),
                     'last_update': now,
                 }
-                _state['arbitrage'] = all_arb[:50]
+
+                # Merge with existing arbitrage opportunities, tracking by market_key
+                existing_arb = _state.get('arbitrage', [])
+                new_arb_map = {opp['market_key']: opp for opp in all_arb if opp.get('market_key')}
+                old_arb_map = {opp['market_key']: opp for opp in existing_arb if opp.get('market_key')}
+
+                # For old opportunities not in new scan, keep them (could add expiry logic later)
+                for key, old_opp in old_arb_map.items():
+                    if key not in new_arb_map:
+                        # Keep old opportunity if it still exists
+                        new_arb_map[key] = old_opp
+
+                # For opportunities in both new and old, check if price changed significantly
+                for key, new_opp in new_arb_map.items():
+                    if key in old_arb_map:
+                        old_opp = old_arb_map[key]
+                        price_change = abs(new_opp['arbitrage'] - old_opp['arbitrage'])
+                        if price_change < 0.1:  # Less than 0.1% change, keep old
+                            new_arb_map[key] = old_opp
+
+                _state['arbitrage'] = list(new_arb_map.values())[:50]
                 _state['scan_count'] += 1
                 _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 _state['threshold'] = threshold
