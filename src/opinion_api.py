@@ -282,7 +282,7 @@ class OpinionAPIClient:
             return None
 
     def _get_price_sdk(self, token_id: str) -> Optional[float]:
-        """使用 SDK 获取价格"""
+        """使用 SDK 获取价格（返回 best ask - 买入价）"""
         response = self._client.get_orderbook(token_id)
 
         if hasattr(response, 'errno') and response.errno != 0:
@@ -292,38 +292,30 @@ class OpinionAPIClient:
             return None
 
         result = response.result
-        bids = getattr(result, 'bids', []) or []
         asks = getattr(result, 'asks', []) or []
 
-        best_bid = float(bids[0].price) if bids else 0.0
-        best_ask = float(asks[0].price) if asks else 0.0
+        # 直接返回 best ask（最低卖价）用于买入
+        if asks:
+            return round(float(asks[0].price), 4)
 
-        if best_bid > 0 and best_ask > 0:
-            return round((best_bid + best_ask) / 2, 4)
-        elif best_ask > 0:
-            return round(best_ask, 4)
-        elif best_bid > 0:
-            return round(best_bid, 4)
         return None
 
     def _get_price_http(self, token_id: str) -> Optional[float]:
-        """使用 HTTP 获取价格"""
+        """使用 HTTP 获取价格（返回 best ask - 买入价）"""
         params = {'token_id': token_id}
         response = self.session.get(
-            f"{self.base_url}/token/latest-price",
+            f"{self.base_url}/token/orderbook",
             params=params,
             timeout=10
         )
 
         if response.status_code == 200:
             data = response.json()
-            # Opinion API 返回 {errno: 0, result: {price: "0.5"}}
-            if data.get('errno') == 0 or data.get('code') == 0:
-                result = data.get('result', {})
-                if isinstance(result, dict):
-                    price = result.get('price')
-                    if price:
-                        return float(price)
+            # Opinion API 直接返回 bids/asks，没有 result 包装
+            asks = data.get('asks', [])
+            # 返回 best ask（最低卖价）用于买入
+            if asks:
+                return round(float(asks[0]['price']), 4)
 
         return None
 

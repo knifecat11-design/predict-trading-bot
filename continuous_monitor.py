@@ -1,14 +1,15 @@
 """
 Cross-platform prediction market arbitrage monitor
 Platforms: Polymarket, Opinion.trade, Predict.fun
-Only sends Telegram notifications for real (non-mock) data
 """
 
 import os
 import sys
-import time
 import json
+import time
 import logging
+import threading
+import traceback
 from datetime import datetime, timedelta
 
 # UTF-8 encoding
@@ -168,9 +169,12 @@ def fetch_polymarket_markets(config):
                     'title': m.get('question', '')[:80],
                     'yes': yes, 'no': no,
                     'volume': float(m.get('volume24hr', 0) or 0),
+                    'end_date': m.get('endDate', ''),  # 添加结束日期
                 })
             except:
                 continue
+        # 按交易量降序排列
+        parsed.sort(key=lambda x: x['volume'], reverse=True)
         return parsed
     except Exception as e:
         logging.error(f"Polymarket fetch: {e}")
@@ -197,11 +201,13 @@ def fetch_opinion_markets(config):
                     'yes': yes_price,
                     'no': 1.0 - yes_price,
                     'volume': float(m.get('volume24h', 0) or 0),
+                    'end_date': m.get('cutoff_at', ''),  # 添加结束日期
                 })
             except:
                 continue
             if len(parsed) >= 200:
                 break
+        # 已经按交易量排序了
         return parsed
     except Exception as e:
         logging.error(f"Opinion fetch: {e}")
@@ -223,11 +229,18 @@ def fetch_predict_markets(config):
                 asks = ob.get('asks', [])
                 if not bids or not asks:
                     continue
-                yes = (float(bids[0]['price']) + float(asks[0]['price'])) / 2
+
+                yes_bid = float(bids[0]['price'])
+                yes_ask = float(asks[0]['price'])
+                yes_price = (yes_bid + yes_ask) / 2
+                no_price = 1.0 - yes_price
+
                 parsed.append({
                     'title': (m.get('question') or m.get('title', ''))[:80],
-                    'yes': yes, 'no': 1.0 - yes,
+                    'yes': yes_price,
+                    'no': no_price,
                     'volume': float(m.get('volume', 0) or 0),
+                    'end_date': '',  # Predict 可能没有这个字段
                 })
             except:
                 continue
@@ -235,6 +248,24 @@ def fetch_predict_markets(config):
     except Exception as e:
         logging.error(f"Predict fetch: {e}")
         return []
+
+
+def parse_end_date(date_str):
+    """解析结束日期字符串"""
+    if not date_str:
+        return None
+    try:
+        # 尝试 ISO 格式
+        if isinstance(date_str, str):
+            # 处理 Unix 时间戳（秒）
+            if date_str.isdigit():
+                return datetime.fromtimestamp(int(date_str))
+            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        elif isinstance(date_str, (int, float)):
+            return datetime.fromtimestamp(date_str)
+    except:
+        pass
+    return None
 
 
 def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2):
@@ -256,6 +287,15 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
             if sim < min_confidence:
                 continue
 
+            # 检查结束时间相似度（不能相差超过 30 天）
+            end_a = parse_end_date(ma.get('end_date', ''))
+            end_b = parse_end_date(mb.get('end_date', ''))
+
+            if end_a and end_b:
+                time_diff = abs((end_a - end_b).days)
+                if time_diff > 30:  # 超过 30 天不匹配
+                    continue
+
             # Direction 1: A Yes + B No
             comb1 = ma['yes'] + mb['no']
             arb1 = (1.0 - comb1) * 100
@@ -263,6 +303,10 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
             # Direction 2: B Yes + A No
             comb2 = mb['yes'] + ma['no']
             arb2 = (1.0 - comb2) * 100
+
+            # 创建唯一标识符（基于市场关键词和方向）
+            # 这样如果同样的套利机会再次出现，可以识别为重复
+            market_key = f"{name_a}-{name_b}-{','.join(sorted(inter))}"
 
             for arb_pct, direction, market_title, ya, na, yb, nb in [
                 (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma['title'], ma['yes'], ma['no'], mb['yes'], mb['no']),
@@ -277,6 +321,7 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
                         'a_yes': round(ya * 100, 2), 'a_no': round(na * 100, 2),
                         'b_yes': round(yb * 100, 2), 'b_no': round(nb * 100, 2),
                         'confidence': round(sim, 2),
+                        'market_key': market_key,  # 用于去重
                     })
 
     results.sort(key=lambda x: x['arbitrage'], reverse=True)
@@ -307,7 +352,7 @@ def main():
     print("=" * 70)
     print("  Cross-Platform Arbitrage Monitor")
     print("  Polymarket | Opinion.trade | Predict.fun")
-    print("  Version: v2.0 (2026-02-10) - Fixed Opinion API")
+    print("  Version: v2.1 (2026-02-10) - Improved matching & dedup")
     print("=" * 70)
     print()
 
@@ -346,6 +391,7 @@ def main():
     running = True
     scan_count = 0
     last_notifications = {}
+    last_sent_opportunities = {}  # 存储上次发送的机会详情
 
     try:
         import signal
@@ -393,23 +439,41 @@ def main():
                     opp['is_real'] = is_real
                     all_opps.append(opp)
 
-            # Send Telegram only for REAL data opportunities
+            # 发送 Telegram 通知（带去重逻辑）
             for opp in all_opps:
                 if not opp['is_real']:
-                    logger.debug(f"  Skip mock: {opp['market'][:30]}")
                     continue
 
-                market_key = f"{opp['platforms']}:{opp['market'][:30]}"
-                now = datetime.now()
+                # 使用 market_key 作为唯一标识
+                market_key = opp.get('market_key', '')
+                if not market_key:
+                    continue
 
+                # 检查是否需要通知（价格变化超过 5% 或者首次发送）
+                should_notify = False
+                last_opp = last_sent_opportunities.get(market_key)
+
+                if last_opp is None:
+                    # 首次发现这个机会
+                    should_notify = True
+                else:
+                    # 检查价格变化是否超过阈值
+                    price_change = abs(opp['arbitrage'] - last_opp['arbitrage'])
+                    if price_change >= 0.1:  # 价格变化超过 0.1%
+                        should_notify = True
+                        logger.debug(f"  Price changed: {last_opp['arbitrage']:.2f}% -> {opp['arbitrage']:.2f}% (Δ{price_change:.2f}%)")
+
+                # 冷却时间检查
                 if market_key in last_notifications:
-                    if now - last_notifications[market_key] < timedelta(minutes=cooldown_minutes):
+                    if datetime.now() - last_notifications[market_key] < timedelta(minutes=cooldown_minutes):
                         continue
 
-                msg = format_arb_message(opp, scan_count)
-                if send_telegram(msg, config):
-                    logger.info(f"  TG sent: {opp['market'][:30]} ({opp['arbitrage']}%)")
-                    last_notifications[market_key] = now
+                if should_notify:
+                    msg = format_arb_message(opp, scan_count)
+                    if send_telegram(msg, config):
+                        logger.info(f"  TG sent: {opp['market'][:30]} ({opp['arbitrage']}%)")
+                        last_notifications[market_key] = datetime.now()
+                        last_sent_opportunities[market_key] = opp.copy()  # 更新最后发送的机会
 
             if scan_count % 10 == 0:
                 logger.info(f"[Stats] {scan_count} scans completed")
