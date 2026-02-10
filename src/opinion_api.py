@@ -315,10 +315,13 @@ class OpinionAPIClient:
 
         if response.status_code == 200:
             data = response.json()
-            # Opinion API 直接返回 price 字段，没有 code 包装
-            price = data.get('price')
-            if price:
-                return float(price)
+            # Opinion API 返回 {errno: 0, result: {price: "0.5"}}
+            if data.get('errno') == 0 or data.get('code') == 0:
+                result = data.get('result', {})
+                if isinstance(result, dict):
+                    price = result.get('price')
+                    if price:
+                        return float(price)
 
         return None
 
