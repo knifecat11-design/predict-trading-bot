@@ -1,5 +1,5 @@
 """
-Opinion.trade 市场监测 API（简化版）
+Opinion.trade 市场监测 API（使用官方 SDK）
 专注于数据监测，不支持交易
 API 文档: https://docs.opinion.trade/developer-guide/opinion-open-api/overview
 """
@@ -22,6 +22,8 @@ class OpinionMarket:
     volume: float
     volume_24h: float
     status: str
+    yes_token_id: str = ""
+    no_token_id: str = ""
 
 
 @dataclass
@@ -35,7 +37,7 @@ class OpinionOrderBook:
 
 class OpinionAPIClient:
     """
-    Opinion.trade 市场监测客户端
+    Opinion.trade 市场监测客户端（使用官方 SDK）
 
     API 特点:
     - Base URL: https://proxy.opinion.trade:8443/openapi
@@ -49,29 +51,43 @@ class OpinionAPIClient:
         # 获取 API key
         opinion_config = config.get('opinion', {})
         self.api_key = opinion_config.get('api_key', '')
-        self.base_url = opinion_config.get('base_url', 'https://proxy.opinion.trade:8443/openapi')
-
-        # 设置会话
-        import requests
-        self.session = requests.Session()
-
-        if self.api_key:
-            self.session.headers.update({
-                'apikey': self.api_key,
-                'Content-Type': 'application/json'
-            })
-            logger.info(f"Opinion API: {self.base_url} (已配置认证)")
-        else:
-            logger.warning("未设置 OPINION_API_KEY")
+        self.base_url = opinion_config.get('base_url', 'https://proxy.opinion.trade:8443')
 
         # 缓存
         self._markets_cache: List[Dict] = []
         self._cache_time = 0
         self._cache_duration = opinion_config.get('cache_seconds', 30)
 
+        # 初始化 SDK 客户端
+        self._client = None
+        if self.api_key:
+            try:
+                from opinion_clob_sdk import Client as OpinionClient
+                from opinion_clob_sdk import TopicStatusFilter, TopicType
+
+                self._client = OpinionClient(
+                    host=self.base_url,
+                    apikey=self.api_key,
+                    chain_id=56,  # BNB Chain
+                )
+                self.TopicStatusFilter = TopicStatusFilter
+                self.TopicType = TopicType
+                logger.info(f"Opinion API: {self.base_url} (SDK 已初始化)")
+            except ImportError:
+                logger.error("未安装 opinion-clob-sdk，请运行: pip install opinion-clob-sdk")
+            except Exception as e:
+                logger.error(f"Opinion SDK 初始化失败: {e}")
+        else:
+            logger.warning("未设置 OPINION_API_KEY")
+
+    def _ensure_client(self):
+        """确保客户端已初始化"""
+        if not self._client:
+            raise RuntimeError("Opinion 客户端未初始化，请检查 API key")
+
     def get_markets(self,
                     status: str = 'activated',
-                    sort_by: int = 5,  # 按 24h 交易量排序
+                    sort_by: int = 5,
                     limit: int = 500) -> List[Dict]:
         """
         获取市场列表（分页抓取全站）
@@ -81,9 +97,11 @@ class OpinionAPIClient:
             sort_by: 排序方式 (5 = 按 24h 交易量)
             limit: 返回数量限制
 
-        Opinion API 每页最多 20 条，通过 offset 分页。
+        Opinion SDK 通过 status 和 topic_type 筛选。
         """
         try:
+            self._ensure_client()
+
             # 检查缓存
             if time.time() - self._cache_time < self._cache_duration and self._markets_cache:
                 return self._markets_cache[:limit]
@@ -92,43 +110,59 @@ class OpinionAPIClient:
             page_size = 20  # Opinion API max per page
             max_pages = (limit + page_size - 1) // page_size
 
-            for page in range(max_pages):
-                params = {
-                    'status': status,
-                    'sortBy': sort_by,
-                    'limit': page_size,
-                    'offset': page * page_size,
-                }
+            # 映射 status 字符串到 SDK 的 TopicStatusFilter
+            status_filter = self.TopicStatusFilter.ACTIVATED
+            if status == 'closed' or status == 'resolved':
+                status_filter = self.TopicStatusFilter.RESOLVED
+            elif status == 'all':
+                status_filter = self.TopicStatusFilter.ALL
 
-                response = self.session.get(
-                    f"{self.base_url}/market",
-                    params=params,
-                    timeout=15
-                )
+            for page in range(1, max_pages + 1):
+                try:
+                    response = self._client.get_markets(
+                        topic_type=self.TopicType.ALL,
+                        status=status_filter,
+                        page=page,
+                        limit=page_size,
+                    )
 
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('code') == 0:
-                        batch = data.get('result', {}).get('list', [])
+                    # 检查响应
+                    if hasattr(response, 'errno') and response.errno != 0:
+                        logger.error(f"Opinion API 错误: errno={response.errno}")
+                        break
+
+                    # 获取市场列表
+                    if hasattr(response, 'result') and hasattr(response.result, 'list'):
+                        batch = response.result.list
                         if not batch:
                             break
-                        all_markets.extend(batch)
+
+                        # 转换 SDK 对象为字典
+                        for m in batch:
+                            market_dict = {
+                                'marketId': getattr(m, 'market_id', None),
+                                'marketTitle': getattr(m, 'market_title', ''),
+                                'yesTokenId': getattr(m, 'yes_token_id', ''),
+                                'noTokenId': getattr(m, 'no_token_id', ''),
+                                'volume': getattr(m, 'volume', '0'),
+                                'volume24h': getattr(m, 'volume24h', '0'),
+                                'statusEnum': getattr(m, 'status', ''),
+                                'cutoff_at': getattr(m, 'cutoff_at', None),
+                                'condition_id': getattr(m, 'condition_id', ''),
+                                'chain_id': getattr(m, 'chain_id', 56),
+                                'description': getattr(m, 'description', ''),
+                                'category': getattr(m, 'category', ''),
+                            }
+                            all_markets.append(market_dict)
+
                         if len(batch) < page_size:
                             break  # 最后一页
                     else:
-                        logger.error(f"Opinion API 错误: {data.get('msg')}")
+                        logger.warning(f"Opinion API 响应格式异常: {response}")
                         break
-                elif response.status_code == 401:
-                    logger.error("Opinion API 认证失败，请检查 API Key")
-                    break
-                elif response.status_code == 404:
-                    logger.warning("Opinion API endpoint not found (404)")
-                    break
-                elif response.status_code == 429:
-                    logger.warning("Opinion API 速率限制，暂停获取")
-                    break
-                else:
-                    logger.error(f"Opinion API HTTP {response.status_code}")
+
+                except Exception as e:
+                    logger.error(f"获取第 {page} 页失败: {e}")
                     break
 
             if all_markets:
@@ -140,8 +174,7 @@ class OpinionAPIClient:
 
         except Exception as e:
             logger.error(f"获取 Opinion 市场失败: {e}")
-
-        return self._markets_cache[:limit] if self._markets_cache else []
+            return self._markets_cache[:limit] if self._markets_cache else []
 
     def get_token_price(self, token_id: str) -> Optional[float]:
         """
@@ -154,20 +187,35 @@ class OpinionAPIClient:
             价格或 None
         """
         try:
-            params = {'token_id': token_id}
-            response = self.session.get(
-                f"{self.base_url}/token/latest-price",
-                params=params,
-                timeout=10
-            )
+            self._ensure_client()
 
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0:
-                    result = data.get('result', {})
-                    price = result.get('price')
-                    if price:
-                        return float(price)
+            # 使用 orderbook 获取价格（mid-price）
+            response = self._client.get_orderbook(token_id)
+
+            if hasattr(response, 'errno') and response.errno != 0:
+                logger.debug(f"获取订单簿失败 {token_id}: errno={response.errno}")
+                return None
+
+            if not hasattr(response, 'result'):
+                return None
+
+            result = response.result
+            bids = getattr(result, 'bids', []) or []
+            asks = getattr(result, 'asks', []) or []
+
+            if not bids and not asks:
+                return None
+
+            # 计算中间价
+            best_bid = float(bids[0].price) if bids else 0.0
+            best_ask = float(asks[0].price) if asks else 0.0
+
+            if best_bid > 0 and best_ask > 0:
+                return round((best_bid + best_ask) / 2, 4)
+            elif best_ask > 0:
+                return round(best_ask, 4)
+            elif best_bid > 0:
+                return round(best_bid, 4)
 
         except Exception as e:
             logger.debug(f"获取 Token 价格失败 {token_id}: {e}")
@@ -185,32 +233,32 @@ class OpinionAPIClient:
             OpinionOrderBook 或 None
         """
         try:
-            params = {'token_id': token_id}
-            response = self.session.get(
-                f"{self.base_url}/token/orderbook",
-                params=params,
-                timeout=10
+            self._ensure_client()
+
+            response = self._client.get_orderbook(token_id)
+
+            if hasattr(response, 'errno') and response.errno != 0:
+                logger.debug(f"获取订单簿失败 {token_id}: errno={response.errno}")
+                return None
+
+            if not hasattr(response, 'result'):
+                return None
+
+            result = response.result
+            bids = getattr(result, 'bids', []) or []
+            asks = getattr(result, 'asks', []) or []
+
+            yes_bid = float(bids[0].price) if bids else 0.49
+            yes_ask = float(asks[0].price) if asks else 0.51
+            bid_size = float(bids[0].size) if bids else 100
+            ask_size = float(asks[0].size) if asks else 100
+
+            return OpinionOrderBook(
+                yes_bid=round(yes_bid, 4),
+                yes_ask=round(yes_ask, 4),
+                yes_bid_size=bid_size,
+                yes_ask_size=ask_size
             )
-
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0:
-                    result = data.get('result', {})
-
-                    bids = result.get('bids', [])
-                    asks = result.get('asks', [])
-
-                    yes_bid = float(bids[0]['price']) if bids else 0.49
-                    yes_ask = float(asks[0]['price']) if asks else 0.51
-                    bid_size = float(bids[0]['size']) if bids else 100
-                    ask_size = float(asks[0]['size']) if asks else 100
-
-                    return OpinionOrderBook(
-                        yes_bid=yes_bid,
-                        yes_ask=yes_ask,
-                        yes_bid_size=bid_size,
-                        yes_ask_size=ask_size
-                    )
 
         except Exception as e:
             logger.debug(f"获取订单簿失败 {token_id}: {e}")
@@ -228,23 +276,27 @@ class OpinionAPIClient:
             OpinionMarket 或 None
         """
         try:
+            self._ensure_client()
+
+            # 从缓存的市场列表中查找
             markets = self.get_markets()
 
             for market in markets:
                 if str(market.get('marketId')) == str(market_id):
-                    # 获取 Yes 和 No Token 价格
-                    yes_token_id = market.get('yesTokenId')
+                    yes_token_id = market.get('yesTokenId', '')
                     yes_price = self.get_token_price(yes_token_id) or 0.5
-                    no_price = 1.0 - yes_price
+                    no_price = round(1.0 - yes_price, 4)
 
                     return OpinionMarket(
                         market_id=str(market['marketId']),
                         market_title=market.get('marketTitle', 'Unknown'),
                         yes_price=yes_price,
                         no_price=no_price,
-                        volume=float(market.get('volume', 0)),
-                        volume_24h=float(market.get('volume24h', 0)),
-                        status=market.get('statusEnum', 'Unknown')
+                        volume=float(market.get('volume', 0) or 0),
+                        volume_24h=float(market.get('volume24h', 0) or 0),
+                        status=market.get('statusEnum', 'Unknown'),
+                        yes_token_id=yes_token_id,
+                        no_token_id=market.get('noTokenId', ''),
                     )
 
         except Exception as e:
@@ -377,5 +429,5 @@ def create_opinion_client(config: Dict, use_mock: bool = False):
         logger.info("使用 Opinion 模拟客户端")
         return MockOpinionClient(config)
     else:
-        logger.info("使用 Opinion 真实 API 客户端")
+        logger.info("使用 Opinion 真实 API 客户端 (SDK)")
         return OpinionAPIClient(config)
