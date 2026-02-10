@@ -104,10 +104,9 @@ class OpinionAPIClient:
         """初始化 HTTP 客户端（只读模式）"""
         import requests
         self.session = requests.Session()
-        # 设置正确的认证头（参考 dr-manhattan）
+        # Opinion API 使用小写 'apikey' 头（不是 Authorization 或 X-API-Key）
         self.session.headers.update({
-            'Authorization': f'Bearer {self.api_key}',
-            'X-API-Key': self.api_key,
+            'apikey': self.api_key,
             'Content-Type': 'application/json'
         })
         self._use_sdk = False
@@ -231,16 +230,20 @@ class OpinionAPIClient:
 
                 if response.status_code == 200:
                     data = response.json()
-                    if data.get('code') == 0:
-                        batch = data.get('result', {}).get('list', [])
-                        if not batch:
-                            break
-                        all_markets.extend(batch)
-                        if len(batch) < page_size:
-                            break
-                    else:
-                        logger.error(f"Opinion API 错误: {data.get('msg')}")
+                    # Opinion API 直接返回 result，没有 code 字段
+                    result = data.get('result', {})
+                    # 如果 result 是空字典但有其他字段，检查是否是错误
+                    if not result and data.get('errno') not in [None, 0]:
+                        logger.error(f"Opinion API 错误: {data}")
                         break
+
+                    batch = result.get('list', []) if isinstance(result, dict) else []
+                    if not batch:
+                        break
+                    all_markets.extend(batch)
+                    if len(batch) < page_size:
+                        break
+                elif response.status_code == 401:
                 elif response.status_code == 401:
                     logger.error("Opinion API 认证失败，请检查 API Key")
                     break
@@ -313,11 +316,10 @@ class OpinionAPIClient:
 
         if response.status_code == 200:
             data = response.json()
-            if data.get('code') == 0:
-                result = data.get('result', {})
-                price = result.get('price')
-                if price:
-                    return float(price)
+            # Opinion API 直接返回 price 字段，没有 code 包装
+            price = data.get('price')
+            if price:
+                return float(price)
 
         return None
 
@@ -374,22 +376,21 @@ class OpinionAPIClient:
 
         if response.status_code == 200:
             data = response.json()
-            if data.get('code') == 0:
-                result = data.get('result', {})
-                bids = result.get('bids', [])
-                asks = result.get('asks', [])
+            # Opinion API 直接返回 bids/asks，没有 result 包装
+            bids = data.get('bids', [])
+            asks = data.get('asks', [])
 
-                yes_bid = float(bids[0]['price']) if bids else 0.49
-                yes_ask = float(asks[0]['price']) if asks else 0.51
-                bid_size = float(bids[0]['size']) if bids else 100
-                ask_size = float(asks[0]['size']) if asks else 100
+            yes_bid = float(bids[0]['price']) if bids else 0.49
+            yes_ask = float(asks[0]['price']) if asks else 0.51
+            bid_size = float(bids[0]['size']) if bids else 100
+            ask_size = float(asks[0]['size']) if asks else 100
 
-                return OpinionOrderBook(
-                    yes_bid=yes_bid,
-                    yes_ask=yes_ask,
-                    yes_bid_size=bid_size,
-                    yes_ask_size=ask_size
-                )
+            return OpinionOrderBook(
+                yes_bid=yes_bid,
+                yes_ask=yes_ask,
+                yes_bid_size=bid_size,
+                yes_ask_size=ask_size
+            )
         return None
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
