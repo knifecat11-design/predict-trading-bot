@@ -2,25 +2,20 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt",
-    "watchPatterns": ["**/*.py", "requirements.txt", "railway.json"]
+    "buildCommand": "pip install -r requirements.txt"
   },
   "deploy": {
-    "startCommand": "python start_arbitrage.py",
+    "startCommand": "python web/dashboard.py",
     "restartPolicyType": "ALWAYS",
-    "healthcheckPath": null,
-    "healthcheckTimeout": 300,
-    "cron": null
+    "healthcheckPath": "/",
+    "healthcheckTimeout": 300
   },
   "variables": {
-    "USE_REAL_API": "false",
-    "USE_HYBRID_MODE": "true",
-    "MIN_ARBITRAGE_THRESHOLD": "2.0",
+    "PORT": "5000",
     "OPINION_API_KEY": "JycT63x2kYkqtTrlCnpR58O57agzKouz",
     "OPINION_WALLET_ADDRESS": "0x138fad69eb759f4460de2e3fb79173b034142021",
     "OPINION_POLY_THRESHOLD": "2.0",
-    "SCAN_INTERVAL": "10",
-    "COOLDOWN_MINUTES": "5",
+    "SCAN_INTERVAL": "30",
     "LOG_LEVEL": "INFO"
   }
 }
