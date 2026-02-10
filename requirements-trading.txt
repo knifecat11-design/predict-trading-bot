@@ -1,0 +1,9 @@
+# Optional trading dependencies
+# Install with: pip install -r requirements-trading.txt
+
+# Polymarket CLOB client (for trading)
+py-clob-client>=0.24.0
+
+# Opinion CLOB SDK (if available)
+# Note: This package may not be on PyPI, install manually if needed
+# opinion-clob-sdk>=0.6.0
