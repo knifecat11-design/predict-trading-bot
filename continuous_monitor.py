@@ -148,9 +148,10 @@ def extract_keywords(title):
 def fetch_polymarket_markets(config):
     """Fetch Polymarket markets (always real data)"""
     try:
-        from src.polymarket_api import RealPolymarketClient
-        client = RealPolymarketClient(config)
-        markets = client.get_all_markets(limit=3000, active_only=True)
+        from src.polymarket_api import PolymarketClient
+        client = PolymarketClient(config)
+        # 获取所有标签的市场（覆盖全站）
+        markets = client.get_all_tags_markets(limit_per_tag=200)
 
         parsed = []
         for m in markets:
@@ -177,14 +178,12 @@ def fetch_polymarket_markets(config):
 
 
 def fetch_opinion_markets(config):
-    """Fetch Opinion markets using trending API (requires API key)"""
+    """Fetch Opinion markets (requires API key)"""
     try:
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
-        # Use trending API with all tags for better coverage
-        # Tags: Macro, Pre-TG, Crypto, Business, Politics, NBA, Sports, Tech, Culture
-        # Sorted by 24h Volume descending
-        raw = client.get_trending_markets(tags=None, limit=500)
+        # 直接获取市场列表，已按 24h 交易量排序
+        raw = client.get_markets(status='activated', sort_by=5, limit=500)
 
         parsed = []
         for m in raw:

@@ -1,5 +1,6 @@
 """
-Opinion.trade API 客户端模块
+Opinion.trade 市场监测 API（简化版）
+专注于数据监测，不支持交易
 API 文档: https://docs.opinion.trade/developer-guide/opinion-open-api/overview
 """
 
@@ -16,8 +17,6 @@ class OpinionMarket:
     """Opinion 市场信息"""
     market_id: str
     market_title: str
-    yes_token_id: str
-    no_token_id: str
     yes_price: float
     no_price: float
     volume: float
@@ -25,18 +24,9 @@ class OpinionMarket:
     status: str
 
 
-@dataclass
-class OpinionOrderBook:
-    """Opinion 订单簿"""
-    yes_bid: float
-    yes_ask: float
-    yes_bid_size: float
-    yes_ask_size: float
-
-
 class OpinionAPIClient:
     """
-    Opinion.trade API 客户端
+    Opinion.trade 市场监测客户端
 
     API 特点:
     - Base URL: https://proxy.opinion.trade:8443/openapi
@@ -144,85 +134,6 @@ class OpinionAPIClient:
 
         return self._markets_cache[:limit] if self._markets_cache else []
 
-    def get_trending_markets(self,
-                           tags: list = None,
-                           limit: int = 100) -> List[Dict]:
-        """
-        获取 Trending 市场列表（按 tags 分类）
-
-        注意：Opinion API 可能没有 /trending 端点
-        我们使用 /market 端点代替
-
-        Args:
-            tags: 标签列表，可选: Macro, Pre-TG, Crypto, Business, Politics, NBA, Sports, Tech, Culture
-                 如果为 None，获取所有市场（不过滤标签）
-            limit: 每个标签返回的市场数量
-
-        Returns:
-            市场列表（已按 24h Volume 降序排序）
-        """
-        all_markets = []
-
-        # 如果没有指定tags，直接获取所有活跃市场
-        if tags is None:
-            try:
-                return self.get_markets(status='activated', sort_by=5, limit=limit)
-            except Exception as e:
-                logger.error(f"获取 Opinion 市场失败: {e}")
-                return []
-
-        # 可用标签
-        available_tags = ['Macro', 'Pre-TG', 'Crypto', 'Business', 'Politics', 'NBA', 'Sports', 'Tech', 'Culture']
-        tags = [t for t in tags if t in available_tags]
-
-        # 尝试使用trending端点
-        try:
-            for tag in tags:
-                params = {
-                    'status': 'activated',
-                    'sortBy': 5,  # 24h Volume
-                    'limit': limit,
-                }
-
-                # 尝试使用trending端点
-                response = self.session.get(
-                    f"{self.base_url}/trending",
-                    params={**params, 'tags': tag, 'homeType': 'Market'},
-                    timeout=15
-                )
-
-                if response.status_code == 404:
-                    # trending端点不存在，回退到普通market端点
-                    logger.info("Opinion /trending 端点不存在，使用 /market 端点")
-                    return self.get_markets(status='activated', sort_by=5, limit=limit)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('code') == 0:
-                        markets = data.get('result', {}).get('list', data.get('result', []))
-                        if markets:
-                            for m in markets:
-                                m['_tag'] = tag
-                            all_markets.extend(markets)
-                            logger.info(f"Opinion Trending [{tag}]: 获取到 {len(markets)} 个市场")
-                elif response.status_code == 401:
-                    logger.error("Opinion Trending API 认证失败")
-                    break
-                elif response.status_code == 429:
-                    logger.warning("Opinion Trending API 速率限制")
-                    break
-
-        except Exception as e:
-            logger.warning(f"获取 Opinion Trending 失败，使用标准API: {e}")
-            # 回退到标准API
-            return self.get_markets(status='activated', sort_by=5, limit=limit)
-
-        # 按 24h Volume 降序排序
-        all_markets.sort(key=lambda m: float(m.get('volume24h', m.get('volume', 0))), reverse=True)
-
-        logger.info(f"Opinion Trending: 总计获取 {len(all_markets)} 个市场")
-        return all_markets[:limit]
-
     def get_token_price(self, token_id: str) -> Optional[float]:
         """
         获取 Token 最新价格
@@ -254,49 +165,6 @@ class OpinionAPIClient:
 
         return None
 
-    def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
-        """
-        获取订单簿
-
-        Args:
-            token_id: Token ID
-
-        Returns:
-            OpinionOrderBook 或 None
-        """
-        try:
-            params = {'token_id': token_id}
-            response = self.session.get(
-                f"{self.base_url}/token/orderbook",
-                params=params,
-                timeout=10
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0:
-                    result = data.get('result', {})
-
-                    bids = result.get('bids', [])
-                    asks = result.get('asks', [])
-
-                    yes_bid = float(bids[0]['price']) if bids else 0.49
-                    yes_ask = float(asks[0]['price']) if asks else 0.51
-                    bid_size = float(bids[0]['size']) if bids else 100
-                    ask_size = float(asks[0]['size']) if asks else 100
-
-                    return OpinionOrderBook(
-                        yes_bid=yes_bid,
-                        yes_ask=yes_ask,
-                        yes_bid_size=bid_size,
-                        yes_ask_size=ask_size
-                    )
-
-        except Exception as e:
-            logger.debug(f"获取订单簿失败 {token_id}: {e}")
-
-        return None
-
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
         """
         获取市场详细信息
@@ -314,16 +182,12 @@ class OpinionAPIClient:
                 if str(market.get('marketId')) == str(market_id):
                     # 获取 Yes 和 No Token 价格
                     yes_token_id = market.get('yesTokenId')
-                    no_token_id = market.get('noTokenId')
-
                     yes_price = self.get_token_price(yes_token_id) or 0.5
                     no_price = 1.0 - yes_price
 
                     return OpinionMarket(
                         market_id=str(market['marketId']),
                         market_title=market.get('marketTitle', 'Unknown'),
-                        yes_token_id=yes_token_id,
-                        no_token_id=no_token_id,
                         yes_price=yes_price,
                         no_price=no_price,
                         volume=float(market.get('volume', 0)),
@@ -415,25 +279,12 @@ class MockOpinionClient:
         self.base_price = max(0.01, min(0.99, self.base_price * (1 + change)))
         return self.base_price
 
-    def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
-        """获取模拟订单簿"""
-        import random
-        spread = random.uniform(0.01, 0.03)
-        return OpinionOrderBook(
-            yes_bid=round(max(0.01, self.base_price - spread / 2), 3),
-            yes_ask=round(min(0.99, self.base_price + spread / 2), 3),
-            yes_bid_size=random.uniform(100, 1000),
-            yes_ask_size=random.uniform(100, 1000)
-        )
-
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
         """获取模拟市场信息"""
         yes_price = self.base_price
         return OpinionMarket(
             market_id=str(market_id),
             market_title='Mock Opinion Market',
-            yes_token_id=f'0x{"1234567890abcdef" * 2}',
-            no_token_id=f'0x{"fedcba987654321" * 2}',
             yes_price=yes_price,
             no_price=1.0 - yes_price,
             volume=1500000.00,
