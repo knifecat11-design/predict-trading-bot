@@ -542,3 +542,4 @@ def create_opinion_client(config: Dict, use_mock: bool = False):
     else:
         logger.info("使用 Opinion 真实 API 客户端")
         return OpinionAPIClient(config)
+
