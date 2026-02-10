@@ -50,7 +50,7 @@ arbitrage:
 
 # Opinion-Polymarket 跨平台监控
 opinion_poly:
-  min_arbitrage_threshold: 2.0  # 最小套利空间 2%
+  min_arbitrage_threshold: 1.0  # 最小套利空间 1%
   min_confidence: 0.2            # 最小匹配置信度
 
 # 通知配置
