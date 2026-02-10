@@ -109,28 +109,31 @@ class RealPolymarketClient:
         self._price_cache: Dict[str, Tuple[float, float]] = {}  # {token_id: (price, timestamp)}
         self._price_cache_duration = 10  # 价格缓存 10 秒
 
-    def get_all_markets(self, limit: int = 1000, active_only: bool = True) -> List[Dict]:
+    def get_all_markets(self, limit: int = 3000, active_only: bool = True) -> List[Dict]:
         """
-        获取所有市场列表（使用公开 API）
-        优先获取当前活跃的市场，而不是过期市场
+        获取市场列表（分页抓取，覆盖全站）
 
         Args:
-            limit: 返回数量限制（最大1000）
+            limit: 返回数量限制
             active_only: 是否只返回活跃市场
 
-        API 文档: https://docs.polymarket.com/quickstart/fetching-data
+        Polymarket Gamma API 每页最多 100 条，通过 offset 分页。
+        全站约 27,000+ 活跃市场，默认抓取前 3000 个（高流动性）。
         """
         try:
             # 检查缓存
             if time.time() - self._cache_time < self._cache_duration and self._markets_cache:
-                self.logger.debug(f"使用缓存的市场列表 ({len(self._markets_cache)} 个)")
-                markets = self._markets_cache
-            else:
-                # 使用公开的 Gamma API
-                # 直接请求活跃市场，避免获取到已关闭的历史市场
-                params = {'limit': min(limit, 1000)}
+                self.logger.debug(f"使用缓存 ({len(self._markets_cache)} 个)")
+                return self._markets_cache[:limit]
 
-                # 添加过滤条件获取真正的活跃市场
+            all_markets = []
+            page_size = 100
+            max_pages = (limit + page_size - 1) // page_size  # 向上取整
+
+            for page in range(max_pages):
+                offset = page * page_size
+                params = {'limit': page_size, 'offset': offset}
+
                 if active_only:
                     params['active'] = 'true'
                     params['closed'] = 'false'
@@ -141,31 +144,35 @@ class RealPolymarketClient:
                     timeout=15
                 )
                 response.raise_for_status()
-                markets = response.json()
-                self.logger.info(f"API 返回 {len(markets)} 个市场")
+                batch = response.json()
 
-                # 二次过滤：确保只保留活跃且有流动性的市场
-                if active_only:
-                    filtered_markets = []
-                    for market in markets:
-                        # 确保市场未关闭且有流动性
-                        # 修复：closed 字段不存在时默认为 False（市场是活跃的）
-                        is_closed = market.get('closed', market.get('active', True))
-                        liquidity = float(market.get('liquidity', 0) or 0)
-                        # 兼容 active 字段（如果 active=True 则市场是活跃的）
-                        is_active = market.get('active', not is_closed)
-                        if not is_closed and is_active and liquidity > 0:
-                            filtered_markets.append(market)
+                if not batch:
+                    break
 
-                    markets = filtered_markets
-                    self.logger.info(f"过滤后 {len(filtered_markets)} 个活跃市场（有流动性）")
+                all_markets.extend(batch)
 
-                # 更新缓存
-                self._markets_cache = markets
-                self._cache_time = time.time()
+                if len(batch) < page_size:
+                    break  # 最后一页
 
-            self.logger.info(f"获取到 {len(markets)} 个市场")
-            return markets[:limit]
+            self.logger.info(f"API 分页抓取: {len(all_markets)} 个市场 ({page + 1} 页)")
+
+            # 过滤：活跃 + 有流动性
+            if active_only:
+                filtered = []
+                for m in all_markets:
+                    is_closed = m.get('closed', False)
+                    is_active = m.get('active', True)
+                    liquidity = float(m.get('liquidity', 0) or 0)
+                    if not is_closed and is_active and liquidity > 0:
+                        filtered.append(m)
+                all_markets = filtered
+                self.logger.info(f"过滤后: {len(all_markets)} 个活跃市场")
+
+            # 更新缓存
+            self._markets_cache = all_markets
+            self._cache_time = time.time()
+
+            return all_markets[:limit]
 
         except Exception as e:
             self.logger.error(f"获取市场列表失败: {e}")

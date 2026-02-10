@@ -150,7 +150,7 @@ def fetch_polymarket_markets(config):
     try:
         from src.polymarket_api import RealPolymarketClient
         client = RealPolymarketClient(config)
-        markets = client.get_all_markets(limit=150, active_only=True)
+        markets = client.get_all_markets(limit=3000, active_only=True)
 
         parsed = []
         for m in markets:
@@ -181,7 +181,7 @@ def fetch_opinion_markets(config):
     try:
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
-        raw = client.get_markets(status='activated', limit=100)
+        raw = client.get_markets(status='activated', limit=500)
 
         parsed = []
         for m in raw:
@@ -198,7 +198,7 @@ def fetch_opinion_markets(config):
                 })
             except:
                 continue
-            if len(parsed) >= 30:
+            if len(parsed) >= 200:
                 break
         return parsed
     except Exception as e:
