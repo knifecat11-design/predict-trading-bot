@@ -456,3 +456,4 @@ A: 可以，在 `src/arbitrage_monitor.py` 的 `_load_market_map()` 方法中添
 - [ ] 历史套利机会记录和统计
 - [ ] Web 界面
 - [ ] 自动执行套利（可选）
+# Railway redeploy trigger
