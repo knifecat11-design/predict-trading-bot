@@ -177,11 +177,14 @@ def fetch_polymarket_markets(config):
 
 
 def fetch_opinion_markets(config):
-    """Fetch Opinion markets (requires API key)"""
+    """Fetch Opinion markets using trending API (requires API key)"""
     try:
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
-        raw = client.get_markets(status='activated', limit=500)
+        # Use trending API with all tags for better coverage
+        # Tags: Macro, Pre-TG, Crypto, Business, Politics, NBA, Sports, Tech, Culture
+        # Sorted by 24h Volume descending
+        raw = client.get_trending_markets(tags=None, limit=500)
 
         parsed = []
         for m in raw:

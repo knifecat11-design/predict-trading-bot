@@ -141,6 +141,76 @@ class OpinionAPIClient:
 
         return self._markets_cache[:limit] if self._markets_cache else []
 
+    def get_trending_markets(self,
+                           tags: list = None,
+                           limit: int = 100) -> List[Dict]:
+        """
+        获取 Trending 市场列表（按 tags 分类）
+
+        API URL: https://app.opinion.trade/trending?tags=Culture&homeType=Market
+
+        Args:
+            tags: 标签列表，可选: Macro, Pre-TG, Crypto, Business, Politics, NBA, Sports, Tech, Culture
+                 如果为 None，获取所有标签
+            limit: 每个标签返回的市场数量
+
+        Returns:
+            市场列表（已按 24h Volume 降序排序）
+        """
+        all_markets = []
+
+        # 可用标签
+        available_tags = ['Macro', 'Pre-TG', 'Crypto', 'Business', 'Politics', 'NBA', 'Sports', 'Tech', 'Culture']
+
+        if tags is None:
+            tags = available_tags
+        else:
+            # 过滤无效标签
+            tags = [t for t in tags if t in available_tags]
+
+        try:
+            for tag in tags:
+                params = {
+                    'tags': tag,
+                    'homeType': 'Market'
+                }
+
+                response = self.session.get(
+                    f"{self.base_url}/trending",
+                    params=params,
+                    timeout=15
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('code') == 0:
+                        markets = data.get('result', {}).get('list', data.get('result', []))
+                        if markets:
+                            # 为每个市场添加标签信息
+                            for m in markets:
+                                m['_tag'] = tag
+                            all_markets.extend(markets)
+                            logger.info(f"Opinion Trending [{tag}]: 获取到 {len(markets)} 个市场")
+                    else:
+                        logger.warning(f"Opinion Trending [{tag}] API 错误: {data.get('msg')}")
+                elif response.status_code == 401:
+                    logger.error("Opinion Trending API 认证失败，请检查 API Key")
+                    break
+                elif response.status_code == 429:
+                    logger.warning("Opinion Trending API 速率限制")
+                    break
+                else:
+                    logger.warning(f"Opinion Trending [{tag}] HTTP {response.status_code}")
+
+        except Exception as e:
+            logger.error(f"获取 Opinion Trending 市场失败: {e}")
+
+        # 按 24h Volume 降序排序
+        all_markets.sort(key=lambda m: float(m.get('volume24h', m.get('volume', 0))), reverse=True)
+
+        logger.info(f"Opinion Trending: 总计获取 {len(all_markets)} 个市场")
+        return all_markets[:limit]
+
     def get_token_price(self, token_id: str) -> Optional[float]:
         """
         获取 Token 最新价格

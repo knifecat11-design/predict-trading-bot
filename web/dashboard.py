@@ -135,7 +135,7 @@ def fetch_polymarket_data(config):
 
 
 def fetch_opinion_data(config):
-    """Fetch Opinion.trade markets"""
+    """Fetch Opinion.trade markets using trending API"""
     api_key = config.get('opinion', {}).get('api_key', '')
     if not api_key:
         logger.warning("Opinion: no API key")
@@ -163,7 +163,10 @@ def fetch_opinion_data(config):
 
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
-        raw_markets = client.get_markets(status='activated', limit=500)
+
+        # Use trending API with all tags for better market coverage
+        # Tags: Macro, Pre-TG, Crypto, Business, Politics, NBA, Sports, Tech, Culture
+        raw_markets = client.get_trending_markets(tags=None, limit=500)
 
         if not raw_markets:
             return 'error', []
