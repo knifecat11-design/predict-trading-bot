@@ -9,41 +9,84 @@ import json
 import time
 import logging
 import threading
+import traceback
 from datetime import datetime
 from flask import Flask, render_template, jsonify
 
-# Add project root to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-app = Flask(__name__)
+# Setup logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 logger = logging.getLogger(__name__)
+
+# Add project root to path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+logger.info(f"Project root: {PROJECT_ROOT}")
+logger.info(f"Python path: {sys.path[:3]}")
+
+app = Flask(__name__,
+            template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
 
 # Global state
 _state = {
     'platforms': {
-        'polymarket': {'status': 'unknown', 'markets': [], 'last_update': 0},
-        'opinion': {'status': 'unknown', 'markets': [], 'last_update': 0},
-        'predict': {'status': 'unknown', 'markets': [], 'last_update': 0},
+        'polymarket': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
+        'opinion': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
+        'predict': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
     },
     'arbitrage': [],
     'scan_count': 0,
     'started_at': datetime.now().isoformat(),
+    'threshold': 2.0,
+    'last_scan': '-',
+    'error': None,
 }
 _lock = threading.Lock()
 
 
 def load_config():
     """Load config"""
+    config = {}
+
+    # Try environment variables first
+    config['opinion'] = {
+        'api_key': os.getenv('OPINION_API_KEY', ''),
+        'base_url': os.getenv('OPINION_BASE_URL', 'https://proxy.opinion.trade:8443/openapi'),
+    }
+    config['api'] = {
+        'api_key': os.getenv('PREDICT_API_KEY', ''),
+        'base_url': os.getenv('PREDICT_BASE_URL', 'https://api.predict.fun'),
+    }
+    config['opinion_poly'] = {
+        'min_arbitrage_threshold': float(os.getenv('OPINION_POLY_THRESHOLD', 2.0)),
+        'min_confidence': 0.2,
+    }
+    config['arbitrage'] = {
+        'scan_interval': int(os.getenv('SCAN_INTERVAL', 30)),
+    }
+
+    # Try to load from config file
     try:
-        from src.config_helper import load_config as load_env_config
-        return load_env_config()
-    except ImportError:
         import yaml
-        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+        config_path = os.path.join(PROJECT_ROOT, 'config.yaml')
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
-        return {}
+                file_config = yaml.safe_load(f)
+                # Merge with env vars (env vars take precedence)
+                if file_config.get('opinion', {}).get('api_key') and not config['opinion']['api_key']:
+                    config['opinion']['api_key'] = file_config['opinion']['api_key']
+                if file_config.get('api', {}).get('api_key') and not config['api']['api_key']:
+                    config['api']['api_key'] = file_config['api']['api_key']
+            logger.info("Loaded config from config.yaml")
+    except Exception as e:
+        logger.warning(f"Could not load config.yaml: {e}")
+
+    return config
 
 
 def fetch_polymarket_data(config):
@@ -54,7 +97,7 @@ def fetch_polymarket_data(config):
         markets = client.get_all_markets(limit=3000, active_only=True)
 
         parsed = []
-        for m in markets:
+        for m in markets[:3000]:
             try:
                 outcome_str = m.get('outcomePrices', '[]')
                 if isinstance(outcome_str, str):
@@ -81,7 +124,11 @@ def fetch_polymarket_data(config):
             except:
                 continue
 
+        logger.info(f"Polymarket: fetched {len(parsed)} markets")
         return 'active', parsed
+    except ImportError as e:
+        logger.error(f"Polymarket import error: {e}")
+        return 'error', []
     except Exception as e:
         logger.error(f"Polymarket fetch error: {e}")
         return 'error', []
@@ -91,6 +138,7 @@ def fetch_opinion_data(config):
     """Fetch Opinion.trade markets"""
     api_key = config.get('opinion', {}).get('api_key', '')
     if not api_key:
+        logger.warning("Opinion: no API key")
         return 'no_key', []
 
     try:
@@ -107,9 +155,7 @@ def fetch_opinion_data(config):
                 market_id = str(m.get('marketId', ''))
                 title = m.get('marketTitle', '')
                 yes_token = m.get('yesTokenId', '')
-                no_token = m.get('noTokenId', '')
 
-                # Try to get price
                 yes_price = client.get_token_price(yes_token)
                 if yes_price is None:
                     yes_price = 0.5
@@ -130,7 +176,11 @@ def fetch_opinion_data(config):
             if len(parsed) >= 200:
                 break
 
+        logger.info(f"Opinion: fetched {len(parsed)} markets")
         return 'active', parsed
+    except ImportError as e:
+        logger.error(f"Opinion import error: {e}")
+        return 'error', []
     except Exception as e:
         logger.error(f"Opinion fetch error: {e}")
         return 'error', []
@@ -176,7 +226,11 @@ def fetch_predict_data(config):
             except:
                 continue
 
+        logger.info(f"Predict: fetched {len(parsed)} markets")
         return 'active', parsed
+    except ImportError as e:
+        logger.error(f"Predict import error: {e}")
+        return 'error', []
     except Exception as e:
         logger.error(f"Predict fetch error: {e}")
         return 'error', []
@@ -262,6 +316,8 @@ def background_scanner():
     threshold = float(config.get('opinion_poly', {}).get('min_arbitrage_threshold', 2.0))
     scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 30))
 
+    logger.info(f"Scanner started: threshold={threshold}%, interval={scan_interval}s")
+
     while True:
         try:
             # Fetch all platforms
@@ -313,6 +369,7 @@ def background_scanner():
                 _state['scan_count'] += 1
                 _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 _state['threshold'] = threshold
+                _state['error'] = None
 
             logger.info(
                 f"Scan #{_state['scan_count']}: "
@@ -322,13 +379,20 @@ def background_scanner():
 
         except Exception as e:
             logger.error(f"Scanner error: {e}")
+            logger.error(traceback.format_exc())
+            with _lock:
+                _state['error'] = str(e)
 
         time.sleep(scan_interval)
 
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Template error: {e}")
+        return f"<h1>Dashboard Error</h1><p>{e}</p><pre>{traceback.format_exc()}</pre>"
 
 
 @app.route('/api/state')
@@ -337,12 +401,15 @@ def api_state():
         return jsonify(_state)
 
 
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+
+
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
+    logger.info("=" * 60)
+    logger.info("  Prediction Market Arbitrage Dashboard")
+    logger.info("=" * 60)
 
     # Start background scanner
     scanner = threading.Thread(target=background_scanner, daemon=True)
@@ -351,7 +418,9 @@ def main():
 
     # Start Flask
     port = int(os.getenv('PORT', 5000))
-    logger.info(f"Dashboard: http://0.0.0.0:{port}")
+    logger.info(f"Dashboard starting on http://0.0.0.0:{port}")
+    logger.info(f"Templates folder: {app.template_folder}")
+
     app.run(host='0.0.0.0', port=port, debug=False)
 
 
