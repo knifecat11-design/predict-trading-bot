@@ -142,6 +142,25 @@ def fetch_opinion_data(config):
         return 'no_key', []
 
     try:
+        import requests
+        # First test if the API key is valid
+        test_url = config.get('opinion', {}).get('base_url', 'https://proxy.opinion.trade:8443/openapi')
+        try:
+            response = requests.get(
+                f"{test_url}/market",
+                headers={'apikey': api_key},
+                params={'limit': 1},
+                timeout=10
+            )
+            if response.status_code == 401:
+                logger.error("Opinion API key is invalid (401)")
+                return 'no_key', []
+            elif response.status_code != 200:
+                logger.warning(f"Opinion API returned {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Opinion API test failed: {e}")
+            # Continue to try full client anyway
+
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
         raw_markets = client.get_markets(status='activated', limit=500)

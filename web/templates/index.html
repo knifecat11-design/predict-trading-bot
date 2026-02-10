@@ -346,6 +346,76 @@
                 .catch(e => console.error('Update error:', e));
         }
 
+        function update() {
+            fetch('/api/state')
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                })
+                .then(data => {
+                    // Show error if any
+                    if (data.error) {
+                        console.error('Backend error:', data.error);
+                        const errorDiv = document.getElementById('error-message') || createErrorDiv();
+                        errorDiv.textContent = `⚠️ ${data.error}`;
+                        errorDiv.style.display = 'block';
+                    } else {
+                        const errorDiv = document.getElementById('error-message');
+                        if (errorDiv) errorDiv.style.display = 'none';
+                    }
+
+                    // Header
+                    document.getElementById('scan-count').textContent = data.scan_count || 0;
+                    document.getElementById('threshold').textContent = (data.threshold || 2.0).toFixed(1);
+                    document.getElementById('last-scan').textContent = data.last_scan || '-';
+
+                    // Platforms
+                    ['polymarket', 'opinion', 'predict'].forEach(p => {
+                        const info = data.platforms[p] || {};
+                        const dot = document.getElementById(`dot-${p}`);
+                        dot.className = `status-dot ${info.status || 'unknown'}`;
+                        document.getElementById(`count-${p}`).textContent = info.count || 0;
+                        document.getElementById(`status-${p}`).textContent = statusLabels[info.status] || info.status || 'Unknown';
+                        renderMarkets(`list-${p}`, info.markets);
+                    });
+
+                    // Arbitrage
+                    const tbody = document.getElementById('arb-body');
+                    const arbs = data.arbitrage || [];
+                    if (arbs.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
+                    } else {
+                        tbody.innerHTML = arbs.map(a => `
+                            <tr>
+                                <td>${a.market}</td>
+                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
+                                <td class="direction">${a.direction}</td>
+                                <td>Y:${a.a_yes}c N:${a.a_no}c</td>
+                                <td>Y:${a.b_yes}c N:${a.b_no}c</td>
+                                <td>${a.combined}c</td>
+                                <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
+                                <td>${(a.confidence * 100).toFixed(0)}%</td>
+                                <td>${a.timestamp}</td>
+                            </tr>
+                        `).join('');
+                    }
+                })
+                .catch(e => {
+                    console.error('Update error:', e);
+                    const errorDiv = document.getElementById('error-message') || createErrorDiv();
+                    errorDiv.textContent = `⚠️ Connection error: ${e.message}`;
+                    errorDiv.style.display = 'block';
+                });
+        }
+
+        function createErrorDiv() {
+            const div = document.createElement('div');
+            div.id = 'error-message';
+            div.style.cssText = 'position:fixed;top:10px;right:10px;background:#f85149;color:white;padding:12px 16px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:1000;display:none;max-width:400px;';
+            document.body.appendChild(div);
+            return div;
+        }
+
         // Initial + auto refresh
         update();
         setInterval(update, 10000);
