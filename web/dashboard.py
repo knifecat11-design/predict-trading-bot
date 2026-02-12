@@ -221,24 +221,32 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 独立获取 Yes 价格（必需）
-                yes_price = client.get_token_price(yes_token)
-                if yes_price is None:
+                # 独立获取 Yes 价格和订单簿 size（必需）
+                orderbook = client.get_order_book(yes_token)
+                if orderbook is None or orderbook.yes_ask_size is None:
                     continue
 
-                # 对于前 N 个市场，尝试独立获取 No 价格
+                yes_price = orderbook.yes_ask
+                yes_shares = orderbook.yes_ask_size  # 可买份额
+
+                # 对于前 N 个市场，尝试独立获取 No 价格和订单簿 size
                 # 对于其他市场，直接用 1 - yes_price 估算（避免太多 HTTP 请求）
                 if idx < max_detailed_fetch and no_token:
                     no_price = client.get_token_price(no_token)
+                    no_orderbook = client.get_order_book(no_token)
+                    no_shares = no_orderbook.yes_ask_size if no_orderbook else 0
                     if no_price is None:
                         # Fallback: 使用 1 - yes_price
                         logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
                         no_price = round(1.0 - yes_price, 4)
+                        no_shares = 0
                 elif no_token:
                     # 对于后续市场，直接用 1 - yes_price 估算
                     no_price = round(1.0 - yes_price, 4)
+                    no_shares = 0
                 else:
                     no_price = None
+                    no_shares = 0
 
                 # 跳过无效价格
                 if no_price is None:
@@ -251,6 +259,7 @@ def fetch_opinion_data(config):
                     'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#fbc02d;font-weight:600'>{title[:80]}</a>",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
+                    'amount': yes_shares,  # 订单簿可买份额
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
                     'platform': 'opinion',
