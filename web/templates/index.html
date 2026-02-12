@@ -277,8 +277,20 @@
         };
 
         function platformTag(name) {
-            // For arbitrage table, return plain text without colors
-            return name;
+            // Return full platform name for platforms list (no underscores)
+            const platformNames = {
+                'polymarket': 'Polymarket',
+                'opinion': 'Opinion',
+                'predict': 'Predict'
+            };
+            return platformNames[name.toLowerCase()] || name;
+        }
+
+        function platformTagShort(name) {
+            // For arbitrage table, return short name with underscore
+            const cls = name.toLowerCase().includes('poly') ? 'poly' :
+                        name.toLowerCase().includes('opinion') ? 'opinion' : 'predict';
+            return `<span class="tag ${cls}">${name}</span>`;
         }
 
         function platformsList() {
