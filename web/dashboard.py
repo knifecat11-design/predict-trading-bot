@@ -256,7 +256,7 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#fbc02d;font-weight:600'>{title[:80]}</a>",
+                    'title': title[:80],  # 累文本，不带超链接
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'amount': yes_shares,  # 订单簿可买份额
