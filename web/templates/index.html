@@ -187,6 +187,7 @@
     <div class="header">
         <h1>Prediction Market <span>Arbitrage Monitor</span></h1>
         <div class="header-info">
+            <div>Platforms: <span id="platforms-list"></span></div>
             <div>Scans: <span class="val" id="scan-count">0</span></div>
             <div>Threshold: <span class="val" id="threshold">2.0</span>%</div>
             <div>Updated: <span class="val" id="last-scan">-</span></div>
@@ -276,9 +277,17 @@
         };
 
         function platformTag(name) {
-            const cls = name.toLowerCase().includes('poly') ? 'poly' :
-                        name.toLowerCase().includes('opinion') ? 'opinion' : 'predict';
-            return `<span class="tag ${cls}">${name}</span>`;
+            // For arbitrage table, return plain text without colors
+            return name;
+        }
+
+        function platformsList() {
+            // Show platforms list in header with colors
+            return `
+                <span style="color:#03a9f4;font-weight:600;margin-right:16px">poly</span>
+                <span style="color:#fbc02d;font-weight:600;margin-right:16px">op</span>
+                <span style="color:#9c27b0;font-weight:600">pre</span>
+            `;
         }
 
         function arbClass(pct) {
@@ -308,6 +317,7 @@
                 .then(r => r.json())
                 .then(data => {
                     // Header
+                    document.getElementById('platforms-list').innerHTML = platformsList();
                     document.getElementById('scan-count').textContent = data.scan_count || 0;
                     document.getElementById('threshold').textContent = data.threshold || 2.0;
                     document.getElementById('last-scan').textContent = data.last_scan || '-';
@@ -365,6 +375,7 @@
                     }
 
                     // Header
+                    document.getElementById('platforms-list').innerHTML = platformsList();
                     document.getElementById('scan-count').textContent = data.scan_count || 0;
                     document.getElementById('threshold').textContent = (data.threshold || 2.0).toFixed(1);
                     document.getElementById('last-scan').textContent = data.last_scan || '-';

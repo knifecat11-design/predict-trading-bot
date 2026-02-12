@@ -248,7 +248,7 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': f"<a href='https://opinion.trade/event/{market_id}' target='_blank' style='color:#fbc02d;font-weight:600'>{title[:80]}</a>",
+                    'title': f"<a href='https://www.opinion.trade/event/{market_id}' target='_blank' style='color:#fbc02d;font-weight:600'>{title[:80]}</a>",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
