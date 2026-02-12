@@ -116,7 +116,7 @@ def fetch_polymarket_data(config):
 
                 parsed.append({
                     'id': m.get('conditionId', m.get('condition_id', '')),
-                    'title': m.get('question', '')[:80],
+                    'title': f"<a href='https://polymarket.com/event/{m.get('conditionId', m.get('condition_id', '')})}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
