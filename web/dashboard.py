@@ -100,19 +100,56 @@ def strip_html(html_text):
 
 
 def slugify(text):
-    """Convert text to URL-friendly slug format"""
+    """Convert text to URL-friendly slug format (improved for Predict.fun)"""
     import re
     # Convert to lowercase
     text = text.lower()
+
+    # Remove verbose phrases FIRST (before word removal)
+    # These patterns need to be removed as whole phrases
+    text = re.sub(r'\bequal\s+(to\s+)?(or\s+)?greater\s+than\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bgreater\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bless\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
+
+    # Remove common words that clutter URLs
+    words_to_remove = [
+        'will', 'won', 'would',
+        'the', 'a', 'an',
+        'there', 'this', 'that',
+        'have', 'has', 'had',
+        'be', 'been', 'being',
+        'for', 'from', 'with',
+        'about', 'against',
+        'between', 'into', 'through', 'during',
+        'before', 'after',
+        'above', 'below',
+        'over', 'under', 'again',
+        'off', 'more',
+        'as', 'is', 'are', 'was', 'were',
+        'when', 'where', 'while',
+        'how', 'what', 'which',
+        'who', 'whom', 'whose',
+        'why', 'whether', 'if',
+        'since', 'until', 'unless',
+    ]
+
+    # Remove words as whole words only
+    for word in words_to_remove:
+        text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
+
     # Remove dollar signs and commas (keep digits together: $1,800 -> 1800)
     text = text.replace('$', '').replace(',', '')
+
     # Replace special chars with spaces (except digits, letters, hyphens)
     text = re.sub(r'[^\w\s-]', ' ', text)
-    # Replace spaces/newlines/underscores with hyphens
+
+    # Replace multiple spaces/newlines/underscores with single hyphen
     text = re.sub(r'[\s_]+', '-', text)
+
     # Remove trailing/leading hyphens and multiple hyphens
     text = re.sub(r'-+', '-', text)
     text = text.strip('-')
+
     return text
 
 
@@ -310,8 +347,8 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': f"<a href='https://opinion.trade/markets/{market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
-                    'url': f"https://opinion.trade/markets/{market_id}",  # Add URL field
+                    'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
+                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",  # Correct format
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'amount': yes_shares,  # 订单簿可买份额
