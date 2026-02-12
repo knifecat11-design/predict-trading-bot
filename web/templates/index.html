@@ -353,7 +353,7 @@
                         tbody.innerHTML = arbs.map(a => `
                             <tr>
                                 <td>${a.market}</td>
-                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
+                                <td>${a.platform_a} ${a.platform_b}</td>
                                 <td class="direction">${a.direction}</td>
                                 <td>Y:${a.a_yes}c N:${a.a_no}c</td>
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>
@@ -411,7 +411,7 @@
                         tbody.innerHTML = arbs.map(a => `
                             <tr>
                                 <td>${a.market}</td>
-                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
+                                <td>${a.platform_a} ${a.platform_b}</td>
                                 <td class="direction">${a.direction}</td>
                                 <td>Y:${a.a_yes}c N:${a.a_no}c</td>
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>

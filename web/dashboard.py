@@ -90,6 +90,36 @@ def load_config():
     return config
 
 
+def strip_html(html_text):
+    """Strip HTML tags from text, return plain text"""
+    if not html_text:
+        return ''
+    # Simple HTML strip - remove everything between < and >
+    import re
+    return re.sub(r'<[^>]+>', '', html_text).strip()
+
+
+def platform_link_html(platform_name):
+    """Generate colored platform link HTML"""
+    platform_colors = {
+        'Polymarket': '#03a9f4',
+        'Opinion': '#d29922',
+        'Opinion.trade': '#d29922',
+        'Predict': '#9c27b0',
+        'Predict.fun': '#9c27b0',
+    }
+    platform_urls = {
+        'Polymarket': 'https://polymarket.com',
+        'Opinion': 'https://opinion.trade',
+        'Opinion.trade': 'https://opinion.trade',
+        'Predict': 'https://predict.fun',
+        'Predict.fun': 'https://predict.fun',
+    }
+    color = platform_colors.get(platform_name, '#888')
+    url = platform_urls.get(platform_name, '#')
+    return f"<a href='{url}' target='_blank' style='color:{color};font-weight:600;text-decoration:none'>{platform_name}</a>"
+
+
 def fetch_polymarket_data(config):
     """Fetch Polymarket markets using bestAsk (actual executable price)"""
     try:
@@ -418,9 +448,9 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
 
             if arb1 >= threshold:
                 opportunities.append({
-                    'market': ma['title'],
-                    'platform_a': platform_a_name,
-                    'platform_b': platform_b_name,
+                    'market': strip_html(ma['title']),  # Strip HTML, plain text
+                    'platform_a': platform_link_html(platform_a_name),  # Colored link
+                    'platform_b': platform_link_html(platform_b_name),  # Colored link
                     'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
                     'a_yes': round(ma['yes'] * 100, 2),
                     'a_no': round(ma['no'] * 100, 2),
@@ -435,9 +465,9 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
 
             if arb2 >= threshold:
                 opportunities.append({
-                    'market': mb['title'],
-                    'platform_a': platform_b_name,
-                    'platform_b': platform_a_name,
+                    'market': strip_html(mb['title']),  # Strip HTML, plain text
+                    'platform_a': platform_link_html(platform_b_name),  # Colored link
+                    'platform_b': platform_link_html(platform_a_name),  # Colored link
                     'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
                     'a_yes': round(mb['yes'] * 100, 2),
                     'a_no': round(mb['no'] * 100, 2),
