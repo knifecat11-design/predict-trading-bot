@@ -241,7 +241,7 @@
                     <th>Platform B</th>
                     <th>Combined</th>
                     <th>Arbitrage</th>
-                    <th>Confidence</th>
+                    <th>Amount</th>
                     <th>Time</th>
                 </tr>
             </thead>
@@ -347,7 +347,7 @@
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                                 <td>${a.combined}c</td>
                                 <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${(a.confidence * 100).toFixed(0)}%</td>
+                                <td>${a.confidence.toFixed(2)}</td>
                                 <td>${a.timestamp}</td>
                             </tr>
                         `).join('');
@@ -405,7 +405,7 @@
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                                 <td>${a.combined}c</td>
                                 <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${(a.confidence * 100).toFixed(0)}%</td>
+                                <td>${a.confidence.toFixed(2)}</td>
                                 <td>${a.timestamp}</td>
                             </tr>
                         `).join('');
