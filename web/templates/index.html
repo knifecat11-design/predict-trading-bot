@@ -359,7 +359,7 @@
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                                 <td>${a.combined}c</td>
                                 <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${a.confidence.toFixed(2)}</td>
+                                <td>${a.confidence ? a.confidence.toFixed(2) : '0.00'}</td>
                                 <td>${a.timestamp}</td>
                             </tr>
                         `).join('');
@@ -417,7 +417,7 @@
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                                 <td>${a.combined}c</td>
                                 <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${a.confidence.toFixed(2)}</td>
+                                <td>${a.confidence ? a.confidence.toFixed(2) : '0.00'}</td>
                                 <td>${a.timestamp}</td>
                             </tr>
                         `).join('');
