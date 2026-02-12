@@ -177,30 +177,39 @@ def fetch_opinion_data(config):
         if not raw_markets:
             return 'error', []
 
+        logger.info(f"Opinion: 获取到 {len(raw_markets)} 个原始市场，开始解析价格...")
+
         parsed = []
-        for m in raw_markets:
+        # 优化：只对前 50 个高交易量市场获取独立价格，避免阻塞太久
+        max_detailed_fetch = 50
+
+        for idx, m in enumerate(raw_markets):
             try:
                 market_id = str(m.get('marketId', ''))
                 title = m.get('marketTitle', '')
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
+                # 独立获取 Yes 价格（必需）
                 yes_price = client.get_token_price(yes_token)
+                if yes_price is None:
+                    continue
 
-                # 尝试独立获取 No 价格，失败时 fallback 到 1 - yes
-                if no_token:
+                # 对于前 N 个市场，尝试独立获取 No 价格
+                # 对于其他市场，直接用 1 - yes_price 估算（避免太多 HTTP 请求）
+                if idx < max_detailed_fetch and no_token:
                     no_price = client.get_token_price(no_token)
                     if no_price is None:
-                        # Fallback: 使用 1 - yes_price（当 No token 订单簿为空时）
+                        # Fallback: 使用 1 - yes_price
                         logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
-                        no_price = round(1.0 - yes_price, 4) if yes_price is not None else None
+                        no_price = round(1.0 - yes_price, 4)
+                elif no_token:
+                    # 对于后续市场，直接用 1 - yes_price 估算
+                    no_price = round(1.0 - yes_price, 4)
                 else:
                     no_price = None
 
-                # 跳过价格获取失败的市场
-                if yes_price is None:
-                    continue
+                # 跳过无效价格
                 if no_price is None:
                     continue
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
