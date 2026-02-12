@@ -1,33 +1,126 @@
 """
-智能市场匹配模块
-通过关键词和相似度算法自动匹配不同平台上的同一市场
+统一市场匹配模块 - 参考 dr-manhattan 架构重构
+
+两层匹配策略：
+  层级 1：手动映射（ManualMapping）— 100% 准确，用于高价值市场
+  层级 2：自动匹配（MarketMatcher + 多策略加权评分）— 用于发现新机会
+
+特性：
+  - 硬约束：年份/价格必须匹配（防止 "Trump 2024" vs "Trump 2028" 误匹配）
+  - 加权评分：实体0.4 + 数字0.3 + 词汇0.2 + 字符串0.1
+  - 一对一匹配：防止重复匹配
 """
 
 import re
 import logging
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
+import os
+import json
+from typing import Dict, List, Optional, Tuple, Set
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from collections import defaultdict
-import time
 
 logger = logging.getLogger(__name__)
 
 
+# ==================== 数据结构 ====================
+
+@dataclass
+class OutcomeRef:
+    """跨平台 outcome 引用"""
+    platform: str          # 'polymarket', 'opinion', 'predict'
+    market_id: str         # 该平台上的市场 ID
+    outcome: str           # 'Yes' 或 'No' 或具体 outcome 名
+
+
+@dataclass
+class ManualMapping:
+    """一组手动映射的市场"""
+    slug: str              # 人类可读标识，如 "trump-2028"
+    description: str       # 描述
+    outcomes: Dict[str, Dict[str, OutcomeRef]]  # outcome_key → platform → OutcomeRef
+
+
 @dataclass
 class MarketMatch:
-    """市场匹配结果"""
+    """市场匹配结果（保持兼容原有结构）"""
     polymarket_id: str
     polymarket_title: str
     predict_id: Optional[str] = None
     predict_title: Optional[str] = None
-    probable_id: Optional[str] = None
-    probable_title: Optional[str] = None
+    opinion_id: Optional[str] = None
+    opinion_title: Optional[str] = None
     confidence: float = 0.0  # 匹配置信度 0-1
 
 
+# ==================== 手动映射数据 ====================
+
+# 手动映射（高价值市场，保证 100% 准确）
+# 格式：每个条目将同一个现实事件在不同平台上的市场和 outcome 对应起来
+MANUAL_MAPPINGS: List[ManualMapping] = [
+    # 示例：可以在这里添加已知的跨平台市场对
+    # ManualMapping(
+    #     slug="trump-president-2028",
+    #     description="Will Trump be president in 2028?",
+    #     outcomes={
+    #         "yes": {
+    #             "polymarket": OutcomeRef("polymarket", "condition-id-xxx", "Yes"),
+    #             "opinion": OutcomeRef("opinion", "42", "Yes"),
+    #             "predict": OutcomeRef("predict", "market-id-yyy", "Yes"),
+    #         }
+    #     }
+    # ),
+]
+
+
+def load_manual_mappings_from_file(filepath: str = None) -> List[ManualMapping]:
+    """从 JSON 文件加载手动映射（可选，方便运行时更新而不改代码）"""
+    if filepath is None:
+        filepath = os.path.join(
+            os.path.dirname(__file__),
+            '..',
+            'config',
+            'market_mappings.json'
+        )
+
+    if not os.path.exists(filepath):
+        logger.debug(f"手动映射文件不存在: {filepath}")
+        return MANUAL_MAPPINGS
+
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+
+        mappings = []
+        for item in raw:
+            outcomes = {}
+            for outcome_key, refs in item.get('outcomes', {}).items():
+                outcomes[outcome_key] = {
+                    platform: OutcomeRef(
+                        platform=platform,
+                        market_id=ref['market_id'],
+                        outcome=ref['outcome']
+                    )
+                    for platform, ref in refs.items()
+                }
+
+            mappings.append(ManualMapping(
+                slug=item['slug'],
+                description=item.get('description', ''),
+                outcomes=outcomes,
+            ))
+
+        logger.info(f"从 {filepath} 加载了 {len(mappings)} 个手动映射")
+        return MANUAL_MAPPINGS + mappings
+
+    except Exception as e:
+        logger.warning(f"加载手动映射文件失败: {e}")
+        return MANUAL_MAPPINGS
+
+
+# ==================== 关键词提取器（保留原有实现）====================
+
 class KeywordExtractor:
-    """关键词提取器"""
+    """关键词提取器（保留原有良好实现，新增硬约束支持）"""
 
     # 常见停用词
     STOP_WORDS = {
@@ -36,7 +129,7 @@ class KeywordExtractor:
         'did', 'can', 'could', 'should', 'would', 'may', 'might',
         'must', 'shall', 'to', 'for', 'of', 'in', 'on', 'at', 'by',
         'with', 'from', 'as', 'this', 'that', 'these', 'those',
-        'by', 'end', 'before', 'after', 'during', 'occur', 'happen'
+        'end', 'before', 'after', 'during', 'occur', 'happen'
     }
 
     # 常见实体模式
@@ -89,7 +182,6 @@ class KeywordExtractor:
                 keywords['entities'].extend([m.lower() for m in matches])
 
         # 提取核心词汇
-        # 清理文本
         clean_text = re.sub(r'[^\w\s]', ' ', text)
         words = clean_text.lower().split()
 
@@ -106,7 +198,7 @@ class KeywordExtractor:
     @classmethod
     def calculate_similarity(cls, text1: str, text2: str) -> float:
         """
-        计算两个文本的相似度
+        计算两个文本的相似度（改进版：增加硬约束）
 
         Args:
             text1: 文本1
@@ -118,243 +210,170 @@ class KeywordExtractor:
         keywords1 = cls.extract_keywords(text1)
         keywords2 = cls.extract_keywords(text2)
 
+        # === 硬约束：年份/价格不同则直接判 0 ===
+        numbers1 = set(keywords1['numbers'])
+        numbers2 = set(keywords2['numbers'])
+
+        # 年份必须匹配（防止 "Trump 2024" vs "Trump 2028"）
+        years1 = {n for n in numbers1 if n.startswith('year_')}
+        years2 = {n for n in numbers2 if n.startswith('year_')}
+        if years1 and years2 and not (years1 & years2):
+            return 0.0
+
+        # 价格目标必须匹配（防止 "price 10000" vs "price 20000"）
+        prices1 = {n for n in numbers1 if n.startswith('price_')}
+        prices2 = {n for n in numbers2 if n.startswith('price_')}
+        if prices1 and prices2 and not (prices1 & prices2):
+            return 0.0
+
+        # === 加权评分（保持原有逻辑）===
         score = 0.0
 
-        # 实体匹配（权重高）
+        # 实体匹配（权重 0.4）
         entities1 = set(keywords1['entities'])
         entities2 = set(keywords2['entities'])
         if entities1 and entities2:
             entity_similarity = len(entities1 & entities2) / len(entities1 | entities2)
             score += entity_similarity * 0.4
 
-        # 数字匹配（年份、价格等）
-        numbers1 = set(keywords1['numbers'])
-        numbers2 = set(keywords2['numbers'])
-        if numbers1 and numbers2:
-            number_similarity = len(numbers1 & numbers2) / len(numbers1 | numbers2)
+        # 数字匹配（权重 0.3，排除年份和价格已检查的）
+        other_numbers1 = {n for n in numbers1 if not n.startswith(('year_', 'price_', 'percent_'))}
+        other_numbers2 = {n for n in numbers2 if not n.startswith(('year_', 'price_', 'percent_'))}
+        if other_numbers1 and other_numbers2:
+            number_similarity = len(other_numbers1 & other_numbers2) / len(other_numbers1 | other_numbers2)
             score += number_similarity * 0.3
+        elif not other_numbers1 and not other_numbers2:
+            score += 0.15  # 都没其他数字，给一半分
 
-        # 词汇相似度
+        # 词汇相似度（权重 0.2）
         words1 = set(keywords1['words'])
         words2 = set(keywords2['words'])
         if words1 and words2:
             word_similarity = len(words1 & words2) / len(words1 | words2)
             score += word_similarity * 0.2
 
-        # 字符串相似度（SequenceMatcher）
+        # 字符串相似度（权重 0.1）
         str_similarity = SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
         score += str_similarity * 0.1
 
         return min(1.0, score)
 
 
+# ==================== 统一市场匹配器 ====================
+
 class MarketMatcher:
     """
-    市场匹配器
-    自动匹配不同平台上的同一市场
+    统一市场匹配器
+
+    支持：
+      - 手动映射（100% 准确）
+      - 自动匹配（加权多因子评分 + 硬约束）
     """
 
     def __init__(self, config: Dict):
         self.config = config
         self.logger = logging.getLogger(__name__)
-
-        # 匹配阈值（降低以提高匹配成功率）
-        self.min_confidence = config.get('market_match', {}).get('min_confidence', 0.2)
-        self.max_matches_per_market = config.get('market_match', {}).get('max_matches', 3)
-
-        # 缓存
-        self._match_cache: Dict[str, MarketMatch] = {}
-        self._cache_time: float = 0
-        self._cache_duration = config.get('market_match', {}).get('cache_minutes', 30) * 60
-
-        # 关键词提取器
         self.extractor = KeywordExtractor()
 
-    def build_market_map(self,
-                         poly_client,
-                         predict_client,
-                         probable_client) -> Dict[str, MarketMatch]:
+        # 加载手动映射
+        self.manual_mappings = load_manual_mappings_from_file()
+        self.logger.info(f"加载了 {len(self.manual_mappings)} 个手动映射")
+
+    def match_markets_cross_platform(
+        self,
+        markets_a: List[Dict],
+        markets_b: List[Dict],
+        title_field_a: str = 'title',
+        title_field_b: str = 'title',
+        id_field_a: str = 'id',
+        id_field_b: str = 'id',
+        platform_a: str = '',
+        platform_b: str = '',
+        min_similarity: float = 0.35,
+    ) -> List[Tuple[Dict, Dict, float]]:
         """
-        构建跨平台市场映射
+        统一的跨平台市场匹配
+
+        层级 1：先查手动映射
+        层级 2：自动匹配（加权多因子）
 
         Args:
-            poly_client: Polymarket 客户端
-            predict_client: Predict.fun 客户端
-            probable_client: Probable.markets 客户端
+            markets_a, markets_b: 两个平台的市场列表
+            title_field_a/b: 标题字段名
+            id_field_a/b: ID 字段名
+            platform_a/b: 平台名（'polymarket', 'opinion', 'predict'）
+            min_similarity: 最低相似度阈值
 
         Returns:
-            市场映射字典 {polymarket_id: MarketMatch}
+            [(market_a, market_b, confidence), ...] 按置信度降序
         """
-        self.logger.info("开始构建跨平台市场映射...")
+        results = []
+        matched_b_ids = set()  # 防止 B 侧重复匹配
 
-        # 检查缓存
-        if time.time() - self._cache_time < self._cache_duration and self._match_cache:
-            self.logger.info(f"使用缓存的市场映射 ({len(self._match_cache)} 个匹配)")
-            return self._match_cache
+        # === 层级 1：手动映射（100% 准确）===
+        for mapping in self.manual_mappings:
+            for outcome_key, refs in mapping.outcomes.items():
+                ref_a = refs.get(platform_a)
+                ref_b = refs.get(platform_b)
+                if not ref_a or not ref_b:
+                    continue
 
-        # 获取各平台市场列表
-        poly_markets = self._get_polymarket_markets(poly_client)
-        predict_markets = self._get_predict_markets(predict_client)
-        probable_markets = self._get_probable_markets(probable_client)  # 返回空列表
-
-        self.logger.info(f"Polymarket: {len(poly_markets)} 个市场")
-        self.logger.info(f"Predict.fun: {len(predict_markets)} 个市场")
-
-        # 构建匹配
-        market_map = {}
-
-        for poly_market in poly_markets:
-            # 兼容驼峰和蛇形命名
-            poly_id = (poly_market.get('conditionId') or
-                       poly_market.get('condition_id') or
-                       poly_market.get('questionId') or
-                       poly_market.get('question_id', ''))
-            if not poly_id:
-                continue
-
-            # 兼容不同的标题字段名
-            poly_title = (poly_market.get('question') or
-                         poly_market.get('title') or
-                         poly_market.get('description') or '')
-
-            # 查找 Predict.fun 匹配
-            predict_match = self._find_best_match(
-                poly_title,
-                predict_markets,
-                'id',
-                'question'
-            )
-
-            # Probable.markets 已弃用，跳过匹配
-            probable_match = None
-
-            # 计算置信度
-            confidence = 0.5  # Polymarket 基础分
-            if predict_match:
-                confidence += predict_match['score'] * 0.25
-            # 移除 probable_match 的置信度加成
-
-            # 只保留高置信度匹配
-            if confidence >= self.min_confidence:
-                match = MarketMatch(
-                    polymarket_id=poly_id,
-                    polymarket_title=poly_title,
-                    predict_id=predict_match['id'] if predict_match else None,
-                    predict_title=predict_match['title'] if predict_match else None,
-                    probable_id=None,  # Probable.markets 已弃用
-                    probable_title=None,  # Probable.markets 已弃用
-                    confidence=round(confidence, 2)
+                # 在 markets_a 中找到对应市场
+                ma = next(
+                    (m for m in markets_a if str(m.get(id_field_a, '')) == ref_a.market_id),
+                    None
                 )
-                market_map[poly_id] = match
-
-                self.logger.debug(
-                    f"匹配: {poly_title[:40]}... "
-                    f"(置信度: {confidence:.2f}, "
-                    f"Predict: {bool(predict_match)})"
+                mb = next(
+                    (m for m in markets_b if str(m.get(id_field_b, '')) == ref_b.market_id),
+                    None
                 )
 
-        # 更新缓存
-        self._match_cache = market_map
-        self._cache_time = time.time()
+                if ma and mb:
+                    mb_id = str(mb.get(id_field_b, ''))
+                    matched_b_ids.add(mb_id)
+                    results.append((ma, mb, 1.0))  # 手动映射置信度 = 1.0
+                    self.logger.debug(f"手动映射匹配: {mapping.slug} - {outcome_key}")
 
-        self.logger.info(f"市场映射构建完成: {len(market_map)} 个有效匹配")
-        return market_map
+        # === 层级 2：自动匹配（加权多因子）===
+        # 预计算 B 侧关键词（避免重复计算）
+        b_keywords_cache = []
+        for mb in markets_b:
+            mb_id = str(mb.get(id_field_b, ''))
+            if mb_id in matched_b_ids:
+                continue
+            title_b = mb.get(title_field_b, '')
+            if not title_b:
+                continue
+            b_keywords_cache.append((mb, title_b, mb_id))
 
-    def _get_polymarket_markets(self, poly_client) -> List[Dict]:
-        """获取 Polymarket 市场列表"""
-        try:
-            markets = poly_client.get_all_markets(limit=1000)  # 全站监控
-            # 过滤活跃市场
-            return [m for m in markets if m.get('active', True)]
-        except Exception as e:
-            self.logger.error(f"获取 Polymarket 市场失败: {e}")
-            return []
-
-    def _get_predict_markets(self, predict_client) -> List[Dict]:
-        """获取 Predict.fun 市场列表（全站监控）"""
-        try:
-            return predict_client.get_markets(active_only=True)
-        except Exception as e:
-            self.logger.error(f"获取 Predict.fun 市场失败: {e}")
-            return []
-
-    def _get_probable_markets(self, probable_client) -> List[Dict]:
-        """Probable.markets 已弃用，返回空列表"""
-        return []
-
-    def _find_best_match(self,
-                         target_title: str,
-                         markets: List[Dict],
-                         id_field: str,
-                         title_field: str) -> Optional[Dict]:
-        """
-        查找最佳匹配市场
-
-        Args:
-            target_title: 目标市场标题
-            markets: 候选市场列表
-            id_field: ID 字段名
-            title_field: 标题字段名
-
-        Returns:
-            最佳匹配 {'id': ..., 'title': ..., 'score': ...} 或 None
-        """
-        if not markets:
-            return None
-
-        best_match = None
-        best_score = 0
-
-        for market in markets:
-            market_title = market.get(title_field, '')
-            if not market_title:
+        for ma in markets_a:
+            title_a = ma.get(title_field_a, '')
+            if not title_a:
                 continue
 
-            # 计算相似度
-            score = self.extractor.calculate_similarity(target_title, market_title)
+            best_match = None
+            best_score = 0.0
 
-            if score > best_score and score >= self.min_confidence:
-                best_score = score
-                best_match = {
-                    'id': market.get(id_field, ''),
-                    'title': market_title,
-                    'score': score
-                }
+            for mb, title_b, mb_id in b_keywords_cache:
+                if mb_id in matched_b_ids:
+                    continue
 
-        return best_match
+                score = self.extractor.calculate_similarity(title_a, title_b)
 
-    def get_match(self, polymarket_id: str) -> Optional[MarketMatch]:
-        """
-        获取指定市场的匹配信息
+                if score > best_score and score >= min_similarity:
+                    best_score = score
+                    best_match = (mb, mb_id)
 
-        Args:
-            polymarket_id: Polymarket 市场 ID
+            if best_match:
+                mb, mb_id = best_match
+                matched_b_ids.add(mb_id)  # 防止一对多
+                results.append((ma, mb, best_score))
 
-        Returns:
-            市场匹配信息或 None
-        """
-        return self._match_cache.get(polymarket_id)
+        results.sort(key=lambda x: x[2], reverse=True)
+        return results
 
-    def get_statistics(self) -> Dict:
-        """获取匹配统计信息"""
-        if not self._match_cache:
-            return {'total': 0, 'with_predict': 0}
 
-        with_predict = sum(1 for m in self._match_cache.values() if m.predict_id)
-        avg_confidence = sum(m.confidence for m in self._match_cache.values()) / len(self._match_cache)
-
-        return {
-            'total': len(self._match_cache),
-            'with_predict': with_predict,
-            'avg_confidence': round(avg_confidence, 2)
-        }
-
-    def clear_cache(self):
-        """清除缓存"""
-        self._match_cache.clear()
-        self._cache_time = 0
-        self.logger.info("市场匹配缓存已清除")
-
+# ==================== 兼容性入口 ====================
 
 def create_market_matcher(config: Dict) -> MarketMatcher:
     """
