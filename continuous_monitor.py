@@ -129,7 +129,11 @@ def check_platform_api(config):
                 timeout=5
             )
             status['predict'] = resp.status_code == 200
-        except:
+        except requests.RequestException as e:
+            logging.warning(f"Predict API 检查失败（网络错误）: {e}")
+            status['predict'] = False
+        except Exception as e:
+            logging.warning(f"Predict API 检查失败: {e}")
             status['predict'] = False
 
     return status
@@ -140,10 +144,18 @@ def check_platform_api(config):
 # ============================================================
 
 def extract_keywords(title):
+    """提取关键词（改进版）"""
     import re
-    stop_words = {'will', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'it'}
+    # 扩展停用词列表，提高匹配质量
+    stop_words = {
+        'will', 'won', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'for',
+        'of', 'is', 'it', 'or', 'and', 'not', 'but', 'can', 'has', 'had', 'have',
+        'from', 'with', 'this', 'that', 'are', 'was', 'were', 'been', 'being',
+        'get', 'got', 'out', 'over', 'than', 'then', 'when', 'what', 'which'
+    }
     words = re.findall(r'\b\w+\b', title.lower())
-    return {w for w in words if len(w) > 2 and w not in stop_words}
+    # 只保留长度 > 3 的词（提高质量）
+    return {w for w in words if len(w) > 3 and w not in stop_words}
 
 
 def fetch_polymarket_markets(config):
@@ -169,9 +181,13 @@ def fetch_polymarket_markets(config):
                     'title': m.get('question', '')[:80],
                     'yes': yes, 'no': no,
                     'volume': float(m.get('volume24hr', 0) or 0),
-                    'end_date': m.get('endDate', ''),  # 添加结束日期
+                    'end_date': m.get('endDate', ''),
                 })
-            except:
+            except (ValueError, TypeError, KeyError) as e:
+                logging.debug(f"解析 Polymarket 市场失败: {e}")
+                continue
+            except Exception as e:
+                logging.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
         # 按交易量降序排列
         parsed.sort(key=lambda x: x['volume'], reverse=True)
@@ -193,17 +209,24 @@ def fetch_opinion_markets(config):
         for m in raw:
             try:
                 yes_token = m.get('yesTokenId', '')
+                no_token = m.get('noTokenId', '')
+
+                # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
                 yes_price = client.get_token_price(yes_token)
-                if yes_price is None:
+                no_price = client.get_token_price(no_token) if no_token else None
+
+                if yes_price is None or no_price is None:
                     continue
+
                 parsed.append({
                     'title': m.get('marketTitle', '')[:80],
                     'yes': yes_price,
-                    'no': 1.0 - yes_price,
+                    'no': no_price,
                     'volume': float(m.get('volume24h', 0) or 0),
-                    'end_date': m.get('cutoff_at', ''),  # 添加结束日期
+                    'end_date': m.get('cutoff_at', ''),
                 })
-            except:
+            except Exception as e:
+                logging.debug(f"解析 Opinion 市场失败: {e}")
                 continue
             if len(parsed) >= 200:
                 break
@@ -215,7 +238,7 @@ def fetch_opinion_markets(config):
 
 
 def fetch_predict_markets(config):
-    """Fetch Predict.fun markets (requires API key)"""
+    """Fetch Predict.fun markets (requires API key) - 改进版：独立获取 No 价格"""
     try:
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
@@ -224,16 +247,17 @@ def fetch_predict_markets(config):
         parsed = []
         for m in raw:
             try:
-                ob = m.get('orderBook', {})
-                bids = ob.get('bids', [])
-                asks = ob.get('asks', [])
-                if not bids or not asks:
+                market_id = m.get('id', m.get('market_id', ''))
+                if not market_id:
                     continue
 
-                yes_bid = float(bids[0]['price'])
-                yes_ask = float(asks[0]['price'])
-                yes_price = (yes_bid + yes_ask) / 2
-                no_price = 1.0 - yes_price
+                # 使用新的完整订单簿方法（独立获取 Yes 和 No 价格）
+                full_ob = client.get_full_orderbook(market_id)
+                if full_ob is None:
+                    continue
+
+                yes_price = (full_ob['yes_bid'] + full_ob['yes_ask']) / 2
+                no_price = (full_ob['no_bid'] + full_ob['no_ask']) / 2
 
                 parsed.append({
                     'title': (m.get('question') or m.get('title', ''))[:80],
@@ -242,7 +266,8 @@ def fetch_predict_markets(config):
                     'volume': float(m.get('volume', 0) or 0),
                     'end_date': '',  # Predict 可能没有这个字段
                 })
-            except:
+            except Exception as e:
+                logging.debug(f"解析 Predict 市场失败: {e}")
                 continue
         return parsed
     except Exception as e:
@@ -251,7 +276,7 @@ def fetch_predict_markets(config):
 
 
 def parse_end_date(date_str):
-    """解析结束日期字符串"""
+    """解析结束日期字符串（改进版：添加具体异常处理）"""
     if not date_str:
         return None
     try:
@@ -263,9 +288,12 @@ def parse_end_date(date_str):
             return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         elif isinstance(date_str, (int, float)):
             return datetime.fromtimestamp(date_str)
-    except:
-        pass
-    return None
+    except (ValueError, OSError) as e:
+        logging.debug(f"解析结束日期失败: {date_str}, 错误: {e}")
+        return None
+    except Exception as e:
+        logging.warning(f"解析结束日期时出现意外错误: {date_str}, 错误: {e}")
+        return None
 
 
 def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2):
@@ -284,7 +312,7 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
             inter = ka & kb
             union = ka | kb
             sim = len(inter) / len(union) if union else 0
-            if sim < min_confidence:
+            if sim < 0.35:  # 提高默认相似度阈值到 0.35
                 continue
 
             # 检查结束时间相似度（不能相差超过 30 天）
@@ -459,7 +487,7 @@ def main():
                 else:
                     # 检查价格变化是否超过阈值
                     price_change = abs(opp['arbitrage'] - last_opp['arbitrage'])
-                    if price_change >= 0.1:  # 价格变化超过 0.1%
+                    if price_change >= 0.5:  # 价格变化超过 0.5%（从 0.1% 提高）
                         should_notify = True
                         logger.debug(f"  Price changed: {last_opp['arbitrage']:.2f}% -> {opp['arbitrage']:.2f}% (Δ{price_change:.2f}%)")
 

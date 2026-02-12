@@ -336,7 +336,7 @@ class OpinionAPIClient:
             return None
 
     def _get_orderbook_sdk(self, token_id: str) -> Optional[OpinionOrderBook]:
-        """使用 SDK 获取订单簿"""
+        """使用 SDK 获取订单簿（改进版：不返回假数据）"""
         response = self._client.get_orderbook(token_id)
 
         if hasattr(response, 'errno') and response.errno != 0:
@@ -349,10 +349,15 @@ class OpinionAPIClient:
         bids = getattr(result, 'bids', []) or []
         asks = getattr(result, 'asks', []) or []
 
-        yes_bid = float(bids[0].price) if bids else 0.49
-        yes_ask = float(asks[0].price) if asks else 0.51
-        bid_size = float(bids[0].size) if bids else 100
-        ask_size = float(asks[0].size) if asks else 100
+        # 如果订单簿为空，返回 None 而不是假数据
+        if not bids or not asks:
+            logger.debug(f"Token {token_id} 订单簿为空")
+            return None
+
+        yes_bid = float(bids[0].price)
+        yes_ask = float(asks[0].price)
+        bid_size = float(bids[0].size)
+        ask_size = float(asks[0].size)
 
         return OpinionOrderBook(
             yes_bid=round(yes_bid, 4),
@@ -362,7 +367,7 @@ class OpinionAPIClient:
         )
 
     def _get_orderbook_http(self, token_id: str) -> Optional[OpinionOrderBook]:
-        """使用 HTTP 获取订单簿"""
+        """使用 HTTP 获取订单簿（改进版：不返回假数据）"""
         params = {'token_id': token_id}
         response = self.session.get(
             f"{self.base_url}/token/orderbook",
@@ -376,10 +381,15 @@ class OpinionAPIClient:
             bids = data.get('bids', [])
             asks = data.get('asks', [])
 
-            yes_bid = float(bids[0]['price']) if bids else 0.49
-            yes_ask = float(asks[0]['price']) if asks else 0.51
-            bid_size = float(bids[0]['size']) if bids else 100
-            ask_size = float(asks[0]['size']) if asks else 100
+            # 如果订单簿为空，返回 None 而不是假数据
+            if not bids or not asks:
+                logger.debug(f"Token {token_id} 订单簿为空")
+                return None
+
+            yes_bid = float(bids[0]['price'])
+            yes_ask = float(asks[0]['price'])
+            bid_size = float(bids[0]['size'])
+            ask_size = float(asks[0]['size'])
 
             return OpinionOrderBook(
                 yes_bid=yes_bid,
@@ -390,15 +400,26 @@ class OpinionAPIClient:
         return None
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
-        """获取市场详细信息"""
+        """获取市场详细信息（改进版：独立获取 No 价格）"""
         try:
             markets = self.get_markets()
 
             for market in markets:
                 if str(market.get('marketId')) == str(market_id):
                     yes_token_id = market.get('yesTokenId', '')
-                    yes_price = self.get_token_price(yes_token_id) or 0.5
-                    no_price = round(1.0 - yes_price, 4)
+                    no_token_id = market.get('noTokenId', '')
+
+                    # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
+                    yes_price = self.get_token_price(yes_token_id)
+                    no_price = self.get_token_price(no_token_id) if no_token_id else None
+
+                    # 如果任一价格获取失败，跳过此市场
+                    if yes_price is None or no_price is None:
+                        logger.debug(f"市场 {market_id} 价格获取不完整，跳过")
+                        continue
+
+                    yes_price = round(yes_price, 4)
+                    no_price = round(no_price, 4)
 
                     return OpinionMarket(
                         market_id=str(market['marketId']),
@@ -409,7 +430,7 @@ class OpinionAPIClient:
                         volume_24h=float(market.get('volume24h', 0) or 0),
                         status=market.get('statusEnum', 'Unknown'),
                         yes_token_id=yes_token_id,
-                        no_token_id=market.get('noTokenId', ''),
+                        no_token_id=no_token_id,
                     )
 
         except Exception as e:
@@ -498,13 +519,17 @@ class MockOpinionClient:
         )
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
-        """获取模拟市场信息"""
+        """获取模拟市场信息（改进版：模拟独立的 No 价格）"""
+        import random
         yes_price = self.base_price
+        # 模拟独立的 No 价格（不一定等于 1 - yes）
+        # 在真实市场中，Yes + No 可能不等于 1.0，这正是套利机会的来源
+        no_price = round(max(0.01, min(0.99, 1.0 - yes_price + random.uniform(-0.02, 0.02))), 4)
         return OpinionMarket(
             market_id=str(market_id),
             market_title='Mock Opinion Market',
             yes_price=yes_price,
-            no_price=1.0 - yes_price,
+            no_price=no_price,
             volume=1500000.00,
             volume_24h=125000.00,
             status='Activated'

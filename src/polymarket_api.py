@@ -324,8 +324,10 @@ class PolymarketClient:
                                 yes_bid_size=100.0,
                                 yes_ask_size=100.0
                             )
-                    except:
-                        pass
+                    except (ValueError, TypeError, json.JSONDecodeError) as e:
+                        logger.debug(f"解析 outcomePrices 失败: {e}")
+                    except Exception as e:
+                        logger.warning(f"解析 outcomePrices 时出现意外错误: {e}")
 
             # 如果找不到市场，返回 None
             logger.warning(f"未找到市场 {condition_id}")

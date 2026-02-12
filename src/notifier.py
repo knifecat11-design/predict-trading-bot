@@ -113,7 +113,7 @@ class TelegramNotifier:
 
     def _send_telegram(self, message: str):
         """
-        发送 Telegram 消息
+        发送 Telegram 消息（改进版：修复 HTML 转义与 parse_mode 冲突）
 
         Args:
             message: 消息内容
@@ -125,13 +125,16 @@ class TelegramNotifier:
         url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
 
         try:
-            # 转义消息中的特殊字符
-            escaped_message = message.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            # 修复：只转义 & 字符，不转义 < 和 >
+            # 如果不需要 HTML 格式化，使用 parse_mode=None
+            # 如果需要 HTML 格式化，应该保留 <b> 等标签
+            escaped_message = message.replace('&', '&amp;')
 
             response = requests.post(url, json={
                 'chat_id': self.config.chat_id,
                 'text': escaped_message,
-                'parse_mode': 'HTML'
+                # 移除 parse_mode，因为消息不包含 HTML 标签
+                # 如果将来需要加粗等格式，可以使用 parse_mode='HTML' 但不转义标签
             }, timeout=15)
 
             result = response.json()

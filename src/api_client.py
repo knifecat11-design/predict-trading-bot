@@ -143,25 +143,58 @@ class PredictAPIClient:
             logger.error(f"获取市场数据失败: {e}")
             return self._default_data(market_id or 'default')
 
-    def _get_orderbook(self, market_id: str) -> Dict:
-        """获取订单簿"""
+    def _get_orderbook(self, market_id: str, outcome_id: int = 1) -> Dict:
+        """
+        获取订单簿
+
+        Args:
+            market_id: 市场 ID
+            outcome_id: 1=Yes token, 0=No token（默认 1）
+        """
         try:
-            response = self.session.get(f"{self.base_url}/markets/{market_id}/orderbook", timeout=10)
+            # Predict.fun API 支持通过 outcomeId 参数获取不同 token 的订单簿
+            params = {'outcomeId': outcome_id} if outcome_id != 1 else {}
+            response = self.session.get(f"{self.base_url}/markets/{market_id}/orderbook",
+                                   params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 bids = data.get('bids', [])
                 asks = data.get('asks', [])
 
                 return {
-                    'yes_bid': float(bids[0]['price']) if bids else 0.49,
-                    'yes_ask': float(asks[0]['price']) if asks else 0.51,
-                    'bid_size': float(bids[0].get('amount', 100)) if bids else 100,
-                    'ask_size': float(asks[0].get('amount', 100)) if asks else 100
+                    'yes_bid': float(bids[0]['price']) if bids else None,
+                    'yes_ask': float(asks[0]['price']) if asks else None,
+                    'bid_size': float(bids[0].get('amount', 100)) if bids else 0,
+                    'ask_size': float(asks[0].get('amount', 100)) if asks else 0
                 }
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"获取订单簿失败 (outcome_id={outcome_id}): {e}")
 
-        return {'yes_bid': 0.49, 'yes_ask': 0.51, 'bid_size': 100, 'ask_size': 100}
+        # 返回 None 表示获取失败，而不是假数据
+        return {'yes_bid': None, 'yes_ask': None, 'bid_size': 0, 'ask_size': 0}
+
+    def get_full_orderbook(self, market_id: str) -> Optional[Dict]:
+        """
+        获取完整订单簿（Yes 和 No token）
+
+        Returns:
+            {'yes_bid': float, 'yes_ask': float, 'no_bid': float, 'no_ask': float}
+            或 None（如果任一 token 订单簿获取失败）
+        """
+        yes_ob = self._get_orderbook(market_id, outcome_id=1)
+        no_ob = self._get_orderbook(market_id, outcome_id=0)
+
+        # 检查是否都有有效的买卖价
+        if None in [yes_ob['yes_bid'], yes_ob['yes_ask'], no_ob['yes_bid'], no_ob['yes_ask']]:
+            logger.debug(f"市场 {market_id} 订单簿不完整")
+            return None
+
+        return {
+            'yes_bid': yes_ob['yes_bid'],
+            'yes_ask': yes_ob['yes_ask'],
+            'no_bid': no_ob['yes_bid'],
+            'no_ask': no_ob['yes_ask'],
+        }
 
     def _default_data(self, market_id: str) -> MarketData:
         return MarketData(market_id, 'Default', 0.5, 0.49, 0.51, 100, 100, 0, 0, time.time())
