@@ -465,7 +465,6 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         end_date_b = mb.get('end_date', '')
         if end_date_a and end_date_b:
             try:
-                from datetime import datetime
                 # 尝试解析日期
                 if isinstance(end_date_a, str):
                     end_a = datetime.fromisoformat(end_date_a.replace('Z', '+00:00'))
