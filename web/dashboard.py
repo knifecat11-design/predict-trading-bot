@@ -91,7 +91,7 @@ def load_config():
 
 
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets using outcomePrices (correctly formatted)"""
+    """Fetch Polymarket markets using bestAsk (actual executable price)"""
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
@@ -105,32 +105,49 @@ def fetch_polymarket_data(config):
                 if not condition_id:
                     continue
 
-                # 使用 outcomePrices（Gamma API 返回的格式化价格）
-                outcome_str = m.get('outcomePrices', '[]')
-                if isinstance(outcome_str, str):
-                    prices = json.loads(outcome_str)
-                else:
-                    prices = outcome_str
-                if len(prices) < 2:
-                    continue
+                # 获取事件 slug（用于超链接）
+                events = m.get('events', [])
+                event_slug = events[0].get('slug', '') if events else ''
+                if not event_slug:
+                    # Fallback: 使用 condition_id
+                    event_slug = condition_id
 
-                # outcomePrices[0] = Yes 价格, outcomePrices[1] = No 价格
-                yes_price = float(prices[0])
-                no_price = float(prices[1])
+                # 使用 bestAsk（实际的最低卖价）而不是 outcomePrices（中间价）
+                # bestAsk 是 Yes token 的买入价
+                best_ask = m.get('bestAsk')
+                if best_ask is None or best_ask <= 0 or best_ask >= 1:
+                    # 如果没有 bestAsk，回退到 outcomePrices
+                    outcome_str = m.get('outcomePrices', '[]')
+                    if isinstance(outcome_str, str):
+                        prices = json.loads(outcome_str)
+                    else:
+                        prices = outcome_str
+                    if len(prices) < 2:
+                        continue
+                    yes_price = float(prices[0])
+                    no_price = float(prices[1])
+                else:
+                    # 使用 bestAsk 作为 Yes 价格（实际买入价）
+                    yes_price = float(best_ask)
+                    # No 价格使用 outcomePrices[1] 或者 1 - yes_price
+                    outcome_str = m.get('outcomePrices', '[]')
+                    if isinstance(outcome_str, str):
+                        prices = json.loads(outcome_str)
+                    else:
+                        prices = outcome_str
+                    if len(prices) >= 2:
+                        no_price = float(prices[1])
+                    else:
+                        # Fallback: 使用 1 - yes_price
+                        no_price = round(1.0 - yes_price, 4)
 
                 # 验证价格有效性
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
                     continue
 
-                # 验证 Yes + No 接近 1.0（允许一些误差）
-                combined = yes_price + no_price
-                if combined > 1.1 or combined < 0.9:
-                    logger.debug(f"市场 {condition_id} 价格异常: yes={yes_price}, no={no_price}, combined={combined}")
-                    # 不跳过，但记录警告
-
                 parsed.append({
                     'id': condition_id,
-                    'title': f"<a href='https://polymarket.com/event/{condition_id}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
@@ -145,7 +162,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets using outcomePrices")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets using bestAsk")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
