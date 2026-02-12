@@ -209,9 +209,11 @@ def fetch_opinion_markets(config):
             return []
 
         # 优化：只对前 50 个市场获取独立 No 价格，避免太多 HTTP 请求
+        # 如果仍然全部失败，直接返回空列表（避免继续尝试）
         max_detailed_fetch = 50
+        max_total_markets = 150  # 最多处理 150 个市场（避免超时）
 
-        logging.info(f"Opinion: 获取到 {len(raw)} 个原始市场，开始解析价格（仅前 {max_detailed_fetch} 个获取独立价格）...")
+        logging.info(f"Opinion: 获取到 {len(raw)} 个原始市场（限制处理 {max_total_markets} 个，前 {max_detailed_fetch} 个获取独立价格）...")
 
         parsed = []
 
@@ -250,9 +252,17 @@ def fetch_opinion_markets(config):
                     'volume': float(m.get('volume24h', 0) or 0),
                     'end_date': m.get('cutoff_at', ''),
                 })
+
+                # 如果达到最大处理数量，停止解析（避免太多失败导致超时）
+                if len(parsed) >= max_total_markets:
+                    logging.warning(f"已达到最大处理数量 {max_total_markets}，停止解析剩余市场")
+                    break
             except Exception as e:
                 logging.debug(f"解析 Opinion 市场失败: {e}")
                 continue
+
+            # 已完成解析
+            logging.info(f"Opinion: 解析完成，成功解析 {len(parsed)} 个市场（限制 {min(len(parsed), max_total_markets)} 个）")
             if len(parsed) >= 200:
                 break
         # 已经按交易量排序了
