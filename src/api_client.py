@@ -161,6 +161,11 @@ class PredictAPIClient:
                 bids = data.get('bids', [])
                 asks = data.get('asks', [])
 
+                # 检查订单簿是否有效（验证 outcomeId 参数是否被支持）
+                if not bids and not asks:
+                    logger.warning(f"订单簿为空 (outcome_id={outcome_id}, market={market_id})，API 可能不支持 outcomeId 参数")
+                    return {'yes_bid': None, 'yes_ask': None, 'bid_size': 0, 'ask_size': 0}
+
                 return {
                     'yes_bid': float(bids[0]['price']) if bids else None,
                     'yes_ask': float(asks[0]['price']) if asks else None,
@@ -188,6 +193,26 @@ class PredictAPIClient:
         if None in [yes_ob['yes_bid'], yes_ob['yes_ask'], no_ob['yes_bid'], no_ob['yes_ask']]:
             logger.debug(f"市场 {market_id} 订单簿不完整")
             return None
+
+        # 验证 No token 订单簿是否真的不同于 Yes（防止 API 不支持 outcomeId）
+        # 如果价格相同或非常接近，说明 API 忽略了 outcomeId 参数
+        yes_mid = (yes_ob['yes_bid'] + yes_ob['yes_ask']) / 2 if yes_ob['yes_bid'] and yes_ob['yes_ask'] else None
+        no_mid = (no_ob['yes_bid'] + no_ob['yes_ask']) / 2 if no_ob['yes_bid'] and no_ob['yes_ask'] else None
+
+        if yes_mid and no_mid:
+            diff_pct = abs(yes_mid - no_mid) / yes_mid * 100 if yes_mid > 0 else 100
+            if diff_pct < 1:  # 差异小于 1%，认为 API 返回了相同数据
+                logger.warning(f"市场 {market_id} 的 Yes/No 订单簿数据相同 (diff={diff_pct:.2f}%)，API 可能不支持 outcomeId 参数")
+                # Fallback: 使用 1 - yes_price 推导 No 价格
+                if yes_ob['yes_ask'] is not None:
+                    no_bid = round(1.0 - yes_ob['yes_bid'], 4)
+                    no_ask = round(1.0 - yes_ob['yes_ask'], 4)
+                    return {
+                        'yes_bid': yes_ob['yes_bid'],
+                        'yes_ask': yes_ob['yes_ask'],
+                        'no_bid': no_bid,
+                        'no_ask': no_ask,
+                    }
 
         return {
             'yes_bid': yes_ob['yes_bid'],
