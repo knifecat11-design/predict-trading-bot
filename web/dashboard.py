@@ -423,12 +423,44 @@ def background_scanner():
 
     while True:
         try:
-            # Fetch all platforms
-            poly_status, poly_markets = fetch_polymarket_data(config)
-            opinion_status, opinion_markets = fetch_opinion_data(config)
-            predict_status, predict_markets = fetch_predict_data(config)
+            # 优化：各平台独立更新状态，避免互相阻塞
+            with _lock:
+                now = time.time()
 
-            # Find arbitrage across all pairs
+            # Fetch Polymarket（立即更新状态，不等其他平台）
+            poly_status, poly_markets = fetch_polymarket_data(config)
+            with _lock:
+                _state['platforms']['polymarket'] = {
+                    'status': poly_status,
+                    'markets': poly_markets[:20],
+                    'count': len(poly_markets),
+                    'last_update': now,
+                }
+                logger.info(f"[Polymarket] 已更新: {len(poly_markets)} 个市场, status={poly_status}")
+
+            # Fetch Opinion（立即更新状态，不等其他平台）
+            opinion_status, opinion_markets = fetch_opinion_data(config)
+            with _lock:
+                _state['platforms']['opinion'] = {
+                    'status': opinion_status,
+                    'markets': opinion_markets[:20],
+                    'count': len(opinion_markets),
+                    'last_update': now,
+                }
+                logger.info(f"[Opinion] 已更新: {len(opinion_markets)} 个市场, status={opinion_status}")
+
+            # Fetch Predict（立即更新状态，不等其他平台）
+            predict_status, predict_markets = fetch_predict_data(config)
+            with _lock:
+                _state['platforms']['predict'] = {
+                    'status': predict_status,
+                    'markets': predict_markets[:20],
+                    'count': len(predict_markets),
+                    'last_update': now,
+                }
+                logger.info(f"[Predict] 已更新: {len(predict_markets)} 个市场, status={predict_status}")
+
+            # Find arbitrage across all pairs（所有平台数据已独立更新）
             all_arb = []
 
             if poly_markets and opinion_markets:
@@ -449,25 +481,33 @@ def background_scanner():
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
             with _lock:
-                now = time.time()
-                _state['platforms']['polymarket'] = {
-                    'status': poly_status,
-                    'markets': poly_markets[:20],
-                    'count': len(poly_markets),
-                    'last_update': now,
-                }
-                _state['platforms']['opinion'] = {
-                    'status': opinion_status,
-                    'markets': opinion_markets[:20],
-                    'count': len(opinion_markets),
-                    'last_update': now,
-                }
-                _state['platforms']['predict'] = {
-                    'status': predict_status,
-                    'markets': predict_markets[:20],
-                    'count': len(predict_markets),
-                    'last_update': now,
-                }
+                # Merge with existing arbitrage opportunities, tracking by market_key
+                existing_arb = _state.get('arbitrage', [])
+                new_arb_map = {opp['market_key']: opp for opp in all_arb if opp.get('market_key')}
+                old_arb_map = {opp['market_key']: opp for opp in existing_arb if opp.get('market_key')}
+
+                # For old opportunities not in new scan, keep them (could add expiry logic later)
+                for key, old_opp in old_arb_map.items():
+                    if key not in new_arb_map:
+                        # Keep old opportunity if it still exists
+                        new_arb_map[key] = old_opp
+
+                # For opportunities in both new and old, check if price changed significantly
+                for key, new_opp in new_arb_map.items():
+                    if key in old_arb_map:
+                        old_opp = old_arb_map[key]
+                        price_change = abs(new_opp['arbitrage'] - old_opp['arbitrage'])
+                        # 提高变化阈值从 0.1% 到 0.5%，让价格更新更明显
+                        if price_change < 0.5:
+                            new_arb_map[key] = old_opp
+                        # 总是更新时间戳，显示最新扫描时间
+                        new_opp['timestamp'] = datetime.now().strftime('%H:%M:%S')
+
+                _state['arbitrage'] = list(new_arb_map.values())[:50]
+                _state['scan_count'] += 1
+                _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                _state['threshold'] = threshold
+                _state['error'] = None
 
                 # Merge with existing arbitrage opportunities, tracking by market_key
                 existing_arb = _state.get('arbitrage', [])
