@@ -310,7 +310,7 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': title[:80],  # 纯文本，不带超链接
+                    'title': f"<a href='https://opinion.trade/markets/{market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
                     'url': f"https://opinion.trade/markets/{market_id}",  # Add URL field
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
@@ -435,6 +435,9 @@ def parse_end_date(date_str):
 def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
     """Find arbitrage between two platform market lists"""
     opportunities = []
+    checked_pairs = 0
+    skipped_similarity = 0
+    skipped_end_date = 0
 
     for ma in markets_a:
         ka = extract_keywords(ma['title'])
@@ -442,6 +445,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             continue
 
         for mb in markets_b:
+            checked_pairs += 1
             kb = extract_keywords(mb['title'])
             if not kb:
                 continue
@@ -450,7 +454,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             union = ka | kb
             similarity = len(intersection) / len(union) if union else 0
 
-            if similarity < 0.35:  # 提高阈值从 0.2 到 0.35，减少错误匹配
+            if similarity < 0.25:  # 降低阈值以增加匹配机会
+                skipped_similarity += 1
                 continue
 
             # Check end date similarity
@@ -458,7 +463,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             end_b = parse_end_date(mb.get('end_date', ''))
             if end_a and end_b:
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 5:  # More than 5 days difference, skip
+                if time_diff > 30:  # 增加到30天容忍度
+                    skipped_end_date += 1
                     continue
 
             # Direction 1: Buy Yes on A + Buy No on B
@@ -509,6 +515,16 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
+
+    # Debug logging for arbitrage matching
+    if checked_pairs > 0:
+        logger.debug(
+            f"[{platform_a_name} vs {platform_b_name}] Checked: {checked_pairs}, "
+            f"Skipped(similarity): {skipped_similarity}, "
+            f"Skipped(end_date): {skipped_end_date}, "
+            f"Found: {len(opportunities)}"
+        )
+
     return opportunities
 
 
