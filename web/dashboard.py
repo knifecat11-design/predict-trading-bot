@@ -509,33 +509,6 @@ def background_scanner():
                 _state['threshold'] = threshold
                 _state['error'] = None
 
-                # Merge with existing arbitrage opportunities, tracking by market_key
-                existing_arb = _state.get('arbitrage', [])
-                new_arb_map = {opp['market_key']: opp for opp in all_arb if opp.get('market_key')}
-                old_arb_map = {opp['market_key']: opp for opp in existing_arb if opp.get('market_key')}
-
-                # For old opportunities not in new scan, keep them (could add expiry logic later)
-                for key, old_opp in old_arb_map.items():
-                    if key not in new_arb_map:
-                        # Keep old opportunity if it still exists
-                        new_arb_map[key] = old_opp
-
-                # For opportunities in both new and old, check if price changed significantly
-                for key, new_opp in new_arb_map.items():
-                    if key in old_arb_map:
-                        old_opp = old_arb_map[key]
-                        price_change = abs(new_opp['arbitrage'] - old_opp['arbitrage'])
-                        # 提高变化阈值从 0.1% 到 0.5%，让价格更新更明显
-                        if price_change < 0.5:
-                            new_arb_map[key] = old_opp
-                        # 总是更新时间戳，显示最新扫描时间
-                        new_opp['timestamp'] = datetime.now().strftime('%H:%M:%S')
-
-                _state['arbitrage'] = list(new_arb_map.values())[:50]
-                _state['scan_count'] += 1
-                _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                _state['threshold'] = threshold
-                _state['error'] = None
 
             logger.info(
                 f"Scan #{_state['scan_count']}: "

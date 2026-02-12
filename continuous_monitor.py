@@ -208,11 +208,12 @@ def fetch_opinion_markets(config):
         if not raw:
             return []
 
+        # 优化：只对前 50 个市场获取独立 No 价格，避免太多 HTTP 请求
+        max_detailed_fetch = 50
+
         logging.info(f"Opinion: 获取到 {len(raw)} 个原始市场，开始解析价格（仅前 {max_detailed_fetch} 个获取独立价格）...")
 
         parsed = []
-        # 优化：只对前 50 个市场获取独立 No 价格，避免太多 HTTP 请求
-        max_detailed_fetch = 50
 
         for idx, m in enumerate(raw):
             try:
