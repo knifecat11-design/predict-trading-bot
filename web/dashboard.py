@@ -433,57 +433,34 @@ def fetch_predict_data(config):
         return 'error', []
 
 
-def extract_keywords(title):
-    """Extract keywords from market title for matching (improved)"""
-    import re
-    # 扩展停用词列表，提高匹配质量
-    stop_words = {
-        'will', 'won', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'for',
-        'of', 'is', 'it', 'or', 'and', 'not', 'but', 'can', 'has', 'had', 'have',
-        'from', 'with', 'this', 'that', 'are', 'was', 'were', 'been', 'being',
-        'get', 'got', 'out', 'over', 'than', 'then', 'when', 'what', 'which',
-        'while', 'who', 'whom', 'why', 'how', 'all', 'any', 'both', 'each',
-        'more', 'most', 'some', 'such', 'your', 'our', 'their', 'its'
-    }
-    words = re.findall(r'\b\w+\b', title.lower())
-    # 只保留长度 > 3 的词（提高质量）
-    return {w for w in words if len(w) > 3 and w not in stop_words}
 
-
-def parse_end_date(date_str):
-    """Parse end date string for validation (improved: specific exceptions)"""
-    if not date_str:
-        return None
-    try:
-        if isinstance(date_str, str):
-            if date_str.isdigit():
-                return datetime.fromtimestamp(int(date_str))
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        elif isinstance(date_str, (int, float)):
-            return datetime.fromtimestamp(date_str)
-    except (ValueError, OSError) as e:
-        logger.debug(f"解析结束日期失败: {date_str}, 错误: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"解析结束日期时出现意外错误: {date_str}, 错误: {e}")
-        return None
 
 
 def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
-    """Find arbitrage between two platform market lists"""
+    """Find arbitrage between two platform market lists (使用统一匹配模块）"""
+    from src.market_matcher import MarketMatcher
+
     opportunities = []
     checked_pairs = 0
     skipped_similarity = 0
     skipped_end_date = 0
 
-    for ma in markets_a:
-        ka = extract_keywords(ma['title'])
+    # 使用统一匹配器
+    matcher = MarketMatcher({})
+    matched_pairs = matcher.match_markets_cross_platform(
+        markets_a, markets_b,
+        title_field_a='title', title_field_b='title',
+        id_field_a='id', id_field_b='id',
+        platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
+        min_similarity=0.35,
+    )
+
+    for ma, mb, confidence in matched_pairs:
         if not ka:
             continue
 
         for mb in markets_b:
             checked_pairs += 1
-            kb = extract_keywords(mb['title'])
             if not kb:
                 continue
 
@@ -496,9 +473,6 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 continue
 
             # Check end date similarity
-            end_a = parse_end_date(ma.get('end_date', ''))
-            end_b = parse_end_date(mb.get('end_date', ''))
-            if end_a and end_b:
                 time_diff = abs((end_a - end_b).days)
                 if time_diff > 30:  # 增加到30天容忍度
                     skipped_end_date += 1
