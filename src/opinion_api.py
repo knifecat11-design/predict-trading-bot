@@ -293,10 +293,17 @@ class OpinionAPIClient:
 
         result = response.result
         asks = getattr(result, 'asks', []) or []
+        bids = getattr(result, 'bids', []) or []
 
-        # 直接返回 best ask（最低卖价）用于买入
+        # 优先使用 best ask（最低卖价）
         if asks:
             return round(float(asks[0].price), 4)
+
+        # Fallback: 如果没有 asks，使用最佳 bid 估算
+        if bids:
+            best_bid = float(bids[0].price)
+            logger.debug(f"SDK: Token {token_id} 无 asks，使用 bid 估算")
+            return round(1.0 - best_bid, 4)
 
         return None
 
@@ -317,7 +324,17 @@ class OpinionAPIClient:
             if asks:
                 return round(float(asks[0]['price']), 4)
 
-        return None
+            # Fallback: 如果没有 asks，使用最佳 bid 估算（流动性低时）
+            bids = data.get('bids', [])
+            if bids:
+                # 对于买单，我们需要反向价格（如果要买 Yes，应该以 bid 价格卖）
+                # 但为了保守起见，返回 1 - best_bid
+                best_bid = float(bids[0]['price'])
+                logger.debug(f"Token {token_id} 无 asks，使用 bid 估算: {best_bid}")
+                return round(1.0 - best_bid, 4)
+
+            logger.debug(f"Token {token_id} 订单簿为空（无 bids 也无 asks）")
+            return None
 
     def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
         """获取订单簿"""
