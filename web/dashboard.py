@@ -445,11 +445,28 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
     skipped_similarity = 0
     skipped_end_date = 0
 
-    # 使用统一匹配器
+    # 关键修复：为每个市场添加纯文本标题用于匹配
+    # title_with_html 保留用于显示
+    # title_plain 用于匹配
+    markets_a_plain = []
+    for m in markets_a:
+        m_copy = m.copy()
+        m_copy['title_plain'] = strip_html(m.get('title', ''))
+        m_copy['title_with_html'] = m.get('title', '')
+        markets_a_plain.append(m_copy)
+
+    markets_b_plain = []
+    for m in markets_b:
+        m_copy = m.copy()
+        m_copy['title_plain'] = strip_html(m.get('title', ''))
+        m_copy['title_with_html'] = m.get('title', '')
+        markets_b_plain.append(m_copy)
+
+    # 使用统一匹配器（使用纯文本标题）
     matcher = MarketMatcher({})
     matched_pairs = matcher.match_markets_cross_platform(
-        markets_a, markets_b,
-        title_field_a='title', title_field_b='title',
+        markets_a_plain, markets_b_plain,
+        title_field_a='title_plain', title_field_b='title_plain',  # 使用纯文本
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
         min_similarity=0.35,
@@ -498,7 +515,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
 
         if arb1 >= threshold:
             opportunities.append({
-                'market': strip_html(ma['title']),  # Strip HTML, plain text
+                'market': strip_html(ma['title_with_html']),  # Strip HTML for market name
                 'platform_a': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
                 'platform_b': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
                 'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
@@ -515,7 +532,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
 
         if arb2 >= threshold:
             opportunities.append({
-                'market': strip_html(mb['title']),  # Strip HTML, plain text
+                'market': strip_html(mb['title_with_html']),  # Strip HTML for market name
                 'platform_a': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
                 'platform_b': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
                 'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
