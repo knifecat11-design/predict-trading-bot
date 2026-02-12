@@ -455,86 +455,91 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         min_similarity=0.35,
     )
 
+    logger.info(f"[{platform_a_name} vs {platform_b_name}] MarketMatcher 找到 {len(matched_pairs)} 对匹配")
+
     for ma, mb, confidence in matched_pairs:
-        if not ka:
-            continue
+        checked_pairs += 1
 
-        for mb in markets_b:
-            checked_pairs += 1
-            if not kb:
-                continue
+        # Check end date similarity (如果有的话)
+        end_date_a = ma.get('end_date', '')
+        end_date_b = mb.get('end_date', '')
+        if end_date_a and end_date_b:
+            try:
+                from datetime import datetime
+                # 尝试解析日期
+                if isinstance(end_date_a, str):
+                    end_a = datetime.fromisoformat(end_date_a.replace('Z', '+00:00'))
+                else:
+                    end_a = end_date_a
+                if isinstance(end_date_b, str):
+                    end_b = datetime.fromisoformat(end_date_b.replace('Z', '+00:00'))
+                else:
+                    end_b = end_date_b
 
-            intersection = ka & kb
-            union = ka | kb
-            similarity = len(intersection) / len(union) if union else 0
-
-            if similarity < 0.25:  # 降低阈值以增加匹配机会
-                skipped_similarity += 1
-                continue
-
-            # Check end date similarity
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 30:  # 增加到30天容忍度
+                if time_diff > 30:  # 30天容忍度
                     skipped_end_date += 1
                     continue
+            except Exception as e:
+                logger.debug(f"End date parsing failed: {e}")
+                # 如果日期解析失败，继续检查套利
 
-            # Direction 1: Buy Yes on A + Buy No on B
-            # 使用 ask 价格（买入成本）
-            combined1 = ma['yes'] + mb['no']
-            arb1 = (1.0 - combined1) * 100
+        # Direction 1: Buy Yes on A + Buy No on B
+        # 使用 ask 价格（买入成本）
+        combined1 = ma['yes'] + mb['no']
+        arb1 = (1.0 - combined1) * 100
 
-            # Direction 2: Buy Yes on B + Buy No on A
-            # 使用 ask 价格（买入成本）
-            combined2 = mb['yes'] + ma['no']
-            arb2 = (1.0 - combined2) * 100
+        # Direction 2: Buy Yes on B + Buy No on A
+        # 使用 ask 价格（买入成本）
+        combined2 = mb['yes'] + ma['no']
+        arb2 = (1.0 - combined2) * 100
 
-            # Create unique market key for deduplication
-            market_key_base = f"{platform_a_name}-{platform_b_name}-{','.join(sorted(intersection))}"
+        # Create unique market key for deduplication
+        market_key_base = f"{platform_a_name}-{platform_b_name}-{ma.get('id','')}-{mb.get('id','')}"
 
-            if arb1 >= threshold:
-                opportunities.append({
-                    'market': strip_html(ma['title']),  # Strip HTML, plain text
-                    'platform_a': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
-                    'platform_b': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
-                    'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
-                    'a_yes': round(ma['yes'] * 100, 2),
-                    'a_no': round(ma['no'] * 100, 2),
-                    'b_yes': round(mb['yes'] * 100, 2),
-                    'b_no': round(mb['no'] * 100, 2),
-                    'combined': round(combined1 * 100, 2),
-                    'arbitrage': round(arb1, 2),
-                    'confidence': round(similarity, 2),
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'market_key': f"{market_key_base}-yes1_no2",
-                })
+        if arb1 >= threshold:
+            opportunities.append({
+                'market': strip_html(ma['title']),  # Strip HTML, plain text
+                'platform_a': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
+                'platform_b': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
+                'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
+                'a_yes': round(ma['yes'] * 100, 2),
+                'a_no': round(ma['no'] * 100, 2),
+                'b_yes': round(mb['yes'] * 100, 2),
+                'b_no': round(mb['no'] * 100, 2),
+                'combined': round(combined1 * 100, 2),
+                'arbitrage': round(arb1, 2),
+                'confidence': round(confidence, 2),
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'market_key': f"{market_key_base}-yes1_no2",
+            })
 
-            if arb2 >= threshold:
-                opportunities.append({
-                    'market': strip_html(mb['title']),  # Strip HTML, plain text
-                    'platform_a': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
-                    'platform_b': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
-                    'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
-                    'a_yes': round(mb['yes'] * 100, 2),
-                    'a_no': round(mb['no'] * 100, 2),
-                    'b_yes': round(ma['yes'] * 100, 2),
-                    'b_no': round(ma['no'] * 100, 2),
-                    'combined': round(combined2 * 100, 2),
-                    'arbitrage': round(arb2, 2),
-                    'confidence': round(similarity, 2),
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'market_key': f"{market_key_base}-yes2_no1",
-                })
+        if arb2 >= threshold:
+            opportunities.append({
+                'market': strip_html(mb['title']),  # Strip HTML, plain text
+                'platform_a': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
+                'platform_b': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
+                'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
+                'a_yes': round(mb['yes'] * 100, 2),
+                'a_no': round(mb['no'] * 100, 2),
+                'b_yes': round(ma['yes'] * 100, 2),
+                'b_no': round(ma['no'] * 100, 2),
+                'combined': round(combined2 * 100, 2),
+                'arbitrage': round(arb2, 2),
+                'confidence': round(confidence, 2),
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'market_key': f"{market_key_base}-yes2_no1",
+            })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
 
     # Debug logging for arbitrage matching
-    if checked_pairs > 0:
-        logger.debug(
-            f"[{platform_a_name} vs {platform_b_name}] Checked: {checked_pairs}, "
-            f"Skipped(similarity): {skipped_similarity}, "
-            f"Skipped(end_date): {skipped_end_date}, "
-            f"Found: {len(opportunities)}"
-        )
+    logger.info(
+        f"[{platform_a_name} vs {platform_b_name}] Checked: {checked_pairs}, "
+        f"Skipped(similarity): {skipped_similarity}, "
+        f"Skipped(end_date): {skipped_end_date}, "
+        f"Found: {len(opportunities)} opportunities"
+    )
 
     return opportunities
 
