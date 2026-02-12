@@ -187,10 +187,21 @@ def fetch_opinion_data(config):
 
                 # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
                 yes_price = client.get_token_price(yes_token)
-                no_price = client.get_token_price(no_token) if no_token else None
+
+                # 尝试独立获取 No 价格，失败时 fallback 到 1 - yes
+                if no_token:
+                    no_price = client.get_token_price(no_token)
+                    if no_price is None:
+                        # Fallback: 使用 1 - yes_price（当 No token 订单簿为空时）
+                        logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
+                        no_price = round(1.0 - yes_price, 4) if yes_price is not None else None
+                else:
+                    no_price = None
 
                 # 跳过价格获取失败的市场
-                if yes_price is None or no_price is None:
+                if yes_price is None:
+                    continue
+                if no_price is None:
                     continue
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
                     continue

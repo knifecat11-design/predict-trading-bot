@@ -411,11 +411,25 @@ class OpinionAPIClient:
 
                     # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
                     yes_price = self.get_token_price(yes_token_id)
-                    no_price = self.get_token_price(no_token_id) if no_token_id else None
 
-                    # 如果任一价格获取失败，跳过此市场
-                    if yes_price is None or no_price is None:
-                        logger.debug(f"市场 {market_id} 价格获取不完整，跳过")
+                    # 尝试独立获取 No 价格，失败时 fallback 到 1 - yes
+                    if no_token_id:
+                        no_price = self.get_token_price(no_token_id)
+                        if no_price is None:
+                            # Fallback: 使用 1 - yes_price（当 No token 订单簿为空时）
+                            logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
+                            no_price = round(1.0 - yes_price, 4) if yes_price is not None else None
+                    else:
+                        no_price = None
+
+                    # 如果 Yes 价格也失败，跳过此市场
+                    if yes_price is None:
+                        logger.debug(f"市场 {market_id} Yes 价格获取失败，跳过")
+                        continue
+
+                    # 如果 No 价格仍然为 None（没有 no_token_id 且 fallback 也失败），跳过
+                    if no_price is None:
+                        logger.debug(f"市场 {market_id} No 价格不可用，跳过")
                         continue
 
                     yes_price = round(yes_price, 4)
