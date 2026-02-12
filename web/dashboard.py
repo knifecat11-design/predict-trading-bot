@@ -91,131 +91,48 @@ def load_config():
 
 
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets with CLOB orderbook prices (not mid prices)"""
+    """Fetch Polymarket markets using outcomePrices (correctly formatted)"""
     try:
         from src.polymarket_api import PolymarketClient
-        from src.polymarket_clob_client import PolymarketCLOBClient
-
         poly_client = PolymarketClient(config)
         # 获取所有标签的市场（覆盖全站）
         markets = poly_client.get_all_tags_markets(limit_per_tag=200)
 
         parsed = []
-        # 优化：只对前 50 个市场获取 CLOB 订单簿，避免太多 HTTP 请求
-        max_detailed_fetch = 50
-
-        for idx, m in enumerate(markets[:3000]):
+        for m in markets[:3000]:
             try:
                 condition_id = m.get('conditionId', m.get('condition_id', ''))
                 if not condition_id:
                     continue
 
-                # 获取 CLOB token IDs
-                clob_token_ids_str = m.get('clobTokenIds')
-                if not clob_token_ids_str:
-                    # 如果没有 token IDs，回退到 outcomePrices（中间价）
-                    outcome_str = m.get('outcomePrices', '[]')
-                    if isinstance(outcome_str, str):
-                        prices = json.loads(outcome_str)
-                    else:
-                        prices = outcome_str
-                    if len(prices) < 2:
-                        continue
-                    yes_ask = float(prices[0])
-                    no_ask = float(prices[1])
-                    yes_bid = yes_ask  # 中间价作为 bid/ask 的估算
-                    no_bid = no_ask
+                # 使用 outcomePrices（Gamma API 返回的格式化价格）
+                outcome_str = m.get('outcomePrices', '[]')
+                if isinstance(outcome_str, str):
+                    prices = json.loads(outcome_str)
                 else:
-                    # 使用 CLOB 订单簿获取真实可成交价格
-                    if isinstance(clob_token_ids_str, str):
-                        token_ids = json.loads(clob_token_ids_str)
-                    else:
-                        token_ids = clob_token_ids_str
-
-                    if len(token_ids) < 2:
-                        continue
-
-                    yes_token_id = token_ids[0]
-                    no_token_id = token_ids[1]
-
-                    # 对前 N 个市场，获取完整订单簿（bid + ask）
-                    # 对其他市场，只使用 outcomePrices（中间价）
-                    if idx < max_detailed_fetch:
-                        import asyncio
-                        try:
-                            async def get_orderbooks():
-                                async with PolymarketCLOBClient() as clob_client:
-                                    yes_book, no_book = await asyncio.gather(
-                                        clob_client.get_orderbook(yes_token_id),
-                                        clob_client.get_orderbook(no_token_id),
-                                        return_exceptions=True
-                                    )
-
-                                    # 处理异常
-                                    if isinstance(yes_book, Exception):
-                                        yes_book = None
-                                    if isinstance(no_book, Exception):
-                                        no_book = None
-
-                                    return yes_book, no_book
-
-                            yes_book, no_book = asyncio.run(get_orderbooks())
-
-                            # 解析 Yes 订单簿
-                            if yes_book and yes_book.get('asks'):
-                                yes_ask = float(yes_book['asks'][0]['price'])
-                                yes_bid = float(yes_book.get('bids', [{}])[0].get('price', 0)) if yes_book.get('bids') else 0
-                            else:
-                                # 回退到 outcomePrices
-                                outcome_str = m.get('outcomePrices', '[]')
-                                prices = json.loads(outcome_str) if isinstance(outcome_str, str) else outcome_str
-                                yes_ask = float(prices[0]) if len(prices) > 0 else 0.5
-                                yes_bid = yes_ask
-
-                            # 解析 No 订单簿
-                            if no_book and no_book.get('asks'):
-                                no_ask = float(no_book['asks'][0]['price'])
-                                no_bid = float(no_book.get('bids', [{}])[0].get('price', 0)) if no_book.get('bids') else 0
-                            else:
-                                # 回退到 outcomePrices
-                                outcome_str = m.get('outcomePrices', '[]')
-                                prices = json.loads(outcome_str) if isinstance(outcome_str, str) else outcome_str
-                                no_ask = float(prices[1]) if len(prices) > 1 else 0.5
-                                no_bid = no_ask
-
-                        except Exception as e:
-                            logger.debug(f"获取 CLOB 订单簿失败: {e}")
-                            # 回退到 outcomePrices
-                            outcome_str = m.get('outcomePrices', '[]')
-                            prices = json.loads(outcome_str) if isinstance(outcome_str, str) else outcome_str
-                            yes_ask = float(prices[0]) if len(prices) > 0 else 0.5
-                            no_ask = float(prices[1]) if len(prices) > 1 else 0.5
-                            yes_bid = yes_ask
-                            no_bid = no_ask
-                    else:
-                        # 对于后续市场，使用 outcomePrices（中间价）
-                        outcome_str = m.get('outcomePrices', '[]')
-                        if isinstance(outcome_str, str):
-                            prices = json.loads(outcome_str)
-                        else:
-                            prices = outcome_str
-                        if len(prices) < 2:
-                            continue
-                        yes_ask = float(prices[0])
-                        no_ask = float(prices[1])
-                        yes_bid = yes_ask
-                        no_bid = no_ask
-
-                if yes_ask <= 0 or no_ask <= 0 or yes_ask >= 1 or no_ask >= 1:
+                    prices = outcome_str
+                if len(prices) < 2:
                     continue
+
+                # outcomePrices[0] = Yes 价格, outcomePrices[1] = No 价格
+                yes_price = float(prices[0])
+                no_price = float(prices[1])
+
+                # 验证价格有效性
+                if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
+                    continue
+
+                # 验证 Yes + No 接近 1.0（允许一些误差）
+                combined = yes_price + no_price
+                if combined > 1.1 or combined < 0.9:
+                    logger.debug(f"市场 {condition_id} 价格异常: yes={yes_price}, no={no_price}, combined={combined}")
+                    # 不跳过，但记录警告
 
                 parsed.append({
                     'id': condition_id,
                     'title': f"<a href='https://polymarket.com/event/{condition_id}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
-                    'yes': round(yes_ask, 4),  # 存储的是 ask（买入价）
-                    'no': round(no_ask, 4),    # 存储的是 ask（买入价）
-                    'yes_bid': round(yes_bid, 4),  # 存储用于反向套利
-                    'no_bid': round(no_bid, 4),    # 存储用于反向套利
+                    'yes': round(yes_price, 4),
+                    'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'polymarket',
@@ -228,7 +145,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets with CLOB orderbook prices")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets using outcomePrices")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
