@@ -99,8 +99,30 @@ def strip_html(html_text):
     return re.sub(r'<[^>]+>', '', html_text).strip()
 
 
-def platform_link_html(platform_name):
-    """Generate colored platform link HTML"""
+def slugify(text):
+    """Convert text to URL-friendly slug format"""
+    import re
+    # Convert to lowercase
+    text = text.lower()
+    # Remove dollar signs and commas (keep digits together: $1,800 -> 1800)
+    text = text.replace('$', '').replace(',', '')
+    # Replace special chars with spaces (except digits, letters, hyphens)
+    text = re.sub(r'[^\w\s-]', ' ', text)
+    # Replace spaces/newlines/underscores with hyphens
+    text = re.sub(r'[\s_]+', '-', text)
+    # Remove trailing/leading hyphens and multiple hyphens
+    text = re.sub(r'-+', '-', text)
+    text = text.strip('-')
+    return text
+
+
+def platform_link_html(platform_name, market_url=None):
+    """Generate colored platform link HTML
+
+    Args:
+        platform_name: Platform name (Polymarket, Opinion, Predict)
+        market_url: Optional specific market URL (overrides default)
+    """
     platform_colors = {
         'Polymarket': '#03a9f4',
         'Opinion': '#d29922',
@@ -116,7 +138,8 @@ def platform_link_html(platform_name):
         'Predict.fun': 'https://predict.fun',
     }
     color = platform_colors.get(platform_name, '#888')
-    url = platform_urls.get(platform_name, '#')
+    # Use market_url if provided, otherwise use platform home
+    url = market_url if market_url else platform_urls.get(platform_name, '#')
     return f"<a href='{url}' target='_blank' style='color:{color};font-weight:600;text-decoration:none'>{platform_name}</a>"
 
 
@@ -178,6 +201,7 @@ def fetch_polymarket_data(config):
                 parsed.append({
                     'id': condition_id,
                     'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'url': f"https://polymarket.com/event/{event_slug}",  # Add URL field
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
@@ -286,7 +310,8 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': title[:80],  # 累文本，不带超链接
+                    'title': title[:80],  # 纯文本，不带超链接
+                    'url': f"https://opinion.trade/markets/{market_id}",  # Add URL field
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'amount': yes_shares,  # 订单簿可买份额
@@ -344,9 +369,12 @@ def fetch_predict_data(config):
                 yes_price = (full_ob['yes_bid'] + full_ob['yes_ask']) / 2
                 no_price = (full_ob['no_bid'] + full_ob['no_ask']) / 2
 
+                question_text = (m.get('question') or m.get('title', ''))
+                market_slug = slugify(question_text)
                 parsed.append({
                     'id': market_id,
-                    'title': f"<a href='https://predict.fun/event/{market_id}' target='_blank' style='color:#9c27b0;font-weight:600'>{(m.get('question') or m.get('title', ''))[:80]}</a>",
+                    'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
+                    'url': f"https://predict.fun/market/{market_slug}",  # Add URL field with slug
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume', 0) or 0),
@@ -449,8 +477,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             if arb1 >= threshold:
                 opportunities.append({
                     'market': strip_html(ma['title']),  # Strip HTML, plain text
-                    'platform_a': platform_link_html(platform_a_name),  # Colored link
-                    'platform_b': platform_link_html(platform_b_name),  # Colored link
+                    'platform_a': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
+                    'platform_b': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
                     'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
                     'a_yes': round(ma['yes'] * 100, 2),
                     'a_no': round(ma['no'] * 100, 2),
@@ -466,8 +494,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             if arb2 >= threshold:
                 opportunities.append({
                     'market': strip_html(mb['title']),  # Strip HTML, plain text
-                    'platform_a': platform_link_html(platform_b_name),  # Colored link
-                    'platform_b': platform_link_html(platform_a_name),  # Colored link
+                    'platform_a': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
+                    'platform_b': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
                     'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
                     'a_yes': round(mb['yes'] * 100, 2),
                     'a_no': round(mb['no'] * 100, 2),
