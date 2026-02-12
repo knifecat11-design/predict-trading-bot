@@ -147,7 +147,7 @@ def fetch_polymarket_data(config):
 
                 parsed.append({
                     'id': condition_id,
-                    'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#fbc02d;font-weight:600'>{m.get('question', '')[:80]}</a>",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
@@ -248,7 +248,7 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': title[:80],
+                    'title': f"<a href='https://opinion.trade/event/{market_id}' target='_blank' style='color:#fbc02d;font-weight:600'>{title[:80]}</a>",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
