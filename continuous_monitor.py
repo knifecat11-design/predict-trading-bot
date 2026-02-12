@@ -332,11 +332,22 @@ def parse_end_date(date_str):
 
 
 def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2):
-    """Find cross-platform arbitrage opportunities"""
+    """Find cross-platform arbitrage opportunities (使用统一匹配模块）"""
+    from src.market_matcher import MarketMatcher
+
     results = []
 
-    for ma in markets_a:
-        ka = extract_keywords(ma['title'])
+    # 使用统一匹配器
+    matcher = MarketMatcher({})
+    matched_pairs = matcher.match_markets_cross_platform(
+        markets_a, markets_b,
+        title_field_a='title', title_field_b='title',
+        id_field_a='id', id_field_b='id',
+        platform_a=name_a.lower(), platform_b=name_b.lower(),
+        min_similarity=max(0.35, min_confidence),
+    )
+
+    for ma, mb, confidence in matched_pairs:
         if not ka:
             continue
         for mb in markets_b:
