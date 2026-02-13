@@ -224,6 +224,7 @@ def fetch_polymarket_data(config):
                     'url': f"https://polymarket.com/event/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
+                    'amount': None,  # Polymarket API 不提供订单簿大小
                     'volume': float(m.get('volume24hr', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'polymarket',
@@ -383,6 +384,7 @@ def fetch_predict_data(config):
                 # 只使用 best ask（最低卖价），不使用中间价
                 yes_price = full_ob['yes_ask']   # Yes 买入价
                 no_price = full_ob['no_ask']     # No 买入价
+                ask_size = full_ob.get('ask_size', 0)  # Yes 可买份额
 
                 question_text = (m.get('question') or m.get('title', ''))
                 market_slug = slugify(question_text)
@@ -392,6 +394,7 @@ def fetch_predict_data(config):
                     'url': f"https://predict.fun/market/{market_slug}",  # Add URL field with slug
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
+                    'amount': ask_size,  # Yes 订单簿可买份额
                     'volume': float(m.get('volume', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'predict',
@@ -491,6 +494,17 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         # Create unique market key for deduplication
         market_key_base = f"{platform_a_name}-{platform_b_name}-{ma.get('id','')}-{mb.get('id','')}"
 
+        # 计算最小可买份额（取两个市场的较小值）
+        amount_a = ma.get('amount')
+        amount_b = mb.get('amount')
+        min_amount = None
+        if amount_a is not None and amount_b is not None:
+            min_amount = min(amount_a, amount_b)
+        elif amount_a is not None:
+            min_amount = amount_a
+        elif amount_b is not None:
+            min_amount = amount_b
+
         if arb1 >= threshold:
             opportunities.append({
                 'market': strip_html(ma['title_with_html']),  # Strip HTML for market name
@@ -501,8 +515,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'a_no': round(ma['no'] * 100, 2),
                 'b_yes': round(mb['yes'] * 100, 2),
                 'b_no': round(mb['no'] * 100, 2),
-                'combined': round(combined1 * 100, 2),
                 'arbitrage': round(arb1, 2),
+                'amount': min_amount,  # 最小可买份额
                 'confidence': round(confidence, 2),
                 'timestamp': datetime.now().strftime('%H:%M:%S'),
                 'market_key': f"{market_key_base}-yes1_no2",
@@ -518,8 +532,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'a_no': round(mb['no'] * 100, 2),
                 'b_yes': round(ma['yes'] * 100, 2),
                 'b_no': round(ma['no'] * 100, 2),
-                'combined': round(combined2 * 100, 2),
                 'arbitrage': round(arb2, 2),
+                'amount': min_amount,  # 最小可买份额
                 'confidence': round(confidence, 2),
                 'timestamp': datetime.now().strftime('%H:%M:%S'),
                 'market_key': f"{market_key_base}-yes2_no1",
