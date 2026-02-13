@@ -428,7 +428,7 @@ class OpinionAPIClient:
         return None
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
-        """获取市场详细信息（改进版：独立获取 No 价格）"""
+        """获取市场详细信息（使用实际买入价，不使用计算值）"""
         try:
             markets = self.get_markets()
 
@@ -437,27 +437,24 @@ class OpinionAPIClient:
                     yes_token_id = market.get('yesTokenId', '')
                     no_token_id = market.get('noTokenId', '')
 
-                    # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
+                    # 独立获取 Yes 价格（实际买入价）
                     yes_price = self.get_token_price(yes_token_id)
 
-                    # 尝试独立获取 No 价格，失败时 fallback 到 1 - yes
+                    # 独立获取 No 价格（实际买入价，不使用 1-yes 计算）
+                    # 注意：1-yes_ask 对应卖单的 No，不是买单
+                    no_price = None
                     if no_token_id:
                         no_price = self.get_token_price(no_token_id)
-                        if no_price is None:
-                            # Fallback: 使用 1 - yes_price（当 No token 订单簿为空时）
-                            logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
-                            no_price = round(1.0 - yes_price, 4) if yes_price is not None else None
-                    else:
-                        no_price = None
 
-                    # 如果 Yes 价格也失败，跳过此市场
+                    # 如果 Yes 价格失败，跳过此市场
                     if yes_price is None:
                         logger.debug(f"市场 {market_id} Yes 价格获取失败，跳过")
                         continue
 
-                    # 如果 No 价格仍然为 None（没有 no_token_id 且 fallback 也失败），跳过
+                    # 如果 No 价格失败（订单簿为空），跳过此市场
+                    # 不使用 1-yes 计算，因为那对应卖单而非买单
                     if no_price is None:
-                        logger.debug(f"市场 {market_id} No 价格不可用，跳过")
+                        logger.debug(f"市场 {market_id} No 价格获取失败（订单簿为空），跳过")
                         continue
 
                     yes_price = round(yes_price, 4)

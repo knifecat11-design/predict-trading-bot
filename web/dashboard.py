@@ -202,17 +202,26 @@ def fetch_polymarket_data(config):
                     # Fallback: 使用 condition_id
                     event_slug = condition_id
 
-                # 使用 outcomePrices（中间价）而不是 bestAsk
-                # 原因：outcomePrices 保证 Yes + No = 100c，混合使用 bestAsk 和 outcomePrices[1] 会导致价格偏差
+                # 使用 bestAsk（实际买入价）而不是 outcomePrices（中间价）
+                # 原因：低流动性市场中间价无法成交，只监控可执行的买入价格
+                best_ask = m.get('bestAsk')
+                if best_ask is None or best_ask <= 0 or best_ask >= 1:
+                    # 如果没有 bestAsk，跳过这个市场
+                    continue
+                yes_price = float(best_ask)
+
+                # No 价格使用 outcomePrices 估算或设为默认值
+                # 注意：Polymarket 没有 No token，No 是通过 Yes 反向实现的
                 outcome_str = m.get('outcomePrices', '[]')
                 if isinstance(outcome_str, str):
                     prices = json.loads(outcome_str)
                 else:
                     prices = outcome_str
-                if len(prices) < 2:
-                    continue
-                yes_price = float(prices[0])
-                no_price = float(prices[1])
+                if len(prices) >= 2:
+                    no_price = float(prices[1])  # 使用中间价作为参考
+                else:
+                    # Fallback: 使用 1 - yes_price（仅用于参考）
+                    no_price = round(1.0 - yes_price, 4)
 
                 # 验证价格有效性
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
@@ -236,7 +245,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets using outcomePrices (mid prices)")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets using bestAsk (actual buy prices)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
@@ -295,9 +304,7 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 获取 Yes 订单簿
-                # Opinion 的 Yes/No 是独立 token，但我们可以用 1 - yes_ask 来估算配套的 No 价格
-                # 这样可以确保 Yes + No = 100c，便于跨平台比较
+                # 获取 Yes 订单簿（实际买入价）
                 yes_orderbook = client.get_order_book(yes_token)
                 if yes_orderbook is None or yes_orderbook.yes_ask is None:
                     continue
@@ -305,11 +312,19 @@ def fetch_opinion_data(config):
                 yes_price = yes_orderbook.yes_ask  # Yes 买入价
                 yes_shares = yes_orderbook.yes_ask_size  # 可买份额
 
-                # No 价格使用 1 - yes_ask 估算（配套价格）
-                no_price = round(1.0 - yes_price, 4)
-                no_shares = 0  # 估算的价格，没有实际订单簿大小
+                # 获取 No 订单簿（实际买入价，不是 1-yes_ask）
+                # 注意：1-yes_ask 对应的是卖单的 No，不是买单
+                no_orderbook = None
+                no_price = None
+                no_shares = 0
 
-                # 跳过无效价格
+                if no_token:
+                    no_orderbook = client.get_order_book(no_token)
+                    if no_orderbook and no_orderbook.yes_ask is not None:
+                        no_price = no_orderbook.yes_ask  # No 的实际买入价
+                        no_shares = no_orderbook.yes_ask_size
+
+                # 跳过无效价格（No 价格必须能实际获取到）
                 if no_price is None:
                     continue
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
@@ -337,7 +352,7 @@ def fetch_opinion_data(config):
             if len(parsed) >= 200:
                 break
 
-        logger.info(f"Opinion: fetched {len(parsed)} markets")
+        logger.info(f"Opinion: fetched {len(parsed)} markets using actual orderbook best ask prices")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
@@ -439,7 +454,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         title_field_a='title_plain', title_field_b='title_plain',  # 使用纯文本
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
-        min_similarity=0.70,  # 更高阈值，只匹配高度相似的市场
+        min_similarity=0.50,  # 使用实际买入价后，可以降低阈值（之前用中间价导致假套利）
     )
 
     logger.info(f"[{platform_a_name} vs {platform_b_name}] MarketMatcher 找到 {len(matched_pairs)} 对匹配")
