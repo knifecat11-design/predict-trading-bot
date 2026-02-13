@@ -179,19 +179,31 @@ class PolymarketClient:
             所有市场（去重后按24h交易量排序）
         """
         all_markets = []
-        seen_ids = set()
+        seen_ids = set()  # 跨标签去重（防止同一市场多次添加）
 
         for tag in self.TAGS:
             try:
                 markets = self.get_markets(tag=tag, limit=limit_per_tag, active_only=True)
 
+                # 先对当前标签内的市场去重（防止API在同一标签内返回重复）
+                tag_seen = set()
+                tag_markets = []
                 for m in markets:
+                    condition_id = m.get('conditionId') or m.get('condition_id')
+                    if condition_id and condition_id not in tag_seen:
+                        tag_seen.add(condition_id)
+                        tag_markets.append(m)
+
+                # 再跨标签去重（只添加未在其他标签出现过的市场）
+                new_count = 0
+                for m in tag_markets:
                     condition_id = m.get('conditionId') or m.get('condition_id')
                     if condition_id and condition_id not in seen_ids:
                         seen_ids.add(condition_id)
                         all_markets.append(m)
+                        new_count += 1
 
-                logger.info(f"Tag '{tag}': {len(markets)} 个市场")
+                logger.info(f"Tag '{tag}': {len(tag_markets)} 个市场，添加 {new_count} 个新市场")
 
             except Exception as e:
                 logger.warning(f"获取标签 '{tag}' 失败: {e}")
