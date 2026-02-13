@@ -285,8 +285,9 @@ def fetch_opinion_data(config):
         logger.info(f"Opinion: 获取到 {len(raw_markets)} 个原始市场，开始解析价格...")
 
         parsed = []
-        # 优化：只对前 50 个高交易量市场获取独立价格，避免阻塞太久
-        max_detailed_fetch = 50
+        # 优化：对前 200 个高交易量市场获取独立价格
+        # Opinion API 每个订单簿请求约0.5秒，200个约需100秒
+        max_detailed_fetch = 200
 
         for idx, m in enumerate(raw_markets):
             try:
@@ -340,7 +341,7 @@ def fetch_opinion_data(config):
                 logger.warning(f"解析 Opinion 市场时出现意外错误: {e}")
                 continue
 
-            if len(parsed) >= 200:
+            if len(parsed) >= 300:
                 break
 
         logger.info(f"Opinion: fetched {len(parsed)} markets using actual orderbook best ask prices")
@@ -362,7 +363,7 @@ def fetch_predict_data(config):
     try:
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
-        raw_markets = client.get_markets(status='open', limit=50)
+        raw_markets = client.get_markets(status='open', limit=100)
 
         if not raw_markets:
             return 'error', []
