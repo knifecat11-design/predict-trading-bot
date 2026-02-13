@@ -69,6 +69,7 @@ class OpinionAPIClient:
         # 初始化客户端
         self._client = None
         self._use_sdk = False
+        self.session = None  # 确保 session 始终存在（修复 Issue 4）
 
         if not self.api_key:
             logger.warning("未设置 OPINION_API_KEY")
@@ -242,7 +243,14 @@ class OpinionAPIClient:
                     batch = result.get('list', []) if isinstance(result, dict) else []
                     if not batch:
                         break
-                    all_markets.extend(batch)
+
+                    # 去重：使用 marketId 作为唯一标识
+                    seen_ids = {m.get('marketId') for m in all_markets}
+                    for m in batch:
+                        if m.get('marketId') not in seen_ids:
+                            all_markets.append(m)
+                            seen_ids.add(m.get('marketId'))
+
                     if len(batch) < page_size:
                         break
                 elif response.status_code == 401:
@@ -293,18 +301,13 @@ class OpinionAPIClient:
 
         result = response.result
         asks = getattr(result, 'asks', []) or []
-        bids = getattr(result, 'bids', []) or []
 
-        # 优先使用 best ask（最低卖价）
+        # 只使用 best ask（最低卖价），不使用计算值
         if asks:
             return round(float(asks[0].price), 4)
 
-        # Fallback: 如果没有 asks，使用最佳 bid 估算
-        if bids:
-            best_bid = float(bids[0].price)
-            logger.debug(f"SDK: Token {token_id} 无 asks，使用 bid 估算")
-            return round(1.0 - best_bid, 4)
-
+        # 如果没有 asks，返回 None（不使用 1-bid 估算）
+        logger.debug(f"SDK: Token {token_id} 无 asks，跳过")
         return None
 
     def _get_price_http(self, token_id: str) -> Optional[float]:
@@ -323,18 +326,12 @@ class OpinionAPIClient:
             if not isinstance(result, dict):
                 result = {}
             asks = result.get('asks', [])
-            # 返回 best ask（最低卖价）用于买入
+            # 只返回 best ask（最低卖价），不使用计算值
             if asks:
                 return round(float(asks[0]['price']), 4)
 
-            # Fallback: 如果没有 asks，使用最佳 bid 估算（流动性低时）
-            bids = result.get('bids', [])
-            if bids:
-                best_bid = float(bids[0]['price'])
-                logger.debug(f"Token {token_id} 无 asks，使用 bid 估算: {best_bid}")
-                return round(1.0 - best_bid, 4)
-
-            logger.debug(f"Token {token_id} 订单簿为空（无 bids 也无 asks）")
+            # 如果没有 asks，返回 None（不使用 1-bid 估算）
+            logger.debug(f"Token {token_id} 无 asks，跳过")
             return None
 
     def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
@@ -421,7 +418,7 @@ class OpinionAPIClient:
         return None
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
-        """获取市场详细信息（改进版：独立获取 No 价格）"""
+        """获取市场详细信息（使用实际买入价，不使用计算值）"""
         try:
             markets = self.get_markets()
 
@@ -430,27 +427,24 @@ class OpinionAPIClient:
                     yes_token_id = market.get('yesTokenId', '')
                     no_token_id = market.get('noTokenId', '')
 
-                    # 独立获取 Yes 和 No 价格（不使用 1-yes 推导）
+                    # 独立获取 Yes 价格（实际买入价）
                     yes_price = self.get_token_price(yes_token_id)
 
-                    # 尝试独立获取 No 价格，失败时 fallback 到 1 - yes
+                    # 独立获取 No 价格（实际买入价，不使用 1-yes 计算）
+                    # 注意：1-yes_ask 对应卖单的 No，不是买单
+                    no_price = None
                     if no_token_id:
                         no_price = self.get_token_price(no_token_id)
-                        if no_price is None:
-                            # Fallback: 使用 1 - yes_price（当 No token 订单簿为空时）
-                            logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
-                            no_price = round(1.0 - yes_price, 4) if yes_price is not None else None
-                    else:
-                        no_price = None
 
-                    # 如果 Yes 价格也失败，跳过此市场
+                    # 如果 Yes 价格失败，跳过此市场
                     if yes_price is None:
                         logger.debug(f"市场 {market_id} Yes 价格获取失败，跳过")
                         continue
 
-                    # 如果 No 价格仍然为 None（没有 no_token_id 且 fallback 也失败），跳过
+                    # 如果 No 价格失败（订单簿为空），跳过此市场
+                    # 不使用 1-yes 计算，因为那对应卖单而非买单
                     if no_price is None:
-                        logger.debug(f"市场 {market_id} No 价格不可用，跳过")
+                        logger.debug(f"市场 {market_id} No 价格获取失败（订单簿为空），跳过")
                         continue
 
                     yes_price = round(yes_price, 4)

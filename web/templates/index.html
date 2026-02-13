@@ -187,6 +187,7 @@
     <div class="header">
         <h1>Prediction Market <span>Arbitrage Monitor</span></h1>
         <div class="header-info">
+            <div>Platforms: <span id="platforms-list"></span></div>
             <div>Scans: <span class="val" id="scan-count">0</span></div>
             <div>Threshold: <span class="val" id="threshold">2.0</span>%</div>
             <div>Updated: <span class="val" id="last-scan">-</span></div>
@@ -240,7 +241,7 @@
                     <th>Platform B</th>
                     <th>Combined</th>
                     <th>Arbitrage</th>
-                    <th>Confidence</th>
+                    <th>Amount</th>
                     <th>Time</th>
                 </tr>
             </thead>
@@ -276,9 +277,29 @@
         };
 
         function platformTag(name) {
+            // Return full platform name for platforms list (no underscores)
+            const platformNames = {
+                'polymarket': 'Polymarket',
+                'opinion': 'Opinion',
+                'predict': 'Predict'
+            };
+            return platformNames[name.toLowerCase()] || name;
+        }
+
+        function platformTagShort(name) {
+            // For arbitrage table, return short name with underscore
             const cls = name.toLowerCase().includes('poly') ? 'poly' :
                         name.toLowerCase().includes('opinion') ? 'opinion' : 'predict';
             return `<span class="tag ${cls}">${name}</span>`;
+        }
+
+        function platformsList() {
+            // Show platforms list in header with colors
+            return `
+                <span style="color:#03a9f4;font-weight:600;margin-right:16px">poly</span>
+                <span style="color:#fbc02d;font-weight:600;margin-right:16px">op</span>
+                <span style="color:#9c27b0;font-weight:600">pre</span>
+            `;
         }
 
         function arbClass(pct) {
@@ -305,49 +326,6 @@
 
         function update() {
             fetch('/api/state')
-                .then(r => r.json())
-                .then(data => {
-                    // Header
-                    document.getElementById('scan-count').textContent = data.scan_count || 0;
-                    document.getElementById('threshold').textContent = data.threshold || 2.0;
-                    document.getElementById('last-scan').textContent = data.last_scan || '-';
-
-                    // Platforms
-                    ['polymarket', 'opinion', 'predict'].forEach(p => {
-                        const info = data.platforms[p] || {};
-                        const dot = document.getElementById(`dot-${p}`);
-                        dot.className = `status-dot ${info.status || 'unknown'}`;
-                        document.getElementById(`count-${p}`).textContent = info.count || 0;
-                        document.getElementById(`status-${p}`).textContent = statusLabels[info.status] || info.status;
-                        renderMarkets(`list-${p}`, info.markets);
-                    });
-
-                    // Arbitrage
-                    const tbody = document.getElementById('arb-body');
-                    const arbs = data.arbitrage || [];
-                    if (arbs.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
-                    } else {
-                        tbody.innerHTML = arbs.map(a => `
-                            <tr>
-                                <td>${a.market}</td>
-                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
-                                <td class="direction">${a.direction}</td>
-                                <td>Y:${a.a_yes}c N:${a.a_no}c</td>
-                                <td>Y:${a.b_yes}c N:${a.b_no}c</td>
-                                <td>${a.combined}c</td>
-                                <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${(a.confidence * 100).toFixed(0)}%</td>
-                                <td>${a.timestamp}</td>
-                            </tr>
-                        `).join('');
-                    }
-                })
-                .catch(e => console.error('Update error:', e));
-        }
-
-        function update() {
-            fetch('/api/state')
                 .then(r => {
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.json();
@@ -365,6 +343,7 @@
                     }
 
                     // Header
+                    document.getElementById('platforms-list').innerHTML = platformsList();
                     document.getElementById('scan-count').textContent = data.scan_count || 0;
                     document.getElementById('threshold').textContent = (data.threshold || 2.0).toFixed(1);
                     document.getElementById('last-scan').textContent = data.last_scan || '-';
@@ -388,13 +367,13 @@
                         tbody.innerHTML = arbs.map(a => `
                             <tr>
                                 <td>${a.market}</td>
-                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
+                                <td>${a.platform_a} ${a.platform_b}</td>
                                 <td class="direction">${a.direction}</td>
                                 <td>Y:${a.a_yes}c N:${a.a_no}c</td>
                                 <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                                 <td>${a.combined}c</td>
                                 <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${(a.confidence * 100).toFixed(0)}%</td>
+                                <td>${a.confidence ? a.confidence.toFixed(2) : '0.00'}</td>
                                 <td>${a.timestamp}</td>
                             </tr>
                         `).join('');

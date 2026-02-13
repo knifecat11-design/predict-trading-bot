@@ -7,7 +7,7 @@ Polymarket Gamma API: https://gamma-api.polymarket.com
 import time
 import logging
 from typing import Dict, List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -22,16 +22,20 @@ class PolymarketMarket:
     volume_24h: float
     end_date: Optional[str] = None
     condition_id: str = ""
-    tags: List[str] = None
+    tags: Optional[List[str]] = None
 
 
 @dataclass
 class PolymarketOrderBook:
-    """Polymarket 订单簿"""
+    """Polymarket 订单簿（包含 Yes 和 No 价格）"""
     yes_bid: float
     yes_ask: float
     yes_bid_size: float = 100.0
     yes_ask_size: float = 100.0
+    no_bid: float = 0.0
+    no_ask: float = 0.0
+    no_bid_size: float = 100.0
+    no_ask_size: float = 100.0
 
 
 class PolymarketClient:
@@ -281,53 +285,51 @@ class PolymarketClient:
     def get_order_book(self, condition_id: str) -> Optional[PolymarketOrderBook]:
         """
         获取订单簿数据（用于套利监控）
+        包含 Yes 和 No 的 best ask/bid 价格
+
+        注意：Polymarket API 只返回 Yes 的 bestBid/bestAsk
+        No 价格使用 1 - yes_ask 计算（基于 Yes 实际价格）
 
         Args:
             condition_id: 市场 ID
 
         Returns:
-            PolymarketOrderBook 或 None
+            PolymarketOrderBook (包含 yes_bid, yes_ask, no_bid, no_ask) 或 None
         """
         try:
             import json
 
-            # 从市场列表中获取最新数据（包含 bestBid/bestAsk）
+            # 从市场列表中获取最新数据
             markets = self.get_markets(limit=1000, active_only=True)
 
             for market in markets:
                 cid = market.get('conditionId') or market.get('condition_id')
 
                 if cid == condition_id:
-                    # 优先使用 bestBid/bestAsk（真实订单簿价格）
-                    best_bid = market.get('bestBid')
-                    best_ask = market.get('bestAsk')
+                    # Yes 价格（bestBid/bestAsk）
+                    yes_bid = market.get('bestBid')
+                    yes_ask = market.get('bestAsk')
 
-                    if best_bid is not None and best_ask is not None:
-                        return PolymarketOrderBook(
-                            yes_bid=round(float(best_bid), 4),
-                            yes_ask=round(float(best_ask), 4),
-                            yes_bid_size=100.0,
-                            yes_ask_size=100.0
-                        )
+                    # 必须有 Yes 的 ask 价格
+                    if yes_ask is None or yes_ask <= 0 or yes_ask >= 1:
+                        return None
 
-                    # 回退：从 outcomePrices 计算（添加价差）
-                    outcome_prices_str = market.get('outcomePrices', '[]')
-                    try:
-                        outcome_prices = json.loads(outcome_prices_str)
-                        if outcome_prices and len(outcome_prices) >= 2:
-                            yes_price = float(outcome_prices[0])
-                            # 添加合理的买卖价差（通常 1-2%）
-                            spread = max(0.01, yes_price * 0.02)
-                            return PolymarketOrderBook(
-                                yes_bid=round(max(0.01, yes_price - spread / 2), 4),
-                                yes_ask=round(min(0.99, yes_price + spread / 2), 4),
-                                yes_bid_size=100.0,
-                                yes_ask_size=100.0
-                            )
-                    except (ValueError, TypeError, json.JSONDecodeError) as e:
-                        logger.debug(f"解析 outcomePrices 失败: {e}")
-                    except Exception as e:
-                        logger.warning(f"解析 outcomePrices 时出现意外错误: {e}")
+                    # No 价格：使用 1 - yes_ask 计算
+                    # 注意：Polymarket 没有独立的 No 订单簿端点
+                    # 这是从 Yes best ask 推导的 No 价格
+                    no_ask = round(1.0 - yes_ask, 4)
+                    no_bid = round(1.0 - float(yes_bid), 4) if yes_bid is not None else None
+
+                    return PolymarketOrderBook(
+                        yes_bid=round(float(yes_bid), 4) if yes_bid is not None else 0.0,
+                        yes_ask=round(float(yes_ask), 4),
+                        yes_bid_size=100.0,
+                        yes_ask_size=100.0,
+                        no_bid=no_bid if no_bid is not None else 0.0,
+                        no_ask=no_ask,
+                        no_bid_size=100.0,
+                        no_ask_size=100.0
+                    )
 
             # 如果找不到市场，返回 None
             logger.warning(f"未找到市场 {condition_id}")

@@ -1,39 +1,85 @@
-# 🎲 Polymarket ↔ Predict.fun 套利监控系统
+# 🎲 跨平台预测市场套利监控系统
 
-[![Railway](https://img.shields.io/badge/deployment-Railway-0e0c2e.svg)](https://railway.app/)
+![Railway](https://img.shields.io/badge/deployment-Railway-0e0c2e.svg)](https://railway.app/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> 跨平台预测市场套利机会实时监控工具 | 实时监控 Polymarket 和 Predict.fun 的价格差异，通过 Telegram 即时推送套利机会。
+> 实时监控 Polymarket、Opinion.trade、Predict.fun 三个预测市场平台的价格差异，通过 Telegram 和 Web Dashboard 即时推送套利机会。
 
-## ✨ 核心特性
+---
 
-### 🔍 智能套利监控
-- **实时监控**: 每 10 秒扫描一次市场价格
-- **双向检测**: Polymarket ↔ Predict.fun 双向套利机会
-- **智能通知**: Telegram 即时推送，避免重复提醒（5分钟冷却）
-- **灵活配置**: 自定义最小套利阈值（默认 2%）
+## ✨ 核心功能
+
+### 🔍 三平台套利监控
+- **实时价格追踪**: 每 30 秒扫描所有平台市场
+- **智能市场匹配**: 使用统一匹配器（两层策略 + 硬约束）
+- **双向套利检测**: 自动识别跨平台套利机会（A买Yes + B买No / A买No + B买Yes）
+- **Telegram 推送**: 即时推送，避免重复提醒
 
 ### 📊 支持的数据源
 
-| 平台 | API 状态 | 说明 |
-|------|---------|------|
-| **Polymarket** | ✅ 公开 API | 无需密钥，直接访问 [Gamma API](https://docs.polymarket.com/developers/gamma-markets-api/overview) |
-| **Predict.fun** | 🔑 需申请 | 通过 [Discord](https://dev.predict.fun/) 申请 API 密钥 |
+| 平台 | API 状态 | 市场数量 | 说明 |
+|---------|----------|----------|------|
+| **Polymarket** | ✅ 公开 API | ~3000 | 无需密钥，Gamma API |
+| **Opinion.trade** | ✅ 需配置 | ~500 | BNB Chain，需 API Key |
+| **Predict.fun** | ⚠️ 待激活 | ~50 | 需申请活跃市场权限 |
 
 ### 🎯 套利策略
 
-**核心原理**: 在预测市场中，`Yes价格 + No价格 = 100%`
+**核心原理**: 在预测市场中，同一市场的 `Yes价格 + No价格 = 100%`
 
-当 `Yes + No < 100%` 时，同时买入 Yes 和 No 可以锁定利润。
+当跨平台时，如果 `Yes + No < 100%`，则存在套利机会。
 
 **示例**:
 ```
-Polymarket Yes价格: 40%
-Predict.fun No价格:  50%
-组合价格: 90% < 100%
+Polymarket Yes价格: 40¢
+Opinion.trade No价格: 50¢
+组合价格: 90¢ < 100¢
 套利空间: 10%
 ```
+
+---
+
+## 🏗️ 技术架构
+
+### 统一市场匹配模块 (`src/market_matcher.py`)
+
+参考 dr-manhattan 架构，实现两层匹配策略：
+
+#### 层级 1: 手动映射（100% 准确）
+```python
+MANUAL_MAPPINGS = [
+    ManualMapping(
+        slug="trump-president-2028",
+        description="Will Trump be president in 2028?",
+        outcomes={
+            "yes": {
+                "polymarket": OutcomeRef("polymarket", "condition-id-xxx", "Yes"),
+                "opinion": OutcomeRef("opinion", "42", "Yes"),
+                "predict": OutcomeRef("predict", "market-id-yyy", "Yes"),
+            }
+        }
+    ),
+]
+```
+
+#### 层级 2: 自动匹配（加权多因子评分）
+- **硬约束**: 年份/价格必须匹配（防止 "Trump 2024" vs "Trump 2028"）
+- **加权评分**: 实体 0.4 + 数字 0.3 + 词汇 0.2 + 字符串 0.1
+- **一对一匹配**: 防止重复匹配
+
+### 关键词提取器
+```python
+class KeywordExtractor:
+    PATTERNS = {
+        'year': r'\b(20[12][0-9]|20[3-9][0-9])\b',
+        'price': r'\$[\d,]+(?:\.\d+)?|\d+\s*(?:dollars?|USD|million|billion)',
+        'trump': r'\bTrump\b',
+        'crypto': r'\b(?:Bitcoin|BTC|Ethereum|ETH|crypto)\b',
+    }
+```
+
+---
 
 ## 🚀 快速开始
 
@@ -41,419 +87,170 @@ Predict.fun No价格:  50%
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/knifecat11-design/predict-trading-bot)
 
-1. 点击上方按钮
-2. 在 Railway 设置环境变量：
+1. 点击上方 **"Deploy on Railway"** 按钮
+2. 配置环境变量：
    ```bash
-   TELEGRAM_BOT_TOKEN=你的Bot_Token
-   TELEGRAM_CHAT_ID=你的Chat_ID
+   OPINION_API_KEY=your_opinion_api_key
+   TELEGRAM_BOT_TOKEN=your_bot_token
+   TELEGRAM_CHAT_ID=your_chat_id
+   MIN_ARBITRAGE_THRESHOLD=2.0
    ```
 3. 部署完成！自动开始监控
 
-### 方式 2: 本地运行
+### 方式 2: 本地运行（开发调试）
 
 #### 1. 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 2. 配置 Telegram
+#### 2. 配置环境变量
 
-**获取 Bot Token:**
-1. Telegram 搜索 `@BotFather`
-2. 发送 `/newbot` 创建机器人
-3. 复制 Token（格式：`123456:ABC-DEF1234...`）
-
-**获取 Chat ID:**
-1. Telegram 搜索 `@userinfobot`
-2. 发送任意消息获取 ID
-
-#### 3. 运行程序
+创建 `.env` 文件：
 ```bash
-# 使用混合模式（推荐：Polymarket 真实 + Predict.fun 模拟）
-python arbitrage_main.py
-
-# 或使用启动包装器（更好的错误处理）
-python start_arbitrage.py
+OPINION_API_KEY=your_opinion_api_key
+PREDICT_API_KEY=your_predict_api_key
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+MIN_ARBITRAGE_THRESHOLD=2.0
+SCAN_INTERVAL=30
 ```
 
-## ⚙️ 配置说明
+#### 3. 运行监控程序
+```bash
+# 后台监控
+python continuous_monitor.py
 
-### 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TELEGRAM_BOT_TOKEN` | 必填 | Telegram Bot Token |
-| `TELEGRAM_CHAT_ID` | 必填 | Telegram Chat ID |
-| `USE_HYBRID_MODE` | `true` | 混合模式（Polymarket 真实 + Predict.fun 模拟） |
-| `USE_REAL_API` | `false` | 完全真实模式（需要两个 API 密钥） |
-| `MIN_ARBITRAGE_THRESHOLD` | `2.0` | 最小套利阈值（%） |
-| `SCAN_INTERVAL` | `10` | 扫描间隔（秒） |
-| `COOLDOWN_MINUTES` | `5` | 通知冷却时间（分钟） |
-| `PREDICT_API_KEY` | 可选 | Predict.fun API 密钥 |
-
-### 运行模式对比
-
-| 模式 | 配置 | Polymarket | Predict.fun | 推荐场景 |
-|------|------|-----------|-------------|----------|
-| **混合模式** | 默认 | 真实 API | 模拟数据 | ✅ **立即可用** |
-| **真实模式** | `USE_REAL_API=true` | 真实 API | 真实 API | 需要 API 密钥 |
-| **模拟模式** | `USE_HYBRID_MODE=false` | 模拟数据 | 模拟数据 | 开发测试 |
-
-## 📱 Telegram 通知示例
-
+# Web Dashboard
+python web/dashboard.py
 ```
-━━━━━━━━━━━━━━━━━━━━━
-📊 市场名称: 2026年某事件会发生
 
-📈 利差: 10.00%
-💵 组合价格: 90.0%
+访问: http://localhost:5000
 
-🔄 套利方向: Polymarket 买Yes + Predict 买No
-
-━━━━━━━━━━━━━━━━━━━━━
-
-📍 Polymarket
-  操作: 买Yes
-  Yes价格: 40.0%
-  No价格: 60.0%
-
-📍 Predict.fun
-  操作: 买No
-  Yes价格: 50.0%
-  No价格: 50.0%
-
-━━━━━━━━━━━━━━━━━━━━━
-
-⏰ 时间: 2026-02-05 15:30:25
-⚡ 请尽快手动执行套利！
-```
+---
 
 ## 📁 项目结构
 
 ```
 predict-trading-bot/
-├── arbitrage_main.py       # 套利监控主程序
-├── start_arbitrage.py      # 启动包装器
-├── monitor.py              # 本地监控工具
-├── health_check.py         # 健康检查
-├── config.yaml             # 配置文件
-├── requirements.txt        # Python 依赖
-├── nixpacks.toml           # Railway 构建配置
-├── docs/                   # 文档目录
-│   ├── API申请指南.md
-│   └── RAILWAY_DEPLOY.md
+├── continuous_monitor.py      # 主监控循环（三平台套利 + TG推送）
+├── start_arbitrage.py        # Railway 启动入口
+├── config.yaml               # 配置文件
+├── requirements.txt          # Python 依赖
+├── railway.json             # Railway 部署配置
+│
+├── web/
+│   ├── dashboard.py         # Flask Web 仪表板
+│   └── templates/
+│       └── index.html      # 暗色主题前端
+│
+├── scripts/
+│   └── opinion_order.py     # Opinion CLOB 挂单工具
+│
 └── src/
+    ├── market_matcher.py    # 统一市场匹配模块 ✨
+    ├── polymarket_api.py   # Polymarket API 客户端（分页）
+    ├── opinion_api.py      # Opinion API 客户端（分页）
     ├── api_client.py       # Predict.fun API 客户端
-    ├── polymarket_api.py   # Polymarket API 客户端
-    ├── arbitrage_monitor.py# 套利监控逻辑
-    ├── notifier.py         # Telegram 通知
-    └── config_helper.py    # 配置辅助
+    ├── config_helper.py    # 配置加载（环境变量覆盖）
+    └── notifier.py        # Telegram 通知
 ```
 
-## 🔧 获取 API 密钥
+---
 
-### Polymarket（公开访问，无需密钥）
-- 文档: https://docs.polymarket.com/developers/gamma-markets-api/overview
-- 直接访问 `https://gamma-api.polymarket.com/markets`
+## 🔧 配置说明
 
-### Predict.fun（需要申请）
-1. 访问 https://dev.predict.fun/
-2. 加入 Discord 服务器
-3. 开启工单申请 API 访问权限
-4. 获得密钥后设置环境变量 `PREDICT_API_KEY`
+### 必需环境变量
 
-详见 [docs/API申请指南.md](docs/API申请指南.md)
+| 变量 | 说明 | 默认值 |
+|---------|------|---------|
+| `OPINION_API_KEY` | Opinion API 密钥 | - |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | - |
+| `TELEGRAM_CHAT_ID` | Telegram Chat ID | - |
+| `MIN_ARBITRAGE_THRESHOLD` | 最小套利阈值（%） | 2.0 |
+| `SCAN_INTERVAL` | 扫描间隔（秒） | 30 |
 
-## ⚠️ 风险提示
+### 配置文件示例
 
-- 套利机会转瞬即逝，需快速执行
-- 实际套利需考虑滑点、流动性、资金转移时间
-- 建议从小额开始测试
-- 确保两个平台都有足够流动性
-- 本工具仅提供监控和通知，不执行自动交易
+```yaml
+# API 配置
+opinion:
+  api_key: "your_opinion_api_key"
+  base_url: "https://proxy.opinion.trade:8443/openapi"
 
-## 🛠️ 本地监控工具
+api:
+  api_key: "your_predict_api_key"
+  base_url: "https://api.predict.fun"
 
-```bash
-# 查看运行统计
-python monitor.py stats
+# 套利配置
+arbitrage:
+  min_threshold: 2.0      # 最小套利阈值（%）
+  scan_interval: 30         # 扫描间隔（秒）
+  cooldown_minutes: 10       # 通知冷却时间（分钟）
 
-# 查看最新日志
-python monitor.py logs
-
-# 查看错误信息
-python monitor.py errors
+# 通知配置
+notification:
+  telegram:
+    enabled: true
+    chat_id: "your_telegram_chat_id"
 ```
 
-## 📚 相关文档
+---
 
-- [API 申请指南](docs/API申请指南.md)
-- [Railway 部署指南](docs/RAILWAY_DEPLOY.md)
+## 📝 部署日志
 
-## 🤝 贡献
+### 最近更新
 
-欢迎提交 Issue 和 Pull Request！
+- **2026-02-13**: 统一市场匹配模块重构（参考 dr-manhattan 架构）
+- **2026-02-13**: 修复 HTML 标签干扰匹配问题（使用纯文本）
+- **2026-02-13**: 修复 datetime 作用域错误
+- **2026-02-13**: 修复套利检测逻辑（未定义变量引用）
+- **2026-02-13**: 恢复 continuous_monitor.py（文件位置修复）
+- **2026-02-11**: 添加市场去重和结束日期验证
+- **2026-02-10**: 添加 Web Dashboard 和全站分页扫描
+- **2026-02-09**: Opinion API 激活与配置
+
+### Git 提交
+
+```
+5b60852 - Fix market matching: use plain text titles instead of HTML
+ba15d71 - Fix datetime scope error in find_cross_platform_arbitrage
+ea2fdd3 - Fix arbitrage detection: correct find_cross_platform_arbitrage function
+ad36af0 - Fix crash: restore continuous_monitor.py and fix bugs
+```
+
+---
+
+## ⚠️ 注意事项
+
+1. **API 密钥安全**
+   - 不要将 API 密钥提交到公开仓库
+   - 使用环境变量或本地配置文件
+
+2. **部署前检查**
+   - 确认 `railway.json` 配置正确
+   - 验证环境变量已设置
+
+3. **本地测试**
+   - 部署前先本地测试功能
+   - 使用 `python continuous_monitor.py` 测试监控
+
+---
 
 ## 📄 许可证
 
 MIT License
 
----
-
-**注意**: 本工具仅供学习和研究使用。使用本工具进行实际交易的风险由使用者自行承担。
-
-**Links**:
-- [Polymarket](https://polymarket.com/) | [Predict.fun](https://predict.fun/)
-- [Railway](https://railway.app/) | [Telegram](https://telegram.org/)
-
-## 功能特性
-
-### 1. 自动化挂单交易 (main.py)
-- 实时市场数据监控
-- ±6% 范围内智能挂单策略
-- 自动风险管理（接近成交时撤单重挂）
-- 可配置的风险敞口限制
-
-### 2. 跨平台套利监控 (arbitrage_main.py)
-- 监控 Polymarket 和 Predict.fun 的 Yes+No 价格差
-- **套利策略**：Yes价格 + No价格 < 100% 时存在套利空间
-- 双向套利机会检测：
-  - Polymarket 买Yes + Predict 买No
-  - Predict 买Yes + Polymarket 买No
-- Telegram 推送套利通知
-- 通知冷却时间避免重复提醒
-
-### 项目结构
-```
-predict-trading-bot/
-├── config.yaml              # 配置文件
-├── main.py                  # 自动化挂单主程序
-├── arbitrage_main.py        # 套利监控主程序
-├── requirements.txt         # Python依赖包
-├── src/
-│   ├── __init__.py
-│   ├── api_client.py        # Predict.fun API客户端
-│   ├── polymarket_api.py    # Polymarket API客户端
-│   ├── order_manager.py     # 订单管理器
-│   ├── strategy.py          # 挂单策略
-│   ├── risk_manager.py      # 风险管理
-│   ├── arbitrage_monitor.py # 套利监控
-│   └── notifier.py          # Telegram通知
-└── logs/                    # 日志目录
-```
+Copyright (c) 2025 Predict Trading Bot
 
 ---
 
-## 安装步骤
+## 🤝 贡献者
 
-### 1. 安装 Python
-- 访问 https://www.python.org/downloads/
-- 下载并安装 Python 3.10 或更高版本
-- **安装时务必勾选 "Add Python to PATH"**
-
-### 2. 验证安装
-打开 CMD 或 PowerShell，运行：
-```cmd
-python --version
-pip --version
-```
-
-### 3. 安装依赖
-```cmd
-cd C:\Users\Administrator\predict-trading-bot
-pip install -r requirements.txt
-```
+- Core development: [Your Name]
 
 ---
 
-## 使用方法
+**有问题？** 查看 [项目 Issues](https://github.com/knifecat11-design/predict-trading-bot/issues) 或提交新 Issue
 
-### 方式一：自动化挂单交易
-适用于在 Predict.fun 上自动挂单获取奖励积分
-
-1. 编辑 `config.yaml` 配置参数
-2. 运行：
-   ```cmd
-   python main.py
-   ```
-3. 按 `Ctrl+C` 停止程序
-
-### 方式二：套利监控
-适用于监控两个平台的套利机会
-
-#### 步骤1：配置 Telegram
-
-**获取 Bot Token:**
-1. 在 Telegram 中搜索 `@BotFather`
-2. 发送 `/newbot` 创建新机器人
-3. 按提示设置机器人名称
-4. 复制获得的 Token（格式：`123456:ABC-DEF1234...`）
-
-**获取 Chat ID:**
-1. 在 Telegram 中搜索 `@userinfobot`
-2. 发送任意消息
-3. 复制获得的 `Id`（数字，如：`123456789`）
-
-#### 步骤2：编辑配置
-在 `config.yaml` 中填入：
-```yaml
-notification:
-  telegram:
-    enabled: true
-    bot_token: "你的Bot Token"
-    chat_id: "你的Chat ID"
-```
-
-#### 步骤3：运行套利监控
-```cmd
-python arbitrage_main.py
-```
-
-### 方式三：组合使用（推荐）
-1. 先运行套利监控发现机会
-2. 手动执行套利交易
-3. 在相应平台运行 `main.py` 进行挂单管理
-
----
-
-## 套利策略说明
-
-### 核心原理
-在预测市场中，**Yes价格 + No价格 应该 = 100%**
-
-当 **Yes + No < 100%** 时，同时买入Yes和No可以锁定利润。
-
-### 示例
-```
-Polymarket Yes价格: 40%
-Predict No价格:   50%
-合计: 40% + 50% = 90% < 100%
-套利空间: 10%
-
-操作：
-- Polymarket: 买入 Yes (40%)
-- Predict:     买入 No   (50%)
-- 总成本: 90%
-- 确定收益: 100%
-- 利润: 10%
-```
-
----
-
-## 通知消息格式
-
-当发现套利机会时，你会收到如下格式的 Telegram 通知：
-
-```
-━━━━━━━━━━━━━━━━━━━━━
-📊 市场名称: 测试市场：某事件将在2026年发生
-
-📈 利差: 10.00%
-💵 组合价格: 90.0%
-
-🔄 套利方向: Polymarket 买Yes + Predict 买No
-
-━━━━━━━━━━━━━━━━━━━━━
-
-📍 Polymarket
-  操作: 买Yes
-  Yes价格: 40.0%
-  No价格: 60.0%
-
-📍 Predict.fun
-  操作: 买No
-  Yes价格: 50.0%
-  No价格: 50.0%
-
-━━━━━━━━━━━━━━━━━━━━━
-
-⏰ 时间: 2026-02-04 14:30:25
-⚡ 请尽快手动执行套利！
-```
-
----
-
-## 配置说明
-
-### 套利监控配置 (config.yaml)
-```yaml
-arbitrage:
-  enabled: true                 # 启用套利监控
-  min_arbitrage_threshold: 2.0  # 最小套利空间2%（Yes+No < 98%时通知）
-  scan_interval: 10             # 每10秒扫描一次
-  cooldown_minutes: 5           # 同一市场5分钟内只通知一次
-```
-
-### Telegram 配置
-```yaml
-notification:
-  telegram:
-    enabled: true               # 启用Telegram通知
-    bot_token: "123456:ABC..."  # 从@BotFather获取
-    chat_id: "123456789"        # 从@userinfobot获取
-```
-
-### 风险管理配置
-```yaml
-market:
-  max_exposure: 100             # 最大风险敞口$100
-
-risk:
-  daily_loss_limit: 50          # 每日最大损失$50
-```
-
----
-
-## 注意事项
-
-⚠️ **当前使用模拟数据进行测试**
-
-等待 API 批准后：
-1. 在 `src/api_client.py` 中实现真实的 Predict.fun API
-2. 在 `src/polymarket_api.py` 中实现真实的 Polymarket API
-3. 在 `config.yaml` 中填入真实的 API 密钥
-
-⚠️ **套利风险提示**
-- 实际套利需考虑滑点、流动性、资金转移时间
-- 建议从小额开始测试
-- 手动执行前请再次确认价格
-- 确保两个平台都有足够流动性
-
----
-
-## 常见问题
-
-**Q: 为什么收不到 Telegram 通知？**
-A:
-1. 检查 config.yaml 中的 `notification.telegram.enabled` 是否为 `true`
-2. 确认 bot_token 和 chat_id 正确
-3. 尝试向 Bot 发送消息，确保 Bot 已启动
-4. 检查是否在配置的阈值范围内（默认需要2%以上套利空间）
-
-**Q: 如何测试通知功能？**
-A: 运行程序时会自动发送测试消息，或在 Python 中运行：
-```python
-from src.notifier import TelegramNotifier
-import yaml
-config = yaml.safe_load(open('config.yaml'))
-notifier = TelegramNotifier(config)
-notifier.send_test_message()
-```
-
-**Q: 套利机会多久会出现一次？**
-A: 取决于市场波动和两个平台的效率差异。配置的 `min_arbitrage_threshold` 越低，通知越频繁。
-
-**Q: 可以同时监控多个市场吗？**
-A: 可以，在 `src/arbitrage_monitor.py` 的 `_load_market_map()` 方法中添加更多市场映射。
-
----
-
-## 后续扩展
-
-- [ ] Polymarket 真实 API 接入
-- [ ] Predict.fun 真实 API 接入
-- [ ] 支持监控多个市场
-- [ ] 历史套利机会记录和统计
-- [ ] Web 界面
-- [ ] 自动执行套利（可选）
-# Railway redeploy trigger
+**Web Dashboard 预览**: 暗色主题，实时显示三平台状态、套利机会、市场列表
