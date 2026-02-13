@@ -262,27 +262,10 @@ def fetch_opinion_data(config):
         return 'no_key', []
 
     try:
-        import requests
-        # First test if the API key is valid
-        test_url = config.get('opinion', {}).get('base_url', 'https://proxy.opinion.trade:8443/openapi')
-        try:
-            response = requests.get(
-                f"{test_url}/market",
-                headers={'apikey': api_key},
-                params={'limit': 1},
-                timeout=10
-            )
-            if response.status_code == 401:
-                logger.error("Opinion API key is invalid (401)")
-                return 'no_key', []
-            elif response.status_code != 200:
-                logger.warning(f"Opinion API returned {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Opinion API test failed: {e}")
-            # Continue to try full client anyway
-
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
+
+        # 移除冗余 test 请求（节省 10 秒超时等待）
 
         # 直接获取市场列表，已按 24h 交易量排序
         raw_markets = client.get_markets(status='activated', sort_by=5, limit=500)
@@ -293,9 +276,9 @@ def fetch_opinion_data(config):
         logger.info(f"Opinion: 获取到 {len(raw_markets)} 个原始市场，开始解析价格...")
 
         parsed = []
-        # 优化：对前 200 个高交易量市场获取独立价格
-        # Opinion API 每个订单簿请求约0.5秒，200个约需100秒
-        max_detailed_fetch = 200
+        # 策略：前 80 个独立获取 No 价格，后面使用 1-yes fallback
+        # 使用轻量级 get_token_price 替代 get_order_book（提升速度）
+        max_independent_fetch = 80
 
         for idx, m in enumerate(raw_markets):
             try:
@@ -304,39 +287,33 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 获取 Yes 订单簿（实际买入价）
-                yes_orderbook = client.get_order_book(yes_token)
-                if yes_orderbook is None or yes_orderbook.yes_ask is None:
+                # 使用轻量级 get_token_price（避免重级 orderbook 请求）
+                yes_price = client.get_token_price(yes_token)
+                if yes_price is None:
                     continue
 
-                yes_price = yes_orderbook.yes_ask  # Yes 买入价
-                yes_shares = yes_orderbook.yes_ask_size  # 可买份额
-
-                # 获取 No 订单簿（实际买入价，不是 1-yes_ask）
-                # 注意：1-yes_ask 对应的是卖单的 No，不是买单
-                no_orderbook = None
+                # 获取 No 价格（带 fallback 策略）
                 no_price = None
-                no_shares = 0
 
-                if no_token:
-                    no_orderbook = client.get_order_book(no_token)
-                    if no_orderbook and no_orderbook.yes_ask is not None:
-                        no_price = no_orderbook.yes_ask  # No 的实际买入价
-                        no_shares = no_orderbook.yes_ask_size
+                # 前 80 个市场：独立获取 No 价格（检查 token 非空）
+                if idx < max_independent_fetch and no_token and no_token.strip():
+                    no_price = client.get_token_price(no_token)
 
-                # 跳过无效价格（No 价格必须能实际获取到）
+                # fallback: 使用 1 - yes_price（避免丢弃整个市场）
                 if no_price is None:
-                    continue
+                    no_price = round(1.0 - yes_price, 4)
+
+                # 跳过无效价格
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
                     continue
 
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
-                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",  # Correct format
+                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
-                    'amount': yes_shares,  # 订单簿可买份额
+                    'amount': None,  # get_token_price 不返回订单簿大小
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
                     'platform': 'opinion',
@@ -349,10 +326,10 @@ def fetch_opinion_data(config):
                 logger.warning(f"解析 Opinion 市场时出现意外错误: {e}")
                 continue
 
-            if len(parsed) >= 300:
+            if len(parsed) >= 400:  # 提高限制（使用轻量级 API）
                 break
 
-        logger.info(f"Opinion: fetched {len(parsed)} markets using actual orderbook best ask prices")
+        logger.info(f"Opinion: fetched {len(parsed)} markets using lightweight get_token_price")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
