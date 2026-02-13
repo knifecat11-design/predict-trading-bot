@@ -181,11 +181,11 @@ def platform_link_html(platform_name, market_url=None):
 
 
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets using actual orderbook best ask prices"""
+    """Fetch Polymarket markets — 使用API响应中的bestBid/bestAsk（避免逐个请求订单簿）"""
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
-        # 获取所有标签的市场（覆盖全站）
+        # 获取所有标签的市场（覆盖全站，~9个HTTP请求）
         markets = poly_client.get_all_tags_markets(limit_per_tag=200)
 
         parsed = []
@@ -195,23 +195,30 @@ def fetch_polymarket_data(config):
                 if not condition_id:
                     continue
 
-                # 获取完整订单簿（包含 Yes 和 No 的 best ask）
-                orderbook = poly_client.get_order_book(condition_id)
-                if orderbook is None:
+                # 直接使用API返回的bestBid/bestAsk（无需额外HTTP请求）
+                best_bid = m.get('bestBid')
+                best_ask = m.get('bestAsk')
+
+                if best_bid is not None and best_ask is not None:
+                    yes_price = float(best_ask)      # Yes买入价 = best ask
+                    no_price = 1.0 - float(best_bid)  # No买入价 = 1 - best bid
+                else:
+                    # Fallback: 使用outcomePrices
+                    outcome_str = m.get('outcomePrices', '[]')
+                    if isinstance(outcome_str, str):
+                        import json
+                        prices = json.loads(outcome_str)
+                    else:
+                        prices = outcome_str
+                    if not prices or len(prices) < 2:
+                        continue
+                    yes_price = float(prices[0])
+                    no_price = float(prices[1])
+
+                if yes_price <= 0 or no_price <= 0:
                     continue
 
-                yes_price = orderbook.yes_ask
-                no_price = orderbook.no_ask
-
-                # 必须有 Yes 和 No 的价格
-                if yes_price is None or yes_price <= 0 or yes_price >= 1:
-                    continue
-                if no_price is None or no_price <= 0 or no_price >= 1:
-                    continue
-
-                # 获取市场 slug（用于超链接）
-                # Polymarket市场有两种slug: market.slug 和 events[0].slug
-                # 应该使用market.slug，因为event.slug可能指向事件页而不是具体市场
+                # 获取市场slug（用于超链接）- 使用market.slug
                 market_slug = m.get('slug', '')
                 if not market_slug:
                     # Fallback: 尝试使用event slug
@@ -237,7 +244,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets using actual orderbook best ask prices")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets (0 extra HTTP requests)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
