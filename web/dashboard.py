@@ -210,18 +210,10 @@ def fetch_polymarket_data(config):
                     continue
                 yes_price = float(best_ask)
 
-                # No 价格使用 outcomePrices 估算或设为默认值
-                # 注意：Polymarket 没有 No token，No 是通过 Yes 反向实现的
-                outcome_str = m.get('outcomePrices', '[]')
-                if isinstance(outcome_str, str):
-                    prices = json.loads(outcome_str)
-                else:
-                    prices = outcome_str
-                if len(prices) >= 2:
-                    no_price = float(prices[1])  # 使用中间价作为参考
-                else:
-                    # Fallback: 使用 1 - yes_price（仅用于参考）
-                    no_price = round(1.0 - yes_price, 4)
+                # No 价格：Polymarket 没有 No token，No 是 Yes 的反向
+                # 使用 1 - yes_ask 估算 No 的 best ask（不使用中间价）
+                # 注意：这给出的是买入 No 的预期成本
+                no_price = round(1.0 - yes_price, 4)
 
                 # 验证价格有效性
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
@@ -383,13 +375,14 @@ def fetch_predict_data(config):
                 if not market_id:
                     continue
 
-                # 使用新的完整订单簿方法（独立获取 Yes 和 No 价格）
+                # 使用 best ask 价格（实际买入价，不使用中间价）
                 full_ob = client.get_full_orderbook(market_id)
                 if full_ob is None:
                     continue
 
-                yes_price = (full_ob['yes_bid'] + full_ob['yes_ask']) / 2
-                no_price = (full_ob['no_bid'] + full_ob['no_ask']) / 2
+                # 只使用 best ask（最低卖价），不使用中间价
+                yes_price = full_ob['yes_ask']   # Yes 买入价
+                no_price = full_ob['no_ask']     # No 买入价
 
                 question_text = (m.get('question') or m.get('title', ''))
                 market_slug = slugify(question_text)

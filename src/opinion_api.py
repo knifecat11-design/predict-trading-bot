@@ -300,18 +300,13 @@ class OpinionAPIClient:
 
         result = response.result
         asks = getattr(result, 'asks', []) or []
-        bids = getattr(result, 'bids', []) or []
 
-        # 优先使用 best ask（最低卖价）
+        # 只使用 best ask（最低卖价），不使用计算值
         if asks:
             return round(float(asks[0].price), 4)
 
-        # Fallback: 如果没有 asks，使用最佳 bid 估算
-        if bids:
-            best_bid = float(bids[0].price)
-            logger.debug(f"SDK: Token {token_id} 无 asks，使用 bid 估算")
-            return round(1.0 - best_bid, 4)
-
+        # 如果没有 asks，返回 None（不使用 1-bid 估算）
+        logger.debug(f"SDK: Token {token_id} 无 asks，跳过")
         return None
 
     def _get_price_http(self, token_id: str) -> Optional[float]:
@@ -330,18 +325,12 @@ class OpinionAPIClient:
             if not isinstance(result, dict):
                 result = {}
             asks = result.get('asks', [])
-            # 返回 best ask（最低卖价）用于买入
+            # 只返回 best ask（最低卖价），不使用计算值
             if asks:
                 return round(float(asks[0]['price']), 4)
 
-            # Fallback: 如果没有 asks，使用最佳 bid 估算（流动性低时）
-            bids = result.get('bids', [])
-            if bids:
-                best_bid = float(bids[0]['price'])
-                logger.debug(f"Token {token_id} 无 asks，使用 bid 估算: {best_bid}")
-                return round(1.0 - best_bid, 4)
-
-            logger.debug(f"Token {token_id} 订单簿为空（无 bids 也无 asks）")
+            # 如果没有 asks，返回 None（不使用 1-bid 估算）
+            logger.debug(f"Token {token_id} 无 asks，跳过")
             return None
 
     def get_order_book(self, token_id: str) -> Optional[OpinionOrderBook]:
