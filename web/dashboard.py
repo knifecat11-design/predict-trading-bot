@@ -181,39 +181,46 @@ def platform_link_html(platform_name, market_url=None):
 
 
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets using actual orderbook best ask prices"""
+    """Fetch Polymarket markets — 参考 continuous_monitor 直接用 API 响应数据，无需逐个请求订单簿"""
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
-        # 获取所有标签的市场（覆盖全站）
+        # 获取所有标签的市场（覆盖全站，~9 个 HTTP 请求）
         markets = poly_client.get_all_tags_markets(limit_per_tag=200)
 
         parsed = []
-        for m in markets[:3000]:
+        for m in markets:
             try:
                 condition_id = m.get('conditionId', m.get('condition_id', ''))
                 if not condition_id:
                     continue
 
-                # 获取完整订单簿（包含 Yes 和 No 的 best ask）
-                orderbook = poly_client.get_order_book(condition_id)
-                if orderbook is None:
-                    continue
+                # 优先使用 bestBid/bestAsk（API 响应中已包含，无需额外 HTTP 请求）
+                best_bid = m.get('bestBid')
+                best_ask = m.get('bestAsk')
 
-                yes_price = orderbook.yes_ask
-                no_price = orderbook.no_ask
+                if best_bid is not None and best_ask is not None:
+                    yes_price = float(best_ask)      # Yes 买入价 = best ask
+                    no_price = 1.0 - float(best_bid)  # No 买入价 = 1 - best bid
+                else:
+                    # Fallback: 使用 outcomePrices（参考 continuous_monitor.py）
+                    outcome_str = m.get('outcomePrices', '[]')
+                    if isinstance(outcome_str, str):
+                        prices = json.loads(outcome_str)
+                    else:
+                        prices = outcome_str
+                    if not prices or len(prices) < 2:
+                        continue
+                    yes_price = float(prices[0])
+                    no_price = float(prices[1])
 
-                # 必须有 Yes 和 No 的价格
-                if yes_price is None or yes_price <= 0 or yes_price >= 1:
-                    continue
-                if no_price is None or no_price <= 0 or no_price >= 1:
+                if yes_price <= 0 or no_price <= 0:
                     continue
 
                 # 获取事件 slug（用于超链接）
                 events = m.get('events', [])
                 event_slug = events[0].get('slug', '') if events else ''
                 if not event_slug:
-                    # Fallback: 使用 condition_id
                     event_slug = condition_id
 
                 parsed.append({
@@ -234,7 +241,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets using actual orderbook best ask prices")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets (0 extra HTTP requests)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
@@ -245,7 +252,7 @@ def fetch_polymarket_data(config):
 
 
 def fetch_opinion_data(config):
-    """Fetch Opinion.trade markets"""
+    """Fetch Opinion.trade markets — 参考 continuous_monitor 的 get_token_price + fallback 策略"""
     api_key = config.get('opinion', {}).get('api_key', '')
     if not api_key:
         logger.warning("Opinion: no API key")
@@ -269,7 +276,6 @@ def fetch_opinion_data(config):
                 logger.warning(f"Opinion API returned {response.status_code}")
         except Exception as e:
             logger.warning(f"Opinion API test failed: {e}")
-            # Continue to try full client anyway
 
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
@@ -283,8 +289,8 @@ def fetch_opinion_data(config):
         logger.info(f"Opinion: 获取到 {len(raw_markets)} 个原始市场，开始解析价格...")
 
         parsed = []
-        # 优化：只对前 50 个高交易量市场获取独立价格，避免阻塞太久
-        max_detailed_fetch = 50
+        # 参考 continuous_monitor.py: 前 N 个市场独立获取 No 价格，后续用 fallback
+        max_detailed_fetch = 80  # 前 80 个独立获取 No（比 continuous_monitor 的 50 多）
 
         for idx, m in enumerate(raw_markets):
             try:
@@ -293,27 +299,21 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 获取 Yes 订单簿（实际买入价）
-                yes_orderbook = client.get_order_book(yes_token)
-                if yes_orderbook is None or yes_orderbook.yes_ask is None:
+                # 使用 get_token_price（轻量级，参考 continuous_monitor）
+                yes_price = client.get_token_price(yes_token)
+                if yes_price is None:
                     continue
 
-                yes_price = yes_orderbook.yes_ask  # Yes 买入价
-                yes_shares = yes_orderbook.yes_ask_size  # 可买份额
+                # 前 N 个市场独立获取 No 价格，后续用 1-yes fallback
+                if idx < max_detailed_fetch and no_token:
+                    no_price = client.get_token_price(no_token)
+                    if no_price is None:
+                        no_price = round(1.0 - yes_price, 4)
+                elif no_token:
+                    no_price = round(1.0 - yes_price, 4)
+                else:
+                    no_price = None
 
-                # 获取 No 订单簿（实际买入价，不是 1-yes_ask）
-                # 注意：1-yes_ask 对应的是卖单的 No，不是买单
-                no_orderbook = None
-                no_price = None
-                no_shares = 0
-
-                if no_token:
-                    no_orderbook = client.get_order_book(no_token)
-                    if no_orderbook and no_orderbook.yes_ask is not None:
-                        no_price = no_orderbook.yes_ask  # No 的实际买入价
-                        no_shares = no_orderbook.yes_ask_size
-
-                # 跳过无效价格（No 价格必须能实际获取到）
                 if no_price is None:
                     continue
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
@@ -322,10 +322,9 @@ def fetch_opinion_data(config):
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
-                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",  # Correct format
+                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
-                    'amount': yes_shares,  # 订单簿可买份额
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
                     'platform': 'opinion',
@@ -338,10 +337,10 @@ def fetch_opinion_data(config):
                 logger.warning(f"解析 Opinion 市场时出现意外错误: {e}")
                 continue
 
-            if len(parsed) >= 200:
+            if len(parsed) >= 300:
                 break
 
-        logger.info(f"Opinion: fetched {len(parsed)} markets using actual orderbook best ask prices")
+        logger.info(f"Opinion: fetched {len(parsed)} markets (详细价格: 前{max_detailed_fetch}个, fallback: 其余)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
@@ -352,7 +351,7 @@ def fetch_opinion_data(config):
 
 
 def fetch_predict_data(config):
-    """Fetch Predict.fun markets（改进版：独立获取 No 价格）"""
+    """Fetch Predict.fun markets — limit 提高到 200，前 80 个获取精确价格"""
     api_key = config.get('api', {}).get('api_key', '')
     if not api_key:
         return 'no_key', []
@@ -360,45 +359,74 @@ def fetch_predict_data(config):
     try:
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
-        raw_markets = client.get_markets(status='open', limit=50)
 
-        if not raw_markets:
+        # 分页获取更多市场（API 单次最多 100）
+        all_raw = []
+        for sort_by in ['popular', 'newest']:
+            batch = client.get_markets(status='open', sort=sort_by, limit=100)
+            for m in batch:
+                mid = m.get('id', m.get('market_id', ''))
+                if mid and mid not in {x.get('id', x.get('market_id', '')) for x in all_raw}:
+                    all_raw.append(m)
+
+        if not all_raw:
             return 'error', []
 
+        logger.info(f"Predict: 获取到 {len(all_raw)} 个原始市场")
+
         parsed = []
-        for m in raw_markets:
+        max_detailed_fetch = 80  # 前 80 个获取精确订单簿价格
+
+        for idx, m in enumerate(all_raw):
             try:
                 market_id = m.get('id', m.get('market_id', ''))
                 if not market_id:
                     continue
 
-                # 使用 best ask 价格（实际买入价，不使用中间价）
-                full_ob = client.get_full_orderbook(market_id)
-                if full_ob is None:
+                question_text = (m.get('question') or m.get('title', ''))
+
+                if idx < max_detailed_fetch:
+                    # 精确模式：使用 best ask
+                    full_ob = client.get_full_orderbook(market_id)
+                    if full_ob is None:
+                        continue
+                    yes_price = full_ob['yes_ask']
+                    no_price = full_ob['no_ask']
+                else:
+                    # 快速模式：只获取 Yes 价格，No 用 fallback
+                    try:
+                        yes_ob = client._get_orderbook(market_id, outcome_id=1)
+                        if yes_ob is None:
+                            continue
+                        yes_price = yes_ob.get('yes_ask') or yes_ob.get('best_ask')
+                        if yes_price is None:
+                            continue
+                        no_price = round(1.0 - yes_price, 4)
+                    except Exception:
+                        continue
+
+                if yes_price is None or no_price is None:
+                    continue
+                if yes_price <= 0 or no_price <= 0:
                     continue
 
-                # 只使用 best ask（最低卖价），不使用中间价
-                yes_price = full_ob['yes_ask']   # Yes 买入价
-                no_price = full_ob['no_ask']     # No 买入价
-
-                question_text = (m.get('question') or m.get('title', ''))
                 market_slug = slugify(question_text)
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
-                    'url': f"https://predict.fun/market/{market_slug}",  # Add URL field with slug
+                    'url': f"https://predict.fun/market/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'predict',
-                    'end_date': '',  # Predict may not have this field
+                    'end_date': '',
                 })
             except Exception as e:
                 logger.debug(f"解析 Predict 市场失败: {e}")
                 continue
 
-        logger.info(f"Predict: fetched {len(parsed)} markets")
+        logger.info(f"Predict: fetched {len(parsed)} markets (详细价格: 前{max_detailed_fetch}个)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Predict import error: {e}")

@@ -210,8 +210,8 @@ def fetch_opinion_markets(config):
 
         # 优化：只对前 50 个市场获取独立 No 价格，避免太多 HTTP 请求
         # 如果仍然全部失败，直接返回空列表（避免继续尝试）
-        max_detailed_fetch = 50
-        max_total_markets = 150  # 最多处理 150 个市场（避免超时）
+        max_detailed_fetch = 80   # 前 80 个独立获取 No 价格
+        max_total_markets = 300   # 最多处理 300 个市场
 
         logging.info(f"Opinion: 获取到 {len(raw)} 个原始市场（限制处理 {max_total_markets} 个，前 {max_detailed_fetch} 个获取独立价格）...")
 
@@ -261,11 +261,7 @@ def fetch_opinion_markets(config):
                 logging.debug(f"解析 Opinion 市场失败: {e}")
                 continue
 
-            # 已完成解析
-            logging.info(f"Opinion: 解析完成，成功解析 {len(parsed)} 个市场（限制 {min(len(parsed), max_total_markets)} 个）")
-            if len(parsed) >= 200:
-                break
-        # 已经按交易量排序了
+        logging.info(f"Opinion: 解析完成，成功解析 {len(parsed)} 个市场")
         return parsed
     except Exception as e:
         logging.error(f"Opinion fetch: {e}")
@@ -277,7 +273,7 @@ def fetch_predict_markets(config):
     try:
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
-        raw = client.get_markets(status='open', limit=50)
+        raw = client.get_markets(status='open', limit=100)
 
         parsed = []
         for m in raw:
