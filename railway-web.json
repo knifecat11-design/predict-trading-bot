@@ -13,6 +13,7 @@
   },
   "variables": {
     "PORT": "5000",
+    "PREDICT_API_KEY": "",
     "OPINION_API_KEY": "JycT63x2kYkqtTrlCnpR58O57agzKouz",
     "OPINION_WALLET_ADDRESS": "0x138fad69eb759f4460de2e3fb79173b034142021",
     "OPINION_POLY_THRESHOLD": "2.0",
