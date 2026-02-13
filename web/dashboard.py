@@ -209,17 +209,19 @@ def fetch_polymarket_data(config):
                 if no_price is None or no_price <= 0 or no_price >= 1:
                     continue
 
-                # 获取事件 slug（用于超链接）
-                events = m.get('events', [])
-                event_slug = events[0].get('slug', '') if events else ''
-                if not event_slug:
-                    # Fallback: 使用 condition_id
-                    event_slug = condition_id
+                # 获取市场 slug（用于超链接）
+                # Polymarket市场有两种slug: market.slug 和 events[0].slug
+                # 应该使用market.slug，因为event.slug可能指向事件页而不是具体市场
+                market_slug = m.get('slug', '')
+                if not market_slug:
+                    # Fallback: 尝试使用event slug
+                    events = m.get('events', [])
+                    market_slug = events[0].get('slug', '') if events else condition_id
 
                 parsed.append({
                     'id': condition_id,
-                    'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
-                    'url': f"https://polymarket.com/event/{event_slug}",
+                    'title': f"<a href='https://polymarket.com/event/{market_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'url': f"https://polymarket.com/event/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
