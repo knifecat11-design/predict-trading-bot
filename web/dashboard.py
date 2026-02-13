@@ -181,7 +181,7 @@ def platform_link_html(platform_name, market_url=None):
 
 
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets using bestAsk (actual executable price)"""
+    """Fetch Polymarket markets using actual orderbook best ask prices"""
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
@@ -195,6 +195,20 @@ def fetch_polymarket_data(config):
                 if not condition_id:
                     continue
 
+                # 获取完整订单簿（包含 Yes 和 No 的 best ask）
+                orderbook = poly_client.get_order_book(condition_id)
+                if orderbook is None:
+                    continue
+
+                yes_price = orderbook.yes_ask
+                no_price = orderbook.no_ask
+
+                # 必须有 Yes 和 No 的价格
+                if yes_price is None or yes_price <= 0 or yes_price >= 1:
+                    continue
+                if no_price is None or no_price <= 0 or no_price >= 1:
+                    continue
+
                 # 获取事件 slug（用于超链接）
                 events = m.get('events', [])
                 event_slug = events[0].get('slug', '') if events else ''
@@ -202,27 +216,10 @@ def fetch_polymarket_data(config):
                     # Fallback: 使用 condition_id
                     event_slug = condition_id
 
-                # 使用 bestAsk（实际买入价）而不是 outcomePrices（中间价）
-                # 原因：低流动性市场中间价无法成交，只监控可执行的买入价格
-                best_ask = m.get('bestAsk')
-                if best_ask is None or best_ask <= 0 or best_ask >= 1:
-                    # 如果没有 bestAsk，跳过这个市场
-                    continue
-                yes_price = float(best_ask)
-
-                # No 价格：Polymarket 没有 No token，No 是 Yes 的反向
-                # 使用 1 - yes_ask 估算 No 的 best ask（不使用中间价）
-                # 注意：这给出的是买入 No 的预期成本
-                no_price = round(1.0 - yes_price, 4)
-
-                # 验证价格有效性
-                if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
-                    continue
-
                 parsed.append({
                     'id': condition_id,
                     'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
-                    'url': f"https://polymarket.com/event/{event_slug}",  # Add URL field
+                    'url': f"https://polymarket.com/event/{event_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
@@ -237,7 +234,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets using bestAsk (actual buy prices)")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets using actual orderbook best ask prices")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
