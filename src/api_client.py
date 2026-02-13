@@ -67,7 +67,8 @@ class PredictAPIClient:
     def get_markets(self, status: str = 'open', sort: str = 'popular', limit: int = 100) -> List[Dict]:
         """获取市场列表"""
         try:
-            if time.time() - self._cache_time < self._cache_duration and self._cache:
+            cache_key = f"{status}:{sort}"
+            if time.time() - self._cache_time < self._cache_duration and self._cache and getattr(self, '_cache_key', '') == cache_key:
                 return self._cache[:limit]
 
             params = {'status': status, 'sort': sort, 'limit': min(limit, 100)}
@@ -79,6 +80,7 @@ class PredictAPIClient:
 
                 if markets:
                     self._cache = markets
+                    self._cache_key = cache_key
                     self._cache_time = time.time()
                     return markets[:limit]
 

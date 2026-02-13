@@ -259,24 +259,8 @@ def fetch_opinion_data(config):
         return 'no_key', []
 
     try:
-        import requests
-        # First test if the API key is valid
-        test_url = config.get('opinion', {}).get('base_url', 'https://proxy.opinion.trade:8443/openapi')
-        try:
-            response = requests.get(
-                f"{test_url}/market",
-                headers={'apikey': api_key},
-                params={'limit': 1},
-                timeout=10
-            )
-            if response.status_code == 401:
-                logger.error("Opinion API key is invalid (401)")
-                return 'no_key', []
-            elif response.status_code != 200:
-                logger.warning(f"Opinion API returned {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Opinion API test failed: {e}")
-
+        # 不做冗余 test 请求（成功脚本也没有），直接创建客户端
+        # get_markets() 内部会处理 401/429 等错误
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
 
@@ -298,6 +282,10 @@ def fetch_opinion_data(config):
                 title = m.get('marketTitle', '')
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
+
+                # 跳过无效 token（避免浪费 HTTP 请求）
+                if not yes_token:
+                    continue
 
                 # 使用 get_token_price（轻量级，参考 continuous_monitor）
                 yes_price = client.get_token_price(yes_token)

@@ -222,6 +222,9 @@ def fetch_opinion_markets(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
+                if not yes_token:
+                    continue
+
                 # 独立获取 Yes 价格（必需）
                 yes_price = client.get_token_price(yes_token)
                 if yes_price is None:

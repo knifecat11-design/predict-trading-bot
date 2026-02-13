@@ -145,7 +145,7 @@ class OpinionAPIClient:
                 return self._get_markets_sdk(status, limit, page_size, max_pages)
             # HTTP 模式
             else:
-                return self._get_markets_http(status, limit, page_size, max_pages)
+                return self._get_markets_http(status, limit, page_size, max_pages, sort_by=sort_by)
 
         except Exception as e:
             logger.error(f"获取 Opinion 市场失败: {e}")
@@ -210,7 +210,7 @@ class OpinionAPIClient:
 
         return all_markets[:limit]
 
-    def _get_markets_http(self, status: str, limit: int, page_size: int, max_pages: int) -> List[Dict]:
+    def _get_markets_http(self, status: str, limit: int, page_size: int, max_pages: int, sort_by: int = 5) -> List[Dict]:
         """使用 HTTP 获取市场列表"""
         all_markets = []
 
@@ -218,7 +218,7 @@ class OpinionAPIClient:
             offset = page * page_size
             params = {
                 'status': status,
-                'sortBy': 5,  # 按 24h 交易量排序
+                'sortBy': sort_by,  # 5=按24h交易量排序
                 'limit': page_size,
                 'offset': offset,
             }
