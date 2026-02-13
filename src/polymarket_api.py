@@ -7,7 +7,7 @@ Polymarket Gamma API: https://gamma-api.polymarket.com
 import time
 import logging
 from typing import Dict, List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class PolymarketMarket:
     volume_24h: float
     end_date: Optional[str] = None
     condition_id: str = ""
-    tags: List[str] = None
+    tags: Optional[List[str]] = None
 
 
 @dataclass

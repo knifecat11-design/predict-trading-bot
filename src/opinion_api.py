@@ -69,6 +69,7 @@ class OpinionAPIClient:
         # 初始化客户端
         self._client = None
         self._use_sdk = False
+        self.session = None  # 确保 session 始终存在（修复 Issue 4）
 
         if not self.api_key:
             logger.warning("未设置 OPINION_API_KEY")

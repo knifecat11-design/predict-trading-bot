@@ -3,13 +3,14 @@
 # API 配置
 api:
   base_url: "https://api.predict.fun"
-  api_key: "1b0c25d4-8ca6-4aa8-8910-cd72b311e4f6"
+  api_key: ""  # 通过环境变量 PREDICT_API_KEY 设置
   ws_url: "wss://api.predict.fun/ws"
 
 # Opinion.trade API 配置
 opinion:
   base_url: "https://proxy.opinion.trade:8443/openapi"
-  api_key: "JycT63x2kYkqtTrlCnpR58O57agzKouz"  # EOA: 0x138fad69eb759f4460de2e3fb79173b034142021
+  api_key: ""  # 通过环境变量 OPINION_API_KEY 设置
+  # EOA: 0x138fad69eb759f4460de2e3fb79173b034142021（通过环境变量设置）
   cache_seconds: 60
 
 # 市场配置
@@ -57,8 +58,8 @@ opinion_poly:
 notification:
   telegram:
     enabled: true               # 启用Telegram通知
-    bot_token: "8273809449:AAHKO7J_gcNxBpTvc6X_SGWGIZwKKjc4H3Q"
-    chat_id: "7944527195"
+    bot_token: ""  # 通过环境变量 TELEGRAM_BOT_TOKEN 设置
+    chat_id: ""     # 通过环境变量 TELEGRAM_CHAT_ID 设置
 
   wechat:
     enabled: false              # 微信推送已停用
