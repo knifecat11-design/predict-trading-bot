@@ -90,33 +90,136 @@ def load_config():
     return config
 
 
+def strip_html(html_text):
+    """Strip HTML tags from text, return plain text"""
+    if not html_text:
+        return ''
+    # Simple HTML strip - remove everything between < and >
+    import re
+    return re.sub(r'<[^>]+>', '', html_text).strip()
+
+
+def slugify(text):
+    """Convert text to URL-friendly slug format (improved for Predict.fun)"""
+    import re
+    # Convert to lowercase
+    text = text.lower()
+
+    # Remove verbose phrases FIRST (before word removal)
+    # These patterns need to be removed as whole phrases
+    text = re.sub(r'\bequal\s+(to\s+)?(or\s+)?greater\s+than\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bgreater\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bless\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
+
+    # Remove common words that clutter URLs
+    words_to_remove = [
+        'will', 'won', 'would',
+        'the', 'a', 'an',
+        'there', 'this', 'that',
+        'have', 'has', 'had',
+        'be', 'been', 'being',
+        'for', 'from', 'with',
+        'about', 'against',
+        'between', 'into', 'through', 'during',
+        'before', 'after',
+        'above', 'below',
+        'over', 'under', 'again',
+        'off', 'more',
+        'as', 'is', 'are', 'was', 'were',
+        'when', 'where', 'while',
+        'how', 'what', 'which',
+        'who', 'whom', 'whose',
+        'why', 'whether', 'if',
+        'since', 'until', 'unless',
+    ]
+
+    # Remove words as whole words only
+    for word in words_to_remove:
+        text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
+
+    # Remove dollar signs and commas (keep digits together: $1,800 -> 1800)
+    text = text.replace('$', '').replace(',', '')
+
+    # Replace special chars with spaces (except digits, letters, hyphens)
+    text = re.sub(r'[^\w\s-]', ' ', text)
+
+    # Replace multiple spaces/newlines/underscores with single hyphen
+    text = re.sub(r'[\s_]+', '-', text)
+
+    # Remove trailing/leading hyphens and multiple hyphens
+    text = re.sub(r'-+', '-', text)
+    text = text.strip('-')
+
+    return text
+
+
+def platform_link_html(platform_name, market_url=None):
+    """Generate colored platform link HTML
+
+    Args:
+        platform_name: Platform name (Polymarket, Opinion, Predict)
+        market_url: Optional specific market URL (overrides default)
+    """
+    platform_colors = {
+        'Polymarket': '#03a9f4',
+        'Opinion': '#d29922',
+        'Opinion.trade': '#d29922',
+        'Predict': '#9c27b0',
+        'Predict.fun': '#9c27b0',
+    }
+    platform_urls = {
+        'Polymarket': 'https://polymarket.com',
+        'Opinion': 'https://opinion.trade',
+        'Opinion.trade': 'https://opinion.trade',
+        'Predict': 'https://predict.fun',
+        'Predict.fun': 'https://predict.fun',
+    }
+    color = platform_colors.get(platform_name, '#888')
+    # Use market_url if provided, otherwise use platform home
+    url = market_url if market_url else platform_urls.get(platform_name, '#')
+    return f"<a href='{url}' target='_blank' style='color:{color};font-weight:600;text-decoration:none'>{platform_name}</a>"
+
+
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets (public API, always works)"""
+    """Fetch Polymarket markets using actual orderbook best ask prices"""
     try:
         from src.polymarket_api import PolymarketClient
-        client = PolymarketClient(config)
+        poly_client = PolymarketClient(config)
         # 获取所有标签的市场（覆盖全站）
-        markets = client.get_all_tags_markets(limit_per_tag=200)
+        markets = poly_client.get_all_tags_markets(limit_per_tag=200)
 
         parsed = []
         for m in markets[:3000]:
             try:
-                outcome_str = m.get('outcomePrices', '[]')
-                if isinstance(outcome_str, str):
-                    prices = json.loads(outcome_str)
-                else:
-                    prices = outcome_str
-                if len(prices) < 2:
+                condition_id = m.get('conditionId', m.get('condition_id', ''))
+                if not condition_id:
                     continue
 
-                yes_price = float(prices[0])
-                no_price = float(prices[1])
-                if yes_price <= 0 or no_price <= 0:
+                # 获取完整订单簿（包含 Yes 和 No 的 best ask）
+                orderbook = poly_client.get_order_book(condition_id)
+                if orderbook is None:
                     continue
+
+                yes_price = orderbook.yes_ask
+                no_price = orderbook.no_ask
+
+                # 必须有 Yes 和 No 的价格
+                if yes_price is None or yes_price <= 0 or yes_price >= 1:
+                    continue
+                if no_price is None or no_price <= 0 or no_price >= 1:
+                    continue
+
+                # 获取事件 slug（用于超链接）
+                events = m.get('events', [])
+                event_slug = events[0].get('slug', '') if events else ''
+                if not event_slug:
+                    # Fallback: 使用 condition_id
+                    event_slug = condition_id
 
                 parsed.append({
-                    'id': m.get('conditionId', m.get('condition_id', '')),
-                    'title': m.get('question', '')[:80],
+                    'id': condition_id,
+                    'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'url': f"https://polymarket.com/event/{event_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
@@ -131,7 +234,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets using actual orderbook best ask prices")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
@@ -190,26 +293,27 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 独立获取 Yes 价格（必需）
-                yes_price = client.get_token_price(yes_token)
-                if yes_price is None:
+                # 获取 Yes 订单簿（实际买入价）
+                yes_orderbook = client.get_order_book(yes_token)
+                if yes_orderbook is None or yes_orderbook.yes_ask is None:
                     continue
 
-                # 对于前 N 个市场，尝试独立获取 No 价格
-                # 对于其他市场，直接用 1 - yes_price 估算（避免太多 HTTP 请求）
-                if idx < max_detailed_fetch and no_token:
-                    no_price = client.get_token_price(no_token)
-                    if no_price is None:
-                        # Fallback: 使用 1 - yes_price
-                        logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
-                        no_price = round(1.0 - yes_price, 4)
-                elif no_token:
-                    # 对于后续市场，直接用 1 - yes_price 估算
-                    no_price = round(1.0 - yes_price, 4)
-                else:
-                    no_price = None
+                yes_price = yes_orderbook.yes_ask  # Yes 买入价
+                yes_shares = yes_orderbook.yes_ask_size  # 可买份额
 
-                # 跳过无效价格
+                # 获取 No 订单簿（实际买入价，不是 1-yes_ask）
+                # 注意：1-yes_ask 对应的是卖单的 No，不是买单
+                no_orderbook = None
+                no_price = None
+                no_shares = 0
+
+                if no_token:
+                    no_orderbook = client.get_order_book(no_token)
+                    if no_orderbook and no_orderbook.yes_ask is not None:
+                        no_price = no_orderbook.yes_ask  # No 的实际买入价
+                        no_shares = no_orderbook.yes_ask_size
+
+                # 跳过无效价格（No 价格必须能实际获取到）
                 if no_price is None:
                     continue
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
@@ -217,9 +321,11 @@ def fetch_opinion_data(config):
 
                 parsed.append({
                     'id': market_id,
-                    'title': title[:80],
+                    'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
+                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",  # Correct format
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
+                    'amount': yes_shares,  # 订单簿可买份额
                     'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
                     'platform': 'opinion',
@@ -235,7 +341,7 @@ def fetch_opinion_data(config):
             if len(parsed) >= 200:
                 break
 
-        logger.info(f"Opinion: fetched {len(parsed)} markets")
+        logger.info(f"Opinion: fetched {len(parsed)} markets using actual orderbook best ask prices")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
@@ -266,17 +372,21 @@ def fetch_predict_data(config):
                 if not market_id:
                     continue
 
-                # 使用新的完整订单簿方法（独立获取 Yes 和 No 价格）
+                # 使用 best ask 价格（实际买入价，不使用中间价）
                 full_ob = client.get_full_orderbook(market_id)
                 if full_ob is None:
                     continue
 
-                yes_price = (full_ob['yes_bid'] + full_ob['yes_ask']) / 2
-                no_price = (full_ob['no_bid'] + full_ob['no_ask']) / 2
+                # 只使用 best ask（最低卖价），不使用中间价
+                yes_price = full_ob['yes_ask']   # Yes 买入价
+                no_price = full_ob['no_ask']     # No 买入价
 
+                question_text = (m.get('question') or m.get('title', ''))
+                market_slug = slugify(question_text)
                 parsed.append({
                     'id': market_id,
-                    'title': (m.get('question') or m.get('title', ''))[:80],
+                    'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
+                    'url': f"https://predict.fun/market/{market_slug}",  # Add URL field with slug
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume', 0) or 0),
@@ -298,117 +408,130 @@ def fetch_predict_data(config):
         return 'error', []
 
 
-def extract_keywords(title):
-    """Extract keywords from market title for matching (improved)"""
-    import re
-    # 扩展停用词列表，提高匹配质量
-    stop_words = {
-        'will', 'won', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'for',
-        'of', 'is', 'it', 'or', 'and', 'not', 'but', 'can', 'has', 'had', 'have',
-        'from', 'with', 'this', 'that', 'are', 'was', 'were', 'been', 'being',
-        'get', 'got', 'out', 'over', 'than', 'then', 'when', 'what', 'which',
-        'while', 'who', 'whom', 'why', 'how', 'all', 'any', 'both', 'each',
-        'more', 'most', 'some', 'such', 'your', 'our', 'their', 'its'
-    }
-    words = re.findall(r'\b\w+\b', title.lower())
-    # 只保留长度 > 3 的词（提高质量）
-    return {w for w in words if len(w) > 3 and w not in stop_words}
 
-
-def parse_end_date(date_str):
-    """Parse end date string for validation (improved: specific exceptions)"""
-    if not date_str:
-        return None
-    try:
-        if isinstance(date_str, str):
-            if date_str.isdigit():
-                return datetime.fromtimestamp(int(date_str))
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        elif isinstance(date_str, (int, float)):
-            return datetime.fromtimestamp(date_str)
-    except (ValueError, OSError) as e:
-        logger.debug(f"解析结束日期失败: {date_str}, 错误: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"解析结束日期时出现意外错误: {date_str}, 错误: {e}")
-        return None
 
 
 def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
-    """Find arbitrage between two platform market lists"""
+    """Find arbitrage between two platform market lists (使用统一匹配模块）"""
+    from src.market_matcher import MarketMatcher
+
     opportunities = []
+    checked_pairs = 0
+    skipped_similarity = 0
+    skipped_end_date = 0
 
-    for ma in markets_a:
-        ka = extract_keywords(ma['title'])
-        if not ka:
-            continue
+    # 关键修复：为每个市场添加纯文本标题用于匹配
+    # title_with_html 保留用于显示
+    # title_plain 用于匹配
+    markets_a_plain = []
+    for m in markets_a:
+        m_copy = m.copy()
+        m_copy['title_plain'] = strip_html(m.get('title', ''))
+        m_copy['title_with_html'] = m.get('title', '')
+        markets_a_plain.append(m_copy)
 
-        for mb in markets_b:
-            kb = extract_keywords(mb['title'])
-            if not kb:
-                continue
+    markets_b_plain = []
+    for m in markets_b:
+        m_copy = m.copy()
+        m_copy['title_plain'] = strip_html(m.get('title', ''))
+        m_copy['title_with_html'] = m.get('title', '')
+        markets_b_plain.append(m_copy)
 
-            intersection = ka & kb
-            union = ka | kb
-            similarity = len(intersection) / len(union) if union else 0
+    # 使用统一匹配器（使用纯文本标题）
+    matcher = MarketMatcher({})
+    matched_pairs = matcher.match_markets_cross_platform(
+        markets_a_plain, markets_b_plain,
+        title_field_a='title_plain', title_field_b='title_plain',  # 使用纯文本
+        id_field_a='id', id_field_b='id',
+        platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
+        min_similarity=0.50,  # v3 算法已有硬约束阻止假匹配，阈值不需要太高
+    )
 
-            if similarity < 0.35:  # 提高阈值从 0.2 到 0.35，减少错误匹配
-                continue
+    logger.info(f"[{platform_a_name} vs {platform_b_name}] MarketMatcher 找到 {len(matched_pairs)} 对匹配")
 
-            # Check end date similarity
-            end_a = parse_end_date(ma.get('end_date', ''))
-            end_b = parse_end_date(mb.get('end_date', ''))
-            if end_a and end_b:
+    for ma, mb, confidence in matched_pairs:
+        checked_pairs += 1
+
+        # Check end date similarity (如果有的话)
+        end_date_a = ma.get('end_date', '')
+        end_date_b = mb.get('end_date', '')
+        if end_date_a and end_date_b:
+            try:
+                # 尝试解析日期
+                if isinstance(end_date_a, str):
+                    end_a = datetime.fromisoformat(end_date_a.replace('Z', '+00:00'))
+                else:
+                    end_a = end_date_a
+                if isinstance(end_date_b, str):
+                    end_b = datetime.fromisoformat(end_date_b.replace('Z', '+00:00'))
+                else:
+                    end_b = end_date_b
+
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 5:  # More than 5 days difference, skip
+                if time_diff > 30:  # 30天容忍度
+                    skipped_end_date += 1
                     continue
+            except Exception as e:
+                logger.debug(f"End date parsing failed: {e}")
+                # 如果日期解析失败，继续检查套利
 
-            # Direction 1: Buy Yes on A + Buy No on B
-            combined1 = ma['yes'] + mb['no']
-            arb1 = (1.0 - combined1) * 100
+        # Direction 1: Buy Yes on A + Buy No on B
+        # 使用 ask 价格（买入成本）
+        combined1 = ma['yes'] + mb['no']
+        arb1 = (1.0 - combined1) * 100
 
-            # Direction 2: Buy Yes on B + Buy No on A
-            combined2 = mb['yes'] + ma['no']
-            arb2 = (1.0 - combined2) * 100
+        # Direction 2: Buy Yes on B + Buy No on A
+        # 使用 ask 价格（买入成本）
+        combined2 = mb['yes'] + ma['no']
+        arb2 = (1.0 - combined2) * 100
 
-            # Create unique market key for deduplication
-            market_key_base = f"{platform_a_name}-{platform_b_name}-{','.join(sorted(intersection))}"
+        # Create unique market key for deduplication
+        market_key_base = f"{platform_a_name}-{platform_b_name}-{ma.get('id','')}-{mb.get('id','')}"
 
-            if arb1 >= threshold:
-                opportunities.append({
-                    'market': ma['title'],
-                    'platform_a': platform_a_name,
-                    'platform_b': platform_b_name,
-                    'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
-                    'a_yes': round(ma['yes'] * 100, 2),
-                    'a_no': round(ma['no'] * 100, 2),
-                    'b_yes': round(mb['yes'] * 100, 2),
-                    'b_no': round(mb['no'] * 100, 2),
-                    'combined': round(combined1 * 100, 2),
-                    'arbitrage': round(arb1, 2),
-                    'confidence': round(similarity, 2),
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'market_key': f"{market_key_base}-yes1_no2",
-                })
+        if arb1 >= threshold:
+            opportunities.append({
+                'market': strip_html(ma['title_with_html']),  # Strip HTML for market name
+                'platform_a': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
+                'platform_b': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
+                'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
+                'a_yes': round(ma['yes'] * 100, 2),
+                'a_no': round(ma['no'] * 100, 2),
+                'b_yes': round(mb['yes'] * 100, 2),
+                'b_no': round(mb['no'] * 100, 2),
+                'combined': round(combined1 * 100, 2),
+                'arbitrage': round(arb1, 2),
+                'confidence': round(confidence, 2),
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'market_key': f"{market_key_base}-yes1_no2",
+            })
 
-            if arb2 >= threshold:
-                opportunities.append({
-                    'market': mb['title'],
-                    'platform_a': platform_b_name,
-                    'platform_b': platform_a_name,
-                    'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
-                    'a_yes': round(mb['yes'] * 100, 2),
-                    'a_no': round(mb['no'] * 100, 2),
-                    'b_yes': round(ma['yes'] * 100, 2),
-                    'b_no': round(ma['no'] * 100, 2),
-                    'combined': round(combined2 * 100, 2),
-                    'arbitrage': round(arb2, 2),
-                    'confidence': round(similarity, 2),
-                    'timestamp': datetime.now().strftime('%H:%M:%S'),
-                    'market_key': f"{market_key_base}-yes2_no1",
-                })
+        if arb2 >= threshold:
+            opportunities.append({
+                'market': strip_html(mb['title_with_html']),  # Strip HTML for market name
+                'platform_a': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
+                'platform_b': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
+                'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
+                'a_yes': round(mb['yes'] * 100, 2),
+                'a_no': round(mb['no'] * 100, 2),
+                'b_yes': round(ma['yes'] * 100, 2),
+                'b_no': round(ma['no'] * 100, 2),
+                'combined': round(combined2 * 100, 2),
+                'arbitrage': round(arb2, 2),
+                'confidence': round(confidence, 2),
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'market_key': f"{market_key_base}-yes2_no1",
+            })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
+
+    # Debug logging for arbitrage matching
+    logger.info(
+        f"[{platform_a_name} vs {platform_b_name}] Checked: {checked_pairs}, "
+        f"Skipped(similarity): {skipped_similarity}, "
+        f"Skipped(end_date): {skipped_end_date}, "
+        f"Found: {len(opportunities)} opportunities"
+    )
+
     return opportunities
 
 
