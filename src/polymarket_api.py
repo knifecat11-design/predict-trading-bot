@@ -287,6 +287,9 @@ class PolymarketClient:
         获取订单簿数据（用于套利监控）
         包含 Yes 和 No 的 best ask/bid 价格
 
+        注意：Polymarket API 只返回 Yes 的 bestBid/bestAsk
+        No 价格使用 1 - yes_ask 计算（基于 Yes 实际价格）
+
         Args:
             condition_id: 市场 ID
 
@@ -296,7 +299,7 @@ class PolymarketClient:
         try:
             import json
 
-            # 从市场列表中获取最新数据（包含 bestBid/bestAsk 和 noBid/noAsk）
+            # 从市场列表中获取最新数据
             markets = self.get_markets(limit=1000, active_only=True)
 
             for market in markets:
@@ -307,26 +310,26 @@ class PolymarketClient:
                     yes_bid = market.get('bestBid')
                     yes_ask = market.get('bestAsk')
 
-                    # No 价格（noBid/noAsk）
-                    no_bid = market.get('noBid')
-                    no_ask = market.get('noAsk')
+                    # 必须有 Yes 的 ask 价格
+                    if yes_ask is None or yes_ask <= 0 or yes_ask >= 1:
+                        return None
 
-                    # 必须有 Yes 和 No 的 ask 价格
-                    if yes_ask is not None and no_ask is not None:
-                        return PolymarketOrderBook(
-                            yes_bid=round(float(yes_bid), 4) if yes_bid is not None else 0.0,
-                            yes_ask=round(float(yes_ask), 4),
-                            yes_bid_size=100.0,
-                            yes_ask_size=100.0,
-                            no_bid=round(float(no_bid), 4) if no_bid is not None else 0.0,
-                            no_ask=round(float(no_ask), 4),
-                            no_bid_size=100.0,
-                            no_ask_size=100.0
-                        )
+                    # No 价格：使用 1 - yes_ask 计算
+                    # 注意：Polymarket 没有独立的 No 订单簿端点
+                    # 这是从 Yes best ask 推导的 No 价格
+                    no_ask = round(1.0 - yes_ask, 4)
+                    no_bid = round(1.0 - float(yes_bid), 4) if yes_bid is not None else None
 
-                    # 如果没有 noAsk，跳过这个市场（不使用计算值）
-                    logger.debug(f"市场 {condition_id} No 价格不可用，跳过")
-                    return None
+                    return PolymarketOrderBook(
+                        yes_bid=round(float(yes_bid), 4) if yes_bid is not None else 0.0,
+                        yes_ask=round(float(yes_ask), 4),
+                        yes_bid_size=100.0,
+                        yes_ask_size=100.0,
+                        no_bid=no_bid if no_bid is not None else 0.0,
+                        no_ask=no_ask,
+                        no_bid_size=100.0,
+                        no_ask_size=100.0
+                    )
 
             # 如果找不到市场，返回 None
             logger.warning(f"未找到市场 {condition_id}")
