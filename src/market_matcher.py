@@ -140,6 +140,7 @@ class KeywordExtractor:
         'trump': r'\bTrump\b',
         'biden': r'\bBiden\b',
         'crypto': r'\b(?:Bitcoin|BTC|Ethereum|ETH|crypto)\b',
+        'gta': r'\bGTA\s*(?:VI|V|4|5|6)?\b',
     }
 
     @classmethod
@@ -177,7 +178,7 @@ class KeywordExtractor:
 
         # 提取人名/实体
         for pattern_name, pattern in cls.PATTERNS.items():
-            if pattern_name in ['trump', 'biden', 'crypto']:
+            if pattern_name in ['trump', 'biden', 'crypto', 'gta']:
                 matches = re.findall(pattern, text, re.IGNORECASE)
                 keywords['entities'].extend([m.lower() for m in matches])
 

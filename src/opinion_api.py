@@ -242,7 +242,14 @@ class OpinionAPIClient:
                     batch = result.get('list', []) if isinstance(result, dict) else []
                     if not batch:
                         break
-                    all_markets.extend(batch)
+
+                    # 去重：使用 marketId 作为唯一标识
+                    seen_ids = {m.get('marketId') for m in all_markets}
+                    for m in batch:
+                        if m.get('marketId') not in seen_ids:
+                            all_markets.append(m)
+                            seen_ids.add(m.get('marketId'))
+
                     if len(batch) < page_size:
                         break
                 elif response.status_code == 401:

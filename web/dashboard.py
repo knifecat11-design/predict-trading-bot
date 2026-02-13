@@ -202,34 +202,17 @@ def fetch_polymarket_data(config):
                     # Fallback: 使用 condition_id
                     event_slug = condition_id
 
-                # 使用 bestAsk（实际的最低卖价）而不是 outcomePrices（中间价）
-                # bestAsk 是 Yes token 的买入价
-                best_ask = m.get('bestAsk')
-                if best_ask is None or best_ask <= 0 or best_ask >= 1:
-                    # 如果没有 bestAsk，回退到 outcomePrices
-                    outcome_str = m.get('outcomePrices', '[]')
-                    if isinstance(outcome_str, str):
-                        prices = json.loads(outcome_str)
-                    else:
-                        prices = outcome_str
-                    if len(prices) < 2:
-                        continue
-                    yes_price = float(prices[0])
-                    no_price = float(prices[1])
+                # 使用 outcomePrices（中间价）而不是 bestAsk
+                # 原因：outcomePrices 保证 Yes + No = 100c，混合使用 bestAsk 和 outcomePrices[1] 会导致价格偏差
+                outcome_str = m.get('outcomePrices', '[]')
+                if isinstance(outcome_str, str):
+                    prices = json.loads(outcome_str)
                 else:
-                    # 使用 bestAsk 作为 Yes 价格（实际买入价）
-                    yes_price = float(best_ask)
-                    # No 价格使用 outcomePrices[1] 或者 1 - yes_price
-                    outcome_str = m.get('outcomePrices', '[]')
-                    if isinstance(outcome_str, str):
-                        prices = json.loads(outcome_str)
-                    else:
-                        prices = outcome_str
-                    if len(prices) >= 2:
-                        no_price = float(prices[1])
-                    else:
-                        # Fallback: 使用 1 - yes_price
-                        no_price = round(1.0 - yes_price, 4)
+                    prices = outcome_str
+                if len(prices) < 2:
+                    continue
+                yes_price = float(prices[0])
+                no_price = float(prices[1])
 
                 # 验证价格有效性
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
@@ -253,7 +236,7 @@ def fetch_polymarket_data(config):
                 logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets using bestAsk")
+        logger.info(f"Polymarket: fetched {len(parsed)} markets using outcomePrices (mid prices)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
@@ -312,32 +295,19 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 独立获取 Yes 价格和订单簿 size（必需）
-                orderbook = client.get_order_book(yes_token)
-                if orderbook is None or orderbook.yes_ask_size is None:
+                # 获取 Yes 订单簿
+                # Opinion 的 Yes/No 是独立 token，但我们可以用 1 - yes_ask 来估算配套的 No 价格
+                # 这样可以确保 Yes + No = 100c，便于跨平台比较
+                yes_orderbook = client.get_order_book(yes_token)
+                if yes_orderbook is None or yes_orderbook.yes_ask is None:
                     continue
 
-                yes_price = orderbook.yes_ask
-                yes_shares = orderbook.yes_ask_size  # 可买份额
+                yes_price = yes_orderbook.yes_ask  # Yes 买入价
+                yes_shares = yes_orderbook.yes_ask_size  # 可买份额
 
-                # 对于前 N 个市场，尝试独立获取 No 价格和订单簿 size
-                # 对于其他市场，直接用 1 - yes_price 估算（避免太多 HTTP 请求）
-                if idx < max_detailed_fetch and no_token:
-                    no_price = client.get_token_price(no_token)
-                    no_orderbook = client.get_order_book(no_token)
-                    no_shares = no_orderbook.yes_ask_size if no_orderbook else 0
-                    if no_price is None:
-                        # Fallback: 使用 1 - yes_price
-                        logger.debug(f"市场 {market_id} No 价格获取失败，使用 fallback 1 - yes")
-                        no_price = round(1.0 - yes_price, 4)
-                        no_shares = 0
-                elif no_token:
-                    # 对于后续市场，直接用 1 - yes_price 估算
-                    no_price = round(1.0 - yes_price, 4)
-                    no_shares = 0
-                else:
-                    no_price = None
-                    no_shares = 0
+                # No 价格使用 1 - yes_ask 估算（配套价格）
+                no_price = round(1.0 - yes_price, 4)
+                no_shares = 0  # 估算的价格，没有实际订单簿大小
 
                 # 跳过无效价格
                 if no_price is None:
@@ -469,7 +439,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         title_field_a='title_plain', title_field_b='title_plain',  # 使用纯文本
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
-        min_similarity=0.35,
+        min_similarity=0.70,  # 更高阈值，只匹配高度相似的市场
     )
 
     logger.info(f"[{platform_a_name} vs {platform_b_name}] MarketMatcher 找到 {len(matched_pairs)} 对匹配")
