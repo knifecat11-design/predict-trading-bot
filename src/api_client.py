@@ -78,6 +78,11 @@ class PredictAPIClient:
         self._cache_time = 0
         self._cache_duration = config.get('api', {}).get('cache_seconds', 30)
 
+        # 订单簿缓存（优化性能）
+        self._orderbook_cache: Dict[str, Dict] = {}  # market_id -> orderbook
+        self._orderbook_cache_time: Dict[str, float] = {}  # market_id -> timestamp
+        self._orderbook_cache_duration = 60  # 订单簿缓存 60 秒
+
     def get_markets(self, status: str = 'OPEN', sort: str = None, limit: int = 100) -> List[Dict]:
         """
         获取市场列表（修复版）
@@ -256,17 +261,29 @@ class PredictAPIClient:
             logger.error(f"获取市场数据失败: {e}")
             return self._default_data(market_id or 'default')
 
-    def get_full_orderbook(self, market_id: str) -> Optional[Dict]:
+    def get_full_orderbook(self, market_id: str, use_cache: bool = True) -> Optional[Dict]:
         """
-        获取完整订单簿（Yes 和 No token）
+        获取完整订单簿（Yes 和 No token）- 带缓存优化
 
         注意: Predict.fun API 可能不支持 outcomeId 参数来获取 No token 订单簿
         因此 No 价格使用 1 - yes_price 计算
+
+        Args:
+            market_id: 市场 ID
+            use_cache: 是否使用缓存（默认 True）
 
         Returns:
             {'yes_bid': float, 'yes_ask': float, 'no_bid': float, 'no_ask': float}
             或 None（如果 Yes token 订单簿获取失败）
         """
+        # 检查缓存
+        if use_cache and market_id in self._orderbook_cache:
+            cache_time = self._orderbook_cache_time.get(market_id, 0)
+            if time.time() - cache_time < self._orderbook_cache_duration:
+                logger.debug(f"使用缓存的订单簿: {market_id}")
+                return self._orderbook_cache[market_id]
+
+        # 获取订单簿
         yes_ob = self._get_orderbook(market_id, outcome_id=1)
 
         # 检查 Yes token 订单簿是否有效
@@ -279,12 +296,19 @@ class PredictAPIClient:
         yes_bid = yes_ob['yes_bid']
         yes_ask = yes_ob['yes_ask']
 
-        return {
+        result = {
             'yes_bid': yes_bid,
             'yes_ask': yes_ask,
             'no_bid': round(1.0 - yes_ask, 4),  # No bid = 1 - Yes ask
-            'no_ask': round(1.0 - yes_bid, 4)   # No ask = 1 - Yes bid
+            'no_ask': round(1.0 - yes_bid, 4),   # No ask = 1 - Yes bid
         }
+
+        # 更新缓存
+        if use_cache:
+            self._orderbook_cache[market_id] = result
+            self._orderbook_cache_time[market_id] = time.time()
+
+        return result
 
     def _default_data(self, market_id: str) -> MarketData:
         """默认市场数据（当API失败时使用）"""

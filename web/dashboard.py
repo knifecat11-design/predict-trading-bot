@@ -340,7 +340,7 @@ def fetch_opinion_data(config):
 
 
 def fetch_predict_data(config):
-    """Fetch Predict.fun markets（改进版：独立获取 No 价格）"""
+    """Fetch Predict.fun markets（优化版：缓存+限流+跳过低流动性）"""
     api_key = config.get('api', {}).get('api_key', '')
     if not api_key:
         return 'no_key', []
@@ -348,21 +348,30 @@ def fetch_predict_data(config):
     try:
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
+
+        # 优化1: 只获取前 100 个市场列表（不需要全部）
         raw_markets = client.get_markets(status='open', limit=100)
 
         if not raw_markets:
             return 'error', []
 
+        # 优化2: 只解析前 50 个市场（避免大量 HTTP 请求）
+        # 注意: Predict.fun 市场列表没有 volume/liquidity 字段，需要先获取订单簿
+        parse_limit = 50
         parsed = []
-        for m in raw_markets:
+        skipped_no_orderbook = 0
+
+        for idx, m in enumerate(raw_markets[:parse_limit]):
             try:
                 market_id = m.get('id', m.get('market_id', ''))
                 if not market_id:
                     continue
 
-                # 使用 best ask 价格（实际买入价，不使用中间价）
-                full_ob = client.get_full_orderbook(market_id)
+                # 使用缓存的订单簿（60秒缓存）
+                full_ob = client.get_full_orderbook(market_id, use_cache=True)
                 if full_ob is None:
+                    skipped_no_orderbook += 1
+                    logger.debug(f"市场 {market_id} 订单簿为空，跳过")
                     continue
 
                 # 只使用 best ask（最低卖价），不使用中间价
@@ -375,20 +384,25 @@ def fetch_predict_data(config):
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
-                    'url': f"https://predict.fun/market/{market_slug}",  # Add URL field with slug
+                    'url': f"https://predict.fun/market/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
-                    'amount': ask_size,  # Yes 订单簿可买份额
-                    'volume': float(m.get('volume', 0) or 0),
-                    'liquidity': float(m.get('liquidity', 0) or 0),
+                    'amount': ask_size,
+                    'volume': 0,  # Predict.fun API 不返回 volume
+                    'liquidity': 0,  # Predict.fun API 不返回 liquidity
                     'platform': 'predict',
-                    'end_date': '',  # Predict may not have this field
+                    'end_date': '',
                 })
+
+                # 每解析 10 个市场输出一次进度
+                if (idx + 1) % 10 == 0:
+                    logger.info(f"Predict: 已解析 {idx + 1}/{min(parse_limit, len(raw_markets))} 个市场...")
+
             except Exception as e:
                 logger.debug(f"解析 Predict 市场失败: {e}")
                 continue
 
-        logger.info(f"Predict: fetched {len(parsed)} markets")
+        logger.info(f"Predict: fetched {len(parsed)} markets (跳过无订单簿: {skipped_no_orderbook})")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Predict import error: {e}")
