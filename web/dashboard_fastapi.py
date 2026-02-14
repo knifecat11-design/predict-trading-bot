@@ -39,6 +39,16 @@ logger.info(f"Project root: {PROJECT_ROOT}")
 # ==================== FastAPI App ====================
 app = FastAPI(title="Prediction Market Arbitrage Dashboard")
 
+
+# ==================== Startup Event ====================
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时：启动后台扫描器"""
+    logger.info("Starting background scanner...")
+    # 创建后台扫描任务但不等待它
+    asyncio.create_task(background_scanner())
+    logger.info("Background scanner task created")
+
 # ==================== Global State ====================
 @dataclass
 class DashboardState:
@@ -742,55 +752,19 @@ async def background_scanner():
 
 
 # ==================== Main ====================
-def main():
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 8000))
+
     logger.info("=" * 60)
     logger.info("  Prediction Market Arbitrage Dashboard - FastAPI + WebSocket")
     logger.info("=" * 60)
-
-    port = int(os.getenv('PORT', 8000))
     logger.info(f"Dashboard starting on http://0.0.0.0:{port}")
 
-    # 启动后台扫描器
-    scanner_task = None
-
-    async def lifespan(app):
-        """应用生命周期管理"""
-        # 启动时：启动后台扫描器
-        nonlocal scanner_task
-        scanner_task = asyncio.create_task(background_scanner())
-        logger.info("Background scanner started")
-
-        yield
-
-        # 关闭时：取消后台任务
-        if scanner_task:
-            scanner_task.cancel()
-            try:
-                await scanner_task
-            except asyncio.CancelledError:
-                pass
-            logger.info("Background scanner stopped")
-
-    # 使用 uvicorn 运行
-    config = uvicorn.Config(
-        app=app,
+    # 使用标准的 uvicorn.run() 启动方式
+    # Railway 会自动管理后台任务
+    uvicorn.run(
+        app,
         host='0.0.0.0',
         port=port,
         log_level="info"
     )
-    server = uvicorn.Server(config)
-
-    # 启动服务器
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    # 启动后台扫描器
-    loop.create_task(background_scanner())
-    logger.info("Background scanner started")
-
-    # 运行服务器
-    server.run()
-
-
-if __name__ == '__main__':
-    main()
