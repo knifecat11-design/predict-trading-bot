@@ -186,10 +186,10 @@ def fetch_polymarket_data(config):
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
         # 获取所有标签的市场（覆盖全站，~9个HTTP请求）
-        markets = poly_client.get_all_tags_markets(limit_per_tag=200)
+        markets = poly_client.get_all_tags_markets(limit_per_tag=500)  # 增加到 500 获取更多市场
 
         parsed = []
-        for m in markets[:3000]:
+        for m in markets[:5000]:  # 增加解析上限到 5000
             try:
                 condition_id = m.get('conditionId', m.get('condition_id', ''))
                 if not condition_id:
