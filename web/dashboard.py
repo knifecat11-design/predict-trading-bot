@@ -268,7 +268,7 @@ def fetch_opinion_data(config):
         # 移除冗余 test 请求（节省 10 秒超时等待）
 
         # 直接获取市场列表，已按 24h 交易量排序
-        raw_markets = client.get_markets(status='activated', sort_by=5, limit=500)
+        raw_markets = client.get_markets(status='activated', sort_by=5, limit=500)  # Opinion 最大 500
 
         if not raw_markets:
             return 'error', []
@@ -326,7 +326,7 @@ def fetch_opinion_data(config):
                 logger.warning(f"解析 Opinion 市场时出现意外错误: {e}")
                 continue
 
-            if len(parsed) >= 400:  # 提高限制（使用轻量级 API）
+            if len(parsed) >= 500:  # Opinion 最大 500 个市场
                 break
 
         logger.info(f"Opinion: fetched {len(parsed)} markets using lightweight get_token_price")
@@ -355,9 +355,9 @@ def fetch_predict_data(config):
         if not raw_markets:
             return 'error', []
 
-        # 优化2: 只解析前 50 个市场（避免大量 HTTP 请求）
+        # 优化2: 解析所有 100 个市场（使用缓存加速）
         # 注意: Predict.fun 市场列表没有 volume/liquidity 字段，需要先获取订单簿
-        parse_limit = 50
+        parse_limit = 100  # 增加到 100（匹配 API limit）
         parsed = []
         skipped_no_orderbook = 0
 

@@ -215,8 +215,8 @@ class OpinionAPIClient:
         """使用 HTTP 获取市场列表"""
         all_markets = []
 
-        for page in range(max_pages):
-            offset = page * page_size
+        for page in range(1, max_pages + 1):  # 修改：page 从 1 开始（不是 0）
+            offset = (page - 1) * page_size
             params = {
                 'status': status,
                 'sortBy': 5,  # 按 24h 交易量排序
@@ -225,6 +225,7 @@ class OpinionAPIClient:
             }
 
             try:
+                logger.info(f"Opinion: 请求第 {page}/{max_pages} 页 (offset={offset}, limit={page_size})")
                 response = self.session.get(
                     f"{self.base_url}/market",
                     params=params,
