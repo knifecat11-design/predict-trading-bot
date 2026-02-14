@@ -144,9 +144,9 @@ class OpinionAPIClient:
             # SDK 模式
             if self._use_sdk:
                 return self._get_markets_sdk(status, limit, page_size, max_pages)
-            # HTTP 模式
+            # HTTP 模式（使用并发获取更多市场）
             else:
-                return self._get_markets_http(status, limit, page_size, max_pages)
+                return self._get_markets_http_concurrent(status, limit)
 
         except Exception as e:
             logger.error(f"获取 Opinion 市场失败: {e}")
@@ -210,6 +210,98 @@ class OpinionAPIClient:
             logger.info(f"Opinion (SDK): 获取到 {len(all_markets)} 个市场")
 
         return all_markets[:limit]
+
+    def _get_markets_http_concurrent(self, status: str, limit: int) -> List[Dict]:
+        """使用 HTTP 并发获取市场列表（优化版：通过不同排序获取更多市场）
+
+        Opinion API 限制：
+        - 每次请求最多返回 20 个市场
+        - offset 参数不起作用（每次返回相同的市场）
+        - 解决方案：并发请求不同 sortBy 值获取不同的市场子集
+        """
+        try:
+            self._ensure_client()
+
+            # 检查缓存
+            if time.time() - self._cache_time < self._cache_duration and self._markets_cache:
+                return self._markets_cache[:limit]
+
+            # 使用不同的排序方式并发请求（每个排序返回不同的市场）
+            # sortBy: 1=创建时间, 2=流动性, 3=24h交易量, 4=参与人数, 5=涨跌幅
+            sort_options = [1, 2, 3, 4, 5]
+            all_markets = []
+            seen_ids = set()
+
+            # 并发请求
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import requests as req_module
+
+            def fetch_with_sort(sort_by):
+                # Fetch markets with specific sort order
+                # Create new session to avoid conflicts
+                session = req_module.Session()
+                session.headers.update({
+                    'apikey': self.api_key,
+                    'Content-Type': 'application/json'
+                })
+
+                params = {
+                    'status': status,
+                    'sortBy': sort_by,
+                    'limit': 20
+                }
+
+                try:
+                    response = session.get(
+                        f"{self.base_url}/market",
+                        params=params,
+                        timeout=15
+                    )
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        result = data.get('result', {})
+                        markets = result.get('list', []) if isinstance(result, dict) else []
+
+                        new_markets = []
+                        for m in markets:
+                            mid = m.get('marketId')
+                            if mid and mid not in seen_ids:
+                                seen_ids.add(mid)
+                                new_markets.append(m)
+
+                        total = result.get('total', 0)
+                        logger.debug(f"sortBy={sort_by}: {len(markets)} returned, {len(new_markets)} new, total={total}")
+                        return new_markets
+                    else:
+                        logger.warning(f"sortBy={sort_by}: HTTP {response.status_code}")
+                except Exception as e:
+                    logger.debug(f"sortBy={sort_by}: Error - {e}")
+
+                return []
+
+            # 并发执行所有排序
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(fetch_with_sort, sort): sort for sort in sort_options}
+
+                for future in as_completed(futures):
+                    try:
+                        markets = future.result(timeout=30)
+                        all_markets.extend(markets)
+                    except Exception as e:
+                        logger.warning(f"Concurrent fetch error: {e}")
+
+            # 更新缓存
+            if all_markets:
+                self._markets_cache = all_markets
+                self._cache_time = time.time()
+
+            logger.info(f"Opinion (HTTP并发): 获取到 {len(all_markets)} 个唯一市场 (使用 {len(sort_options)} 种排序)")
+            return all_markets[:limit]
+
+        except Exception as e:
+            logger.error(f"并发获取 Opinion 市场失败: {e}")
+            return self._markets_cache[:limit] if self._markets_cache else []
 
     def _get_markets_http(self, status: str, limit: int, page_size: int, max_pages: int) -> List[Dict]:
         """使用 HTTP 获取市场列表"""
