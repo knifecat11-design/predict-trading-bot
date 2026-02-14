@@ -6,13 +6,13 @@
     "watchPatterns": ["web/**", "requirements.txt", "src/**/*.py"]
   },
   "deploy": {
-    "startCommand": "python web/dashboard.py",
+    "startCommand": "python web/dashboard_fastapi.py",
     "restartPolicyType": "ALWAYS",
-    "healthcheckPath": "/",
+    "healthcheckPath": "/health",
     "healthcheckTimeout": 300
   },
   "variables": {
-    "PORT": "5000",
+    "PORT": "8000",
     "PREDICT_API_KEY": "",
     "OPINION_API_KEY": "JycT63x2kYkqtTrlCnpR58O57agzKouz",
     "OPINION_WALLET_ADDRESS": "0x138fad69eb759f4460de2e3fb79173b034142021",
