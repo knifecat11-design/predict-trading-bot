@@ -113,28 +113,8 @@ def check_platform_api(config):
     status = {
         'polymarket': True,  # Public API, always available
         'opinion': bool(config.get('opinion', {}).get('api_key', '')),
-        'predict': True,  # 默认启用，允许尝试获取市场（API key 可能在 config.yaml 中）
+        'predict': bool(config.get('api', {}).get('api_key', '')),  # 只要有 API key 就启用
     }
-
-    # Check Predict.fun API
-    predict_key = config.get('api', {}).get('api_key', '')
-    if predict_key:
-        try:
-            import requests
-            base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
-            resp = requests.get(
-                f"{base_url}/markets",
-                headers={'Authorization': f'Bearer {predict_key}'},
-                params={'limit': 1},
-                timeout=5
-            )
-            status['predict'] = resp.status_code == 200
-        except requests.RequestException as e:
-            logging.warning(f"Predict API 检查失败（网络错误）: {e}")
-            status['predict'] = False
-        except Exception as e:
-            logging.warning(f"Predict API 检查失败: {e}")
-            status['predict'] = False
 
     return status
 
