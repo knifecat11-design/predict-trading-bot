@@ -1,6 +1,8 @@
 """
 Cross-platform prediction market arbitrage dashboard
 Platforms: Polymarket, Opinion.trade, Predict.fun
+
+Optimized v3.0: Concurrent fetching, scan guard, memory limits, rate limiting
 """
 
 import os
@@ -10,7 +12,8 @@ import time
 import logging
 import threading
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, render_template, jsonify
 
 # Setup logging first
@@ -27,10 +30,22 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 logger.info(f"Project root: {PROJECT_ROOT}")
-logger.info(f"Python path: {sys.path[:3]}")
 
 app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
+
+# ============================================================
+# Configuration constants - tune these to control resource usage
+# ============================================================
+MAX_MARKETS_DISPLAY = 15          # Max markets to store in state per platform (for UI)
+MAX_ARBITRAGE_DISPLAY = 30        # Max arbitrage opportunities to keep
+ARBITRAGE_EXPIRY_MINUTES = 10     # Remove stale arbitrage after N minutes
+OPINION_DETAILED_FETCH = 30       # Individual No price fetches (was 80 -> reduced to 30)
+PREDICT_DETAILED_FETCH = 25       # Individual orderbook fetches (was 80 -> reduced to 25)
+POLYMARKET_LIMIT_PER_TAG = 100    # Markets per tag (was 200 -> reduced to 100)
+OPINION_MARKET_LIMIT = 200        # Total opinion markets to process (was 500 -> reduced)
+OPINION_PARSED_LIMIT = 150        # Max parsed opinion markets (was 300 -> reduced)
+MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
 
 # Global state
 _state = {
@@ -45,9 +60,9 @@ _state = {
     'threshold': 2.0,
     'last_scan': '-',
     'error': None,
-    'last_sent_opportunities': {},  # Track last sent opportunities for deduplication
 }
 _lock = threading.Lock()
+_scanning = threading.Event()  # Scan guard: prevents overlapping scans
 
 
 def load_config():
@@ -68,7 +83,7 @@ def load_config():
         'min_confidence': 0.2,
     }
     config['arbitrage'] = {
-        'scan_interval': int(os.getenv('SCAN_INTERVAL', 30)),
+        'scan_interval': max(MIN_SCAN_INTERVAL, int(os.getenv('SCAN_INTERVAL', 60))),
     }
 
     # Try to load from config file
@@ -94,7 +109,6 @@ def strip_html(html_text):
     """Strip HTML tags from text, return plain text"""
     if not html_text:
         return ''
-    # Simple HTML strip - remove everything between < and >
     import re
     return re.sub(r'<[^>]+>', '', html_text).strip()
 
@@ -102,16 +116,12 @@ def strip_html(html_text):
 def slugify(text):
     """Convert text to URL-friendly slug format (improved for Predict.fun)"""
     import re
-    # Convert to lowercase
     text = text.lower()
 
-    # Remove verbose phrases FIRST (before word removal)
-    # These patterns need to be removed as whole phrases
     text = re.sub(r'\bequal\s+(to\s+)?(or\s+)?greater\s+than\b', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\bgreater\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\bless\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
 
-    # Remove common words that clutter URLs
     words_to_remove = [
         'will', 'won', 'would',
         'the', 'a', 'an',
@@ -133,20 +143,12 @@ def slugify(text):
         'since', 'until', 'unless',
     ]
 
-    # Remove words as whole words only
     for word in words_to_remove:
         text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
 
-    # Remove dollar signs and commas (keep digits together: $1,800 -> 1800)
     text = text.replace('$', '').replace(',', '')
-
-    # Replace special chars with spaces (except digits, letters, hyphens)
     text = re.sub(r'[^\w\s-]', ' ', text)
-
-    # Replace multiple spaces/newlines/underscores with single hyphen
     text = re.sub(r'[\s_]+', '-', text)
-
-    # Remove trailing/leading hyphens and multiple hyphens
     text = re.sub(r'-+', '-', text)
     text = text.strip('-')
 
@@ -154,12 +156,7 @@ def slugify(text):
 
 
 def platform_link_html(platform_name, market_url=None):
-    """Generate colored platform link HTML
-
-    Args:
-        platform_name: Platform name (Polymarket, Opinion, Predict)
-        market_url: Optional specific market URL (overrides default)
-    """
+    """Generate colored platform link HTML"""
     platform_colors = {
         'Polymarket': '#03a9f4',
         'Opinion': '#d29922',
@@ -175,18 +172,16 @@ def platform_link_html(platform_name, market_url=None):
         'Predict.fun': 'https://predict.fun',
     }
     color = platform_colors.get(platform_name, '#888')
-    # Use market_url if provided, otherwise use platform home
     url = market_url if market_url else platform_urls.get(platform_name, '#')
     return f"<a href='{url}' target='_blank' style='color:{color};font-weight:600;text-decoration:none'>{platform_name}</a>"
 
 
 def fetch_polymarket_data(config):
-    """Fetch Polymarket markets — 参考 continuous_monitor 直接用 API 响应数据，无需逐个请求订单簿"""
+    """Fetch Polymarket markets - optimized: reduced limit_per_tag"""
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
-        # 获取所有标签的市场（覆盖全站，~9 个 HTTP 请求）
-        markets = poly_client.get_all_tags_markets(limit_per_tag=200)
+        markets = poly_client.get_all_tags_markets(limit_per_tag=POLYMARKET_LIMIT_PER_TAG)
 
         parsed = []
         for m in markets:
@@ -195,15 +190,13 @@ def fetch_polymarket_data(config):
                 if not condition_id:
                     continue
 
-                # 优先使用 bestBid/bestAsk（API 响应中已包含，无需额外 HTTP 请求）
                 best_bid = m.get('bestBid')
                 best_ask = m.get('bestAsk')
 
                 if best_bid is not None and best_ask is not None:
-                    yes_price = float(best_ask)      # Yes 买入价 = best ask
-                    no_price = 1.0 - float(best_bid)  # No 买入价 = 1 - best bid
+                    yes_price = float(best_ask)
+                    no_price = 1.0 - float(best_bid)
                 else:
-                    # Fallback: 使用 outcomePrices（参考 continuous_monitor.py）
                     outcome_str = m.get('outcomePrices', '[]')
                     if isinstance(outcome_str, str):
                         prices = json.loads(outcome_str)
@@ -217,7 +210,6 @@ def fetch_polymarket_data(config):
                 if yes_price <= 0 or no_price <= 0:
                     continue
 
-                # 获取事件 slug（用于超链接）
                 events = m.get('events', [])
                 event_slug = events[0].get('slug', '') if events else ''
                 if not event_slug:
@@ -234,14 +226,13 @@ def fetch_polymarket_data(config):
                     'platform': 'polymarket',
                     'end_date': m.get('endDate', ''),
                 })
-            except (ValueError, TypeError, KeyError) as e:
-                logger.debug(f"解析 Polymarket 市场失败: {e}")
+            except (ValueError, TypeError, KeyError):
                 continue
             except Exception as e:
-                logger.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
+                logger.warning(f"Polymarket parse error: {e}")
                 continue
 
-        logger.info(f"Polymarket: fetched {len(parsed)} markets (0 extra HTTP requests)")
+        logger.info(f"Polymarket: {len(parsed)} markets (0 extra HTTP)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Polymarket import error: {e}")
@@ -252,29 +243,24 @@ def fetch_polymarket_data(config):
 
 
 def fetch_opinion_data(config):
-    """Fetch Opinion.trade markets — 参考 continuous_monitor 的 get_token_price + fallback 策略"""
+    """Fetch Opinion.trade markets - optimized: reduced individual price fetches"""
     api_key = config.get('opinion', {}).get('api_key', '')
     if not api_key:
         logger.warning("Opinion: no API key")
         return 'no_key', []
 
     try:
-        # 不做冗余 test 请求（成功脚本也没有），直接创建客户端
-        # get_markets() 内部会处理 401/429 等错误
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
 
-        # 直接获取市场列表，已按 24h 交易量排序
-        raw_markets = client.get_markets(status='activated', sort_by=5, limit=500)
+        raw_markets = client.get_markets(status='activated', sort_by=5, limit=OPINION_MARKET_LIMIT)
 
         if not raw_markets:
             return 'error', []
 
-        logger.info(f"Opinion: 获取到 {len(raw_markets)} 个原始市场，开始解析价格...")
+        logger.info(f"Opinion: {len(raw_markets)} raw markets, parsing prices...")
 
         parsed = []
-        # 参考 continuous_monitor.py: 前 N 个市场独立获取 No 价格，后续用 fallback
-        max_detailed_fetch = 80  # 前 80 个独立获取 No（比 continuous_monitor 的 50 多）
 
         for idx, m in enumerate(raw_markets):
             try:
@@ -283,20 +269,21 @@ def fetch_opinion_data(config):
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                # 跳过无效 token（避免浪费 HTTP 请求）
                 if not yes_token:
                     continue
 
-                # 使用 get_token_price（轻量级，参考 continuous_monitor）
                 yes_price = client.get_token_price(yes_token)
                 if yes_price is None:
                     continue
 
-                # 前 N 个市场独立获取 No 价格，后续用 1-yes fallback
-                if idx < max_detailed_fetch and no_token:
+                # Only fetch individual No price for top markets, use fallback for rest
+                if idx < OPINION_DETAILED_FETCH and no_token:
                     no_price = client.get_token_price(no_token)
                     if no_price is None:
                         no_price = round(1.0 - yes_price, 4)
+                    # Rate limit: small delay every 10 requests to respect 15 req/s
+                    if idx > 0 and idx % 10 == 0:
+                        time.sleep(0.2)
                 elif no_token:
                     no_price = round(1.0 - yes_price, 4)
                 else:
@@ -318,17 +305,16 @@ def fetch_opinion_data(config):
                     'platform': 'opinion',
                     'end_date': m.get('cutoff_at', ''),
                 })
-            except (ValueError, TypeError, KeyError) as e:
-                logger.debug(f"解析 Opinion 市场失败: {e}")
+            except (ValueError, TypeError, KeyError):
                 continue
             except Exception as e:
-                logger.warning(f"解析 Opinion 市场时出现意外错误: {e}")
+                logger.warning(f"Opinion parse error: {e}")
                 continue
 
-            if len(parsed) >= 300:
+            if len(parsed) >= OPINION_PARSED_LIMIT:
                 break
 
-        logger.info(f"Opinion: fetched {len(parsed)} markets (详细价格: 前{max_detailed_fetch}个, fallback: 其余)")
+        logger.info(f"Opinion: {len(parsed)} markets (detailed: {OPINION_DETAILED_FETCH}, fallback: rest)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
@@ -339,7 +325,7 @@ def fetch_opinion_data(config):
 
 
 def fetch_predict_data(config):
-    """Fetch Predict.fun markets — limit 提高到 200，前 80 个获取精确价格"""
+    """Fetch Predict.fun markets - optimized: reduced orderbook fetches"""
     api_key = config.get('api', {}).get('api_key', '')
     if not api_key:
         return 'no_key', []
@@ -348,7 +334,6 @@ def fetch_predict_data(config):
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
 
-        # 分页获取更多市场（API 单次最多 100）
         all_raw = []
         for sort_by in ['popular', 'newest']:
             batch = client.get_markets(status='open', sort=sort_by, limit=100)
@@ -360,10 +345,9 @@ def fetch_predict_data(config):
         if not all_raw:
             return 'error', []
 
-        logger.info(f"Predict: 获取到 {len(all_raw)} 个原始市场")
+        logger.info(f"Predict: {len(all_raw)} raw markets")
 
         parsed = []
-        max_detailed_fetch = 80  # 前 80 个获取精确订单簿价格
 
         for idx, m in enumerate(all_raw):
             try:
@@ -373,15 +357,14 @@ def fetch_predict_data(config):
 
                 question_text = (m.get('question') or m.get('title', ''))
 
-                if idx < max_detailed_fetch:
-                    # 精确模式：使用 best ask
+                if idx < PREDICT_DETAILED_FETCH:
                     full_ob = client.get_full_orderbook(market_id)
                     if full_ob is None:
                         continue
                     yes_price = full_ob['yes_ask']
                     no_price = full_ob['no_ask']
                 else:
-                    # 快速模式：只获取 Yes 价格，No 用 fallback
+                    # Fast mode: single orderbook call, derive No price
                     try:
                         yes_ob = client._get_orderbook(market_id, outcome_id=1)
                         if yes_ob is None:
@@ -411,10 +394,10 @@ def fetch_predict_data(config):
                     'end_date': '',
                 })
             except Exception as e:
-                logger.debug(f"解析 Predict 市场失败: {e}")
+                logger.debug(f"Predict parse error: {e}")
                 continue
 
-        logger.info(f"Predict: fetched {len(parsed)} markets (详细价格: 前{max_detailed_fetch}个)")
+        logger.info(f"Predict: {len(parsed)} markets (detailed: {PREDICT_DETAILED_FETCH})")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Predict import error: {e}")
@@ -424,21 +407,14 @@ def fetch_predict_data(config):
         return 'error', []
 
 
-
-
-
 def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
-    """Find arbitrage between two platform market lists (使用统一匹配模块）"""
+    """Find arbitrage between two platform market lists"""
     from src.market_matcher import MarketMatcher
 
     opportunities = []
     checked_pairs = 0
-    skipped_similarity = 0
     skipped_end_date = 0
 
-    # 关键修复：为每个市场添加纯文本标题用于匹配
-    # title_with_html 保留用于显示
-    # title_plain 用于匹配
     markets_a_plain = []
     for m in markets_a:
         m_copy = m.copy()
@@ -453,27 +429,24 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         m_copy['title_with_html'] = m.get('title', '')
         markets_b_plain.append(m_copy)
 
-    # 使用统一匹配器（使用纯文本标题）
     matcher = MarketMatcher({})
     matched_pairs = matcher.match_markets_cross_platform(
         markets_a_plain, markets_b_plain,
-        title_field_a='title_plain', title_field_b='title_plain',  # 使用纯文本
+        title_field_a='title_plain', title_field_b='title_plain',
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
-        min_similarity=0.50,  # v3 算法已有硬约束阻止假匹配，阈值不需要太高
+        min_similarity=0.50,
     )
 
-    logger.info(f"[{platform_a_name} vs {platform_b_name}] MarketMatcher 找到 {len(matched_pairs)} 对匹配")
+    logger.info(f"[{platform_a_name} vs {platform_b_name}] Matched {len(matched_pairs)} pairs")
 
     for ma, mb, confidence in matched_pairs:
         checked_pairs += 1
 
-        # Check end date similarity (如果有的话)
         end_date_a = ma.get('end_date', '')
         end_date_b = mb.get('end_date', '')
         if end_date_a and end_date_b:
             try:
-                # 尝试解析日期
                 if isinstance(end_date_a, str):
                     end_a = datetime.fromisoformat(end_date_a.replace('Z', '+00:00'))
                 else:
@@ -484,31 +457,26 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                     end_b = end_date_b
 
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 30:  # 30天容忍度
+                if time_diff > 30:
                     skipped_end_date += 1
                     continue
-            except Exception as e:
-                logger.debug(f"End date parsing failed: {e}")
-                # 如果日期解析失败，继续检查套利
+            except Exception:
+                pass
 
-        # Direction 1: Buy Yes on A + Buy No on B
-        # 使用 ask 价格（买入成本）
         combined1 = ma['yes'] + mb['no']
         arb1 = (1.0 - combined1) * 100
 
-        # Direction 2: Buy Yes on B + Buy No on A
-        # 使用 ask 价格（买入成本）
         combined2 = mb['yes'] + ma['no']
         arb2 = (1.0 - combined2) * 100
 
-        # Create unique market key for deduplication
         market_key_base = f"{platform_a_name}-{platform_b_name}-{ma.get('id','')}-{mb.get('id','')}"
+        now_str = datetime.now().strftime('%H:%M:%S')
 
         if arb1 >= threshold:
             opportunities.append({
-                'market': strip_html(ma['title_with_html']),  # Strip HTML for market name
-                'platform_a': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
-                'platform_b': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
+                'market': strip_html(ma['title_with_html']),
+                'platform_a': platform_link_html(platform_a_name, ma.get('url')),
+                'platform_b': platform_link_html(platform_b_name, mb.get('url')),
                 'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
                 'a_yes': round(ma['yes'] * 100, 2),
                 'a_no': round(ma['no'] * 100, 2),
@@ -517,15 +485,16 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'combined': round(combined1 * 100, 2),
                 'arbitrage': round(arb1, 2),
                 'confidence': round(confidence, 2),
-                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'timestamp': now_str,
                 'market_key': f"{market_key_base}-yes1_no2",
+                '_created_at': time.time(),
             })
 
         if arb2 >= threshold:
             opportunities.append({
-                'market': strip_html(mb['title_with_html']),  # Strip HTML for market name
-                'platform_a': platform_link_html(platform_b_name, mb.get('url')),  # Colored link with market URL
-                'platform_b': platform_link_html(platform_a_name, ma.get('url')),  # Colored link with market URL
+                'market': strip_html(mb['title_with_html']),
+                'platform_a': platform_link_html(platform_b_name, mb.get('url')),
+                'platform_b': platform_link_html(platform_a_name, ma.get('url')),
                 'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
                 'a_yes': round(mb['yes'] * 100, 2),
                 'a_no': round(mb['no'] * 100, 2),
@@ -534,72 +503,90 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'combined': round(combined2 * 100, 2),
                 'arbitrage': round(arb2, 2),
                 'confidence': round(confidence, 2),
-                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'timestamp': now_str,
                 'market_key': f"{market_key_base}-yes2_no1",
+                '_created_at': time.time(),
             })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
 
-    # Debug logging for arbitrage matching
     logger.info(
         f"[{platform_a_name} vs {platform_b_name}] Checked: {checked_pairs}, "
-        f"Skipped(similarity): {skipped_similarity}, "
         f"Skipped(end_date): {skipped_end_date}, "
-        f"Found: {len(opportunities)} opportunities"
+        f"Found: {len(opportunities)}"
     )
 
     return opportunities
 
 
 def background_scanner():
-    """Background thread that scans all platforms"""
+    """Background thread that scans all platforms - with scan guard and concurrent fetching"""
     global _state
     config = load_config()
     threshold = float(config.get('opinion_poly', {}).get('min_arbitrage_threshold', 2.0))
-    scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 30))
+    scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 60))
 
     logger.info(f"Scanner started: threshold={threshold}%, interval={scan_interval}s")
+    logger.info(f"Limits: poly_per_tag={POLYMARKET_LIMIT_PER_TAG}, "
+                f"opinion_detailed={OPINION_DETAILED_FETCH}, "
+                f"predict_detailed={PREDICT_DETAILED_FETCH}")
 
     while True:
+        # Scan guard: skip if previous scan is still running
+        if _scanning.is_set():
+            logger.warning("Previous scan still running, skipping this cycle")
+            time.sleep(scan_interval)
+            continue
+
+        _scanning.set()
+        scan_start = time.time()
+
         try:
-            # 优化：各平台独立更新状态，避免互相阻塞
-            with _lock:
-                now = time.time()
+            now = time.time()
 
-            # Fetch Polymarket（立即更新状态，不等其他平台）
-            poly_status, poly_markets = fetch_polymarket_data(config)
-            with _lock:
-                _state['platforms']['polymarket'] = {
-                    'status': poly_status,
-                    'markets': poly_markets[:20],
-                    'count': len(poly_markets),
-                    'last_update': now,
+            # === CONCURRENT FETCHING: all 3 platforms in parallel ===
+            poly_status, poly_markets = 'unknown', []
+            opinion_status, opinion_markets = 'unknown', []
+            predict_status, predict_markets = 'unknown', []
+
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix='fetch') as executor:
+                futures = {
+                    executor.submit(fetch_polymarket_data, config): 'polymarket',
+                    executor.submit(fetch_opinion_data, config): 'opinion',
+                    executor.submit(fetch_predict_data, config): 'predict',
                 }
-                logger.info(f"[Polymarket] 已更新: {len(poly_markets)} 个市场, status={poly_status}")
 
-            # Fetch Opinion（立即更新状态，不等其他平台）
-            opinion_status, opinion_markets = fetch_opinion_data(config)
-            with _lock:
-                _state['platforms']['opinion'] = {
-                    'status': opinion_status,
-                    'markets': opinion_markets[:20],
-                    'count': len(opinion_markets),
-                    'last_update': now,
-                }
-                logger.info(f"[Opinion] 已更新: {len(opinion_markets)} 个市场, status={opinion_status}")
+                for future in as_completed(futures, timeout=120):
+                    platform = futures[future]
+                    try:
+                        status, markets = future.result(timeout=120)
+                        if platform == 'polymarket':
+                            poly_status, poly_markets = status, markets
+                        elif platform == 'opinion':
+                            opinion_status, opinion_markets = status, markets
+                        elif platform == 'predict':
+                            predict_status, predict_markets = status, markets
 
-            # Fetch Predict（立即更新状态，不等其他平台）
-            predict_status, predict_markets = fetch_predict_data(config)
-            with _lock:
-                _state['platforms']['predict'] = {
-                    'status': predict_status,
-                    'markets': predict_markets[:20],
-                    'count': len(predict_markets),
-                    'last_update': now,
-                }
-                logger.info(f"[Predict] 已更新: {len(predict_markets)} 个市场, status={predict_status}")
+                        # Update state immediately for this platform
+                        with _lock:
+                            _state['platforms'][platform] = {
+                                'status': status,
+                                'markets': markets[:MAX_MARKETS_DISPLAY],
+                                'count': len(markets),
+                                'last_update': now,
+                            }
+                        logger.info(f"[{platform}] {len(markets)} markets, status={status}")
+                    except Exception as e:
+                        logger.error(f"[{platform}] fetch failed: {e}")
+                        with _lock:
+                            _state['platforms'][platform] = {
+                                'status': 'error',
+                                'markets': [],
+                                'count': 0,
+                                'last_update': now,
+                            }
 
-            # Find arbitrage across all pairs（所有平台数据已独立更新）
+            # Find arbitrage across all pairs
             all_arb = []
 
             if poly_markets and opinion_markets:
@@ -620,37 +607,42 @@ def background_scanner():
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
             with _lock:
-                # Merge with existing arbitrage opportunities, tracking by market_key
+                # Merge with existing, but expire stale entries
                 existing_arb = _state.get('arbitrage', [])
                 new_arb_map = {opp['market_key']: opp for opp in all_arb if opp.get('market_key')}
                 old_arb_map = {opp['market_key']: opp for opp in existing_arb if opp.get('market_key')}
 
-                # For old opportunities not in new scan, keep them (could add expiry logic later)
+                # Keep old opportunities only if they haven't expired
+                expiry_cutoff = time.time() - (ARBITRAGE_EXPIRY_MINUTES * 60)
                 for key, old_opp in old_arb_map.items():
                     if key not in new_arb_map:
-                        # Keep old opportunity if it still exists
-                        new_arb_map[key] = old_opp
+                        created_at = old_opp.get('_created_at', 0)
+                        if created_at > expiry_cutoff:
+                            new_arb_map[key] = old_opp
+                        # else: expired, don't keep
 
-                # For opportunities in both new and old, check if price changed significantly
-                for key, new_opp in new_arb_map.items():
+                # For opportunities in both, keep new if price changed significantly
+                for key in list(new_arb_map.keys()):
+                    new_opp = new_arb_map[key]
                     if key in old_arb_map:
                         old_opp = old_arb_map[key]
                         price_change = abs(new_opp['arbitrage'] - old_opp['arbitrage'])
-                        # 提高变化阈值从 0.1% 到 0.5%，让价格更新更明显
                         if price_change < 0.5:
+                            # Keep old data but update timestamp
+                            old_opp['timestamp'] = datetime.now().strftime('%H:%M:%S')
                             new_arb_map[key] = old_opp
-                        # 总是更新时间戳，显示最新扫描时间
-                        new_opp['timestamp'] = datetime.now().strftime('%H:%M:%S')
 
-                _state['arbitrage'] = list(new_arb_map.values())[:50]
+                # Sort and limit
+                sorted_arb = sorted(new_arb_map.values(), key=lambda x: x['arbitrage'], reverse=True)
+                _state['arbitrage'] = sorted_arb[:MAX_ARBITRAGE_DISPLAY]
                 _state['scan_count'] += 1
                 _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 _state['threshold'] = threshold
                 _state['error'] = None
 
-
+            scan_duration = time.time() - scan_start
             logger.info(
-                f"Scan #{_state['scan_count']}: "
+                f"Scan #{_state['scan_count']} ({scan_duration:.1f}s): "
                 f"Poly={len(poly_markets)} Opinion={len(opinion_markets)} "
                 f"Predict={len(predict_markets)} Arb={len(all_arb)}"
             )
@@ -660,6 +652,8 @@ def background_scanner():
             logger.error(traceback.format_exc())
             with _lock:
                 _state['error'] = str(e)
+        finally:
+            _scanning.clear()
 
         time.sleep(scan_interval)
 
@@ -686,7 +680,8 @@ def health():
 
 def main():
     logger.info("=" * 60)
-    logger.info("  Prediction Market Arbitrage Dashboard")
+    logger.info("  Prediction Market Arbitrage Dashboard v3.0")
+    logger.info("  Optimized: concurrent fetch, scan guard, memory limits")
     logger.info("=" * 60)
 
     # Start background scanner
