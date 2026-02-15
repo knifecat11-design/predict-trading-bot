@@ -5,9 +5,9 @@
     "buildCommand": "pip install -r requirements.txt"
   },
   "deploy": {
-    "startCommand": "python web/dashboard.py",
+    "startCommand": "python health_server.py",
     "restartPolicyType": "ALWAYS",
-    "healthcheckPath": "/",
+    "healthcheckPath": "/health",
     "healthcheckTimeout": 300
   },
   "variables": {
