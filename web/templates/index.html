@@ -31,8 +31,29 @@
             gap: 20px;
             font-size: 13px;
             color: #8b949e;
+            align-items: center;
         }
         .header-info .val { color: #58a6ff; font-weight: 600; }
+
+        /* WebSocket connection indicator */
+        .ws-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            background: #21262d;
+        }
+        .ws-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+        .ws-dot.connected { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+        .ws-dot.disconnected { background: #f85149; box-shadow: 0 0 6px #f85149; }
+        .ws-dot.connecting { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1s ease-in-out infinite; }
 
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
 
@@ -48,6 +69,10 @@
             border: 1px solid #21262d;
             border-radius: 12px;
             padding: 16px;
+            transition: border-color 0.3s;
+        }
+        .platform-card.updated {
+            border-color: #3fb950;
         }
         .platform-card .name {
             display: flex;
@@ -187,6 +212,10 @@
     <div class="header">
         <h1>Prediction Market <span>Arbitrage Monitor</span></h1>
         <div class="header-info">
+            <div class="ws-indicator">
+                <span class="ws-dot connecting" id="ws-dot"></span>
+                <span id="ws-label">Connecting...</span>
+            </div>
             <div>Scans: <span class="val" id="scan-count">0</span></div>
             <div>Threshold: <span class="val" id="threshold">2.0</span>%</div>
             <div>Updated: <span class="val" id="last-scan">-</span></div>
@@ -267,13 +296,35 @@
         </div>
     </div>
 
+    <!-- Socket.IO client -->
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
     <script>
+        // ============================================================
+        // WebSocket connection with automatic fallback to polling
+        // ============================================================
+        let useWebSocket = true;
+        let pollingInterval = null;
+        let socket = null;
+
         const statusLabels = {
             active: 'Active',
             error: 'Error',
             no_key: 'No API Key',
             unknown: 'Loading...'
         };
+
+        function setWsStatus(status) {
+            const dot = document.getElementById('ws-dot');
+            const label = document.getElementById('ws-label');
+            dot.className = 'ws-dot ' + status;
+            if (status === 'connected') {
+                label.textContent = 'WebSocket';
+            } else if (status === 'disconnected') {
+                label.textContent = 'Polling';
+            } else {
+                label.textContent = 'Connecting...';
+            }
+        }
 
         function platformTag(name) {
             const cls = name.toLowerCase().includes('poly') ? 'poly' :
@@ -303,122 +354,135 @@
             `).join('');
         }
 
-        function update() {
-            fetch('/api/state')
-                .then(r => r.json())
-                .then(data => {
-                    // Header
-                    document.getElementById('scan-count').textContent = data.scan_count || 0;
-                    document.getElementById('threshold').textContent = data.threshold || 2.0;
-                    document.getElementById('last-scan').textContent = data.last_scan || '-';
-
-                    // Platforms
-                    ['polymarket', 'opinion', 'predict'].forEach(p => {
-                        const info = data.platforms[p] || {};
-                        const dot = document.getElementById(`dot-${p}`);
-                        dot.className = `status-dot ${info.status || 'unknown'}`;
-                        document.getElementById(`count-${p}`).textContent = info.count || 0;
-                        document.getElementById(`status-${p}`).textContent = statusLabels[info.status] || info.status;
-                        renderMarkets(`list-${p}`, info.markets);
-                    });
-
-                    // Arbitrage
-                    const tbody = document.getElementById('arb-body');
-                    const arbs = data.arbitrage || [];
-                    if (arbs.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
-                    } else {
-                        tbody.innerHTML = arbs.map(a => `
-                            <tr>
-                                <td>${a.market}</td>
-                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
-                                <td class="direction">${a.direction}</td>
-                                <td>Y:${a.a_yes}c N:${a.a_no}c</td>
-                                <td>Y:${a.b_yes}c N:${a.b_no}c</td>
-                                <td>${a.combined}c</td>
-                                <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${(a.confidence * 100).toFixed(0)}%</td>
-                                <td>${a.timestamp}</td>
-                            </tr>
-                        `).join('');
-                    }
-                })
-                .catch(e => console.error('Update error:', e));
+        function flashCard(platform) {
+            const card = document.getElementById('card-' + platform);
+            if (card) {
+                card.classList.add('updated');
+                setTimeout(() => card.classList.remove('updated'), 1500);
+            }
         }
 
-        function update() {
+        function updateDashboard(data) {
+            if (!data) return;
+
+            // Header
+            document.getElementById('scan-count').textContent = data.scan_count || 0;
+            document.getElementById('threshold').textContent = (data.threshold || 2.0).toFixed ? (data.threshold || 2.0).toFixed(1) : data.threshold;
+            document.getElementById('last-scan').textContent = data.last_scan || '-';
+
+            // Platforms
+            ['polymarket', 'opinion', 'predict'].forEach(p => {
+                const info = data.platforms[p] || {};
+                const dot = document.getElementById(`dot-${p}`);
+                dot.className = `status-dot ${info.status || 'unknown'}`;
+                document.getElementById(`count-${p}`).textContent = info.count || 0;
+                document.getElementById(`status-${p}`).textContent = statusLabels[info.status] || info.status || 'Unknown';
+                renderMarkets(`list-${p}`, info.markets);
+            });
+
+            // Arbitrage
+            const tbody = document.getElementById('arb-body');
+            const arbs = data.arbitrage || [];
+            if (arbs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
+            } else {
+                tbody.innerHTML = arbs.map(a => `
+                    <tr>
+                        <td>${a.market}</td>
+                        <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
+                        <td class="direction">${a.direction}</td>
+                        <td>Y:${a.a_yes}c N:${a.a_no}c</td>
+                        <td>Y:${a.b_yes}c N:${a.b_no}c</td>
+                        <td>${a.combined}c</td>
+                        <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
+                        <td>${(a.confidence * 100).toFixed(0)}%</td>
+                        <td>${a.timestamp}</td>
+                    </tr>
+                `).join('');
+            }
+
+            // Error display
+            if (data.error) {
+                console.error('Backend error:', data.error);
+            }
+        }
+
+        // ============================================================
+        // Try WebSocket first, fall back to polling
+        // ============================================================
+        function initWebSocket() {
+            try {
+                socket = io({
+                    transports: ['websocket', 'polling'],  // Prefer WebSocket
+                    reconnection: true,
+                    reconnectionDelay: 2000,
+                    reconnectionAttempts: 10,
+                    timeout: 10000,
+                });
+
+                socket.on('connect', function() {
+                    console.log('WebSocket connected');
+                    useWebSocket = true;
+                    setWsStatus('connected');
+                    // Stop polling if it was running
+                    if (pollingInterval) {
+                        clearInterval(pollingInterval);
+                        pollingInterval = null;
+                    }
+                });
+
+                socket.on('state_update', function(data) {
+                    updateDashboard(data);
+                });
+
+                socket.on('platform_update', function(data) {
+                    // Flash the platform card on real-time update
+                    flashCard(data.platform);
+                });
+
+                socket.on('disconnect', function(reason) {
+                    console.log('WebSocket disconnected:', reason);
+                    setWsStatus('disconnected');
+                    // Start polling as fallback
+                    startPolling();
+                });
+
+                socket.on('connect_error', function(err) {
+                    console.warn('WebSocket error, falling back to polling:', err.message);
+                    useWebSocket = false;
+                    setWsStatus('disconnected');
+                    startPolling();
+                });
+
+            } catch (e) {
+                console.warn('WebSocket not available, using polling:', e);
+                useWebSocket = false;
+                setWsStatus('disconnected');
+                startPolling();
+            }
+        }
+
+        function startPolling() {
+            if (pollingInterval) return;  // Already polling
+            console.log('Starting HTTP polling fallback');
+            pollingInterval = setInterval(pollState, 10000);
+            pollState();  // Immediate first poll
+        }
+
+        function pollState() {
             fetch('/api/state')
                 .then(r => {
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.json();
                 })
-                .then(data => {
-                    // Show error if any
-                    if (data.error) {
-                        console.error('Backend error:', data.error);
-                        const errorDiv = document.getElementById('error-message') || createErrorDiv();
-                        errorDiv.textContent = `⚠️ ${data.error}`;
-                        errorDiv.style.display = 'block';
-                    } else {
-                        const errorDiv = document.getElementById('error-message');
-                        if (errorDiv) errorDiv.style.display = 'none';
-                    }
-
-                    // Header
-                    document.getElementById('scan-count').textContent = data.scan_count || 0;
-                    document.getElementById('threshold').textContent = (data.threshold || 2.0).toFixed(1);
-                    document.getElementById('last-scan').textContent = data.last_scan || '-';
-
-                    // Platforms
-                    ['polymarket', 'opinion', 'predict'].forEach(p => {
-                        const info = data.platforms[p] || {};
-                        const dot = document.getElementById(`dot-${p}`);
-                        dot.className = `status-dot ${info.status || 'unknown'}`;
-                        document.getElementById(`count-${p}`).textContent = info.count || 0;
-                        document.getElementById(`status-${p}`).textContent = statusLabels[info.status] || info.status || 'Unknown';
-                        renderMarkets(`list-${p}`, info.markets);
-                    });
-
-                    // Arbitrage
-                    const tbody = document.getElementById('arb-body');
-                    const arbs = data.arbitrage || [];
-                    if (arbs.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
-                    } else {
-                        tbody.innerHTML = arbs.map(a => `
-                            <tr>
-                                <td>${a.market}</td>
-                                <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
-                                <td class="direction">${a.direction}</td>
-                                <td>Y:${a.a_yes}c N:${a.a_no}c</td>
-                                <td>Y:${a.b_yes}c N:${a.b_no}c</td>
-                                <td>${a.combined}c</td>
-                                <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                                <td>${(a.confidence * 100).toFixed(0)}%</td>
-                                <td>${a.timestamp}</td>
-                            </tr>
-                        `).join('');
-                    }
-                })
-                .catch(e => {
-                    console.error('Update error:', e);
-                    const errorDiv = document.getElementById('error-message') || createErrorDiv();
-                    errorDiv.textContent = `⚠️ Connection error: ${e.message}`;
-                    errorDiv.style.display = 'block';
-                });
+                .then(data => updateDashboard(data))
+                .catch(e => console.error('Poll error:', e));
         }
 
-        function createErrorDiv() {
-            const div = document.createElement('div');
-            div.id = 'error-message';
-            div.style.cssText = 'position:fixed;top:10px;right:10px;background:#f85149;color:white;padding:12px 16px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:1000;display:none;max-width:400px;';
-            document.body.appendChild(div);
-            return div;
-        }
-
-        // Initial + auto refresh
-        update();
-        setInterval(update, 10000);
+        // Start
+        initWebSocket();
+        // Also do one immediate HTTP fetch for fast initial load
+        pollState();
     </script>
 </body>
 </html>

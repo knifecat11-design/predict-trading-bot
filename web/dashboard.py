@@ -2,7 +2,7 @@
 Cross-platform prediction market arbitrage dashboard
 Platforms: Polymarket, Opinion.trade, Predict.fun
 
-Optimized v3.0: Concurrent fetching, scan guard, memory limits, rate limiting
+v3.1: WebSocket push + concurrent fetching + scan guard + memory limits
 """
 
 import os
@@ -15,6 +15,7 @@ import traceback
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, render_template, jsonify
+from flask_socketio import SocketIO, emit
 
 # Setup logging first
 logging.basicConfig(
@@ -33,6 +34,12 @@ logger.info(f"Project root: {PROJECT_ROOT}")
 
 app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'arb-monitor-ws-key')
+
+# SocketIO with threading mode + simple-websocket for true WebSocket
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
+                    logger=False, engineio_logger=False)
+_ws_clients = 0  # Track connected WebSocket clients
 
 # ============================================================
 # Configuration constants - tune these to control resource usage
@@ -519,8 +526,33 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
     return opportunities
 
 
+def _emit_state(event='state_update'):
+    """Push current state to all connected WebSocket clients"""
+    if _ws_clients > 0:
+        try:
+            with _lock:
+                state_copy = json.loads(json.dumps(_state, default=str))
+            socketio.emit(event, state_copy, namespace='/')
+        except Exception as e:
+            logger.debug(f"WebSocket emit error: {e}")
+
+
+def _emit_platform_update(platform, status, count):
+    """Push a single platform update to WebSocket clients"""
+    if _ws_clients > 0:
+        try:
+            socketio.emit('platform_update', {
+                'platform': platform,
+                'status': status,
+                'count': count,
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+            }, namespace='/')
+        except Exception as e:
+            logger.debug(f"WebSocket platform emit error: {e}")
+
+
 def background_scanner():
-    """Background thread that scans all platforms - with scan guard and concurrent fetching"""
+    """Background thread: scan all platforms with concurrent fetch + WebSocket push"""
     global _state
     config = load_config()
     threshold = float(config.get('opinion_poly', {}).get('min_arbitrage_threshold', 2.0))
@@ -576,6 +608,10 @@ def background_scanner():
                                 'last_update': now,
                             }
                         logger.info(f"[{platform}] {len(markets)} markets, status={status}")
+
+                        # Push per-platform update via WebSocket (real-time)
+                        _emit_platform_update(platform, status, len(markets))
+
                     except Exception as e:
                         logger.error(f"[{platform}] fetch failed: {e}")
                         with _lock:
@@ -585,6 +621,7 @@ def background_scanner():
                                 'count': 0,
                                 'last_update': now,
                             }
+                        _emit_platform_update(platform, 'error', 0)
 
             # Find arbitrage across all pairs
             all_arb = []
@@ -619,7 +656,6 @@ def background_scanner():
                         created_at = old_opp.get('_created_at', 0)
                         if created_at > expiry_cutoff:
                             new_arb_map[key] = old_opp
-                        # else: expired, don't keep
 
                 # For opportunities in both, keep new if price changed significantly
                 for key in list(new_arb_map.keys()):
@@ -628,7 +664,6 @@ def background_scanner():
                         old_opp = old_arb_map[key]
                         price_change = abs(new_opp['arbitrage'] - old_opp['arbitrage'])
                         if price_change < 0.5:
-                            # Keep old data but update timestamp
                             old_opp['timestamp'] = datetime.now().strftime('%H:%M:%S')
                             new_arb_map[key] = old_opp
 
@@ -644,19 +679,58 @@ def background_scanner():
             logger.info(
                 f"Scan #{_state['scan_count']} ({scan_duration:.1f}s): "
                 f"Poly={len(poly_markets)} Opinion={len(opinion_markets)} "
-                f"Predict={len(predict_markets)} Arb={len(all_arb)}"
+                f"Predict={len(predict_markets)} Arb={len(all_arb)} "
+                f"WS_clients={_ws_clients}"
             )
+
+            # Push full state update to all WebSocket clients
+            _emit_state()
 
         except Exception as e:
             logger.error(f"Scanner error: {e}")
             logger.error(traceback.format_exc())
             with _lock:
                 _state['error'] = str(e)
+            _emit_state()
         finally:
             _scanning.clear()
 
         time.sleep(scan_interval)
 
+
+# ============================================================
+# WebSocket event handlers
+# ============================================================
+
+@socketio.on('connect')
+def handle_connect():
+    global _ws_clients
+    _ws_clients += 1
+    logger.info(f"WebSocket client connected (total: {_ws_clients})")
+    # Send current state immediately on connect
+    with _lock:
+        state_copy = json.loads(json.dumps(_state, default=str))
+    emit('state_update', state_copy)
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    global _ws_clients
+    _ws_clients = max(0, _ws_clients - 1)
+    logger.info(f"WebSocket client disconnected (total: {_ws_clients})")
+
+
+@socketio.on('request_state')
+def handle_request_state():
+    """Client can explicitly request current state"""
+    with _lock:
+        state_copy = json.loads(json.dumps(_state, default=str))
+    emit('state_update', state_copy)
+
+
+# ============================================================
+# HTTP routes (kept as fallback)
+# ============================================================
 
 @app.route('/')
 def index():
@@ -669,19 +743,25 @@ def index():
 
 @app.route('/api/state')
 def api_state():
+    """HTTP fallback for clients without WebSocket"""
     with _lock:
         return jsonify(_state)
 
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+    return jsonify({
+        'status': 'ok',
+        'timestamp': datetime.now().isoformat(),
+        'ws_clients': _ws_clients,
+        'scan_count': _state.get('scan_count', 0),
+    })
 
 
 def main():
     logger.info("=" * 60)
-    logger.info("  Prediction Market Arbitrage Dashboard v3.0")
-    logger.info("  Optimized: concurrent fetch, scan guard, memory limits")
+    logger.info("  Prediction Market Arbitrage Dashboard v3.1")
+    logger.info("  WebSocket + concurrent fetch + scan guard")
     logger.info("=" * 60)
 
     # Start background scanner
@@ -689,12 +769,13 @@ def main():
     scanner.start()
     logger.info("Background scanner started")
 
-    # Start Flask
+    # Start Flask-SocketIO (WebSocket on same port as HTTP)
     port = int(os.getenv('PORT', 5000))
-    logger.info(f"Dashboard starting on http://0.0.0.0:{port}")
+    logger.info(f"Dashboard starting on http://0.0.0.0:{port} (WebSocket enabled)")
     logger.info(f"Templates folder: {app.template_folder}")
 
-    app.run(host='0.0.0.0', port=port, debug=False)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False,
+                 allow_unsafe_werkzeug=True)
 
 
 if __name__ == '__main__':

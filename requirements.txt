@@ -4,3 +4,5 @@ websockets>=16.0
 PyYAML>=6.0
 python-dotenv>=1.0.0
 flask>=3.0.0
+flask-socketio>=5.3.0
+simple-websocket>=1.0.0
