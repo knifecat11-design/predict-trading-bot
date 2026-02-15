@@ -113,7 +113,7 @@ def check_platform_api(config):
     status = {
         'polymarket': True,  # Public API, always available
         'opinion': bool(config.get('opinion', {}).get('api_key', '')),
-        'predict': False,  # Currently no valid API key
+        'predict': True,  # 默认启用，允许尝试获取市场（API key 可能在 config.yaml 中）
     }
 
     # Check Predict.fun API
