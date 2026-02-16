@@ -6,9 +6,7 @@
   },
   "deploy": {
     "startCommand": "python start_arbitrage.py",
-    "restartPolicyType": "ALWAYS",
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 300
+    "restartPolicyType": "ALWAYS"
   },
   "variables": {
     "PORT": "5000",
