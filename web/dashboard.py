@@ -335,8 +335,12 @@ def fetch_opinion_data(config):
 def fetch_predict_data(config):
     """Fetch Predict.fun markets - optimized: reduced orderbook fetches"""
     api_key = config.get('api', {}).get('api_key', '')
+    base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
     if not api_key:
+        logger.warning("Predict: no API key configured (PREDICT_API_KEY env var)")
         return 'no_key', []
+
+    logger.info(f"Predict: checking API at {base_url} (key: {api_key[:8]}...)")
 
     try:
         from src.api_client import PredictAPIClient
@@ -344,13 +348,18 @@ def fetch_predict_data(config):
 
         all_raw = []
         for sort_by in ['popular', 'newest']:
-            batch = client.get_markets(status='open', sort=sort_by, limit=100)
-            for m in batch:
-                mid = m.get('id', m.get('market_id', ''))
-                if mid and mid not in {x.get('id', x.get('market_id', '')) for x in all_raw}:
-                    all_raw.append(m)
+            try:
+                batch = client.get_markets(status='open', sort=sort_by, limit=100)
+                logger.info(f"Predict [{sort_by}]: got {len(batch)} markets")
+                for m in batch:
+                    mid = m.get('id', m.get('market_id', ''))
+                    if mid and mid not in {x.get('id', x.get('market_id', '')) for x in all_raw}:
+                        all_raw.append(m)
+            except Exception as e:
+                logger.error(f"Predict [{sort_by}] fetch failed: {e}")
 
         if not all_raw:
+            logger.warning("Predict: 0 raw markets returned from API")
             return 'error', []
 
         logger.info(f"Predict: {len(all_raw)} raw markets")
@@ -760,21 +769,28 @@ def health():
 
 
 def main():
-    logger.info("=" * 60)
-    logger.info("  Prediction Market Arbitrage Dashboard v3.1")
-    logger.info("  WebSocket + concurrent fetch + scan guard")
-    logger.info("=" * 60)
-
-    # Start background scanner
-    scanner = threading.Thread(target=background_scanner, daemon=True)
-    scanner.start()
-    logger.info("Background scanner started")
-
-    # Start Flask-SocketIO (WebSocket on same port as HTTP)
     port = int(os.getenv('PORT', 5000))
-    logger.info(f"Dashboard starting on http://0.0.0.0:{port} (WebSocket enabled)")
+
+    logger.info("=" * 60)
+    logger.info("  Prediction Market Arbitrage Dashboard v3.2")
+    logger.info("  WebSocket + concurrent fetch + scan guard")
+    logger.info(f"  Binding to 0.0.0.0:{port}")
+    logger.info("=" * 60)
     logger.info(f"Templates folder: {app.template_folder}")
 
+    # Start background scanner AFTER Flask binds (delayed start)
+    def start_scanner_delayed():
+        """Wait a few seconds for Flask to fully bind, then start scanning"""
+        time.sleep(3)
+        logger.info("Background scanner starting...")
+        background_scanner()
+
+    scanner = threading.Thread(target=start_scanner_delayed, daemon=True)
+    scanner.start()
+
+    # Start Flask-SocketIO - this must happen IMMEDIATELY so Railway
+    # can detect the service is listening on the port
+    logger.info(f">>> Flask-SocketIO starting on http://0.0.0.0:{port}")
     socketio.run(app, host='0.0.0.0', port=port, debug=False,
                  allow_unsafe_werkzeug=True)
 
