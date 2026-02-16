@@ -27,7 +27,8 @@ def load_config(config_path: str = 'config.yaml') -> dict:
     # 环境变量覆盖配置
     env_overrides = {
         'api': {
-            'api_key': os.getenv('PREDICT_API_KEY', config.get('api', {}).get('api_key', ''))
+            'api_key': os.getenv('PREDICT_API_KEY', config.get('api', {}).get('api_key', '')),
+            'base_url': os.getenv('PREDICT_BASE_URL', config.get('api', {}).get('base_url', 'https://api.predict.fun')),
         },
         'opinion': {
             'base_url': config.get('opinion', {}).get('base_url', 'https://proxy.opinion.trade:8443/openapi'),
