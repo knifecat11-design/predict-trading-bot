@@ -83,9 +83,13 @@ class PredictAPIClient:
                     self._cache_key = cache_key
                     self._cache_time = time.time()
                     return markets[:limit]
+                else:
+                    logger.warning(f"Predict API returned 200 but no markets (response keys: {list(data.keys()) if isinstance(data, dict) else 'list'})")
 
             elif response.status_code == 401:
-                logger.error("API 认证失败，请检查 API Key 或在网站上下单激活")
+                logger.error("Predict API 401: 认证失败，请检查 API Key 或在网站上下单激活")
+            else:
+                logger.error(f"Predict API HTTP {response.status_code}: {response.text[:300]}")
 
             return self._cache[:limit] if self._cache else []
 
