@@ -7,7 +7,7 @@
   "deploy": {
     "startCommand": "python web/dashboard.py",
     "restartPolicyType": "ALWAYS",
-    "healthcheckPath": "/",
+    "healthcheckPath": "/health",
     "healthcheckTimeout": 300
   },
   "variables": {
