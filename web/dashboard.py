@@ -188,7 +188,8 @@ def fetch_polymarket_data(config):
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
-        markets = poly_client.get_all_tags_markets(limit_per_tag=POLYMARKET_LIMIT_PER_TAG)
+        # Full-site paginated fetch (more efficient than tag-by-tag with dedup loss)
+        markets = poly_client.get_markets(limit=3000, active_only=True)
 
         parsed = []
         for m in markets:

@@ -113,7 +113,7 @@ def check_platform_api(config):
     status = {
         'polymarket': True,  # Public API, always available
         'opinion': bool(config.get('opinion', {}).get('api_key', '')),
-        'predict': False,  # Currently no valid API key
+        'predict': False,
     }
 
     # Check Predict.fun API
@@ -122,19 +122,24 @@ def check_platform_api(config):
         try:
             import requests
             base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
+            logging.info(f"Predict API check: {base_url}/markets (key: {predict_key[:8]}...)")
             resp = requests.get(
                 f"{base_url}/markets",
                 headers={'Authorization': f'Bearer {predict_key}'},
                 params={'limit': 1},
-                timeout=5
+                timeout=10
             )
-            status['predict'] = resp.status_code == 200
+            if resp.status_code == 200:
+                status['predict'] = True
+                logging.info("Predict API check: OK (200)")
+            else:
+                logging.warning(f"Predict API check: HTTP {resp.status_code} - {resp.text[:200]}")
         except requests.RequestException as e:
-            logging.warning(f"Predict API 检查失败（网络错误）: {e}")
-            status['predict'] = False
+            logging.warning(f"Predict API check failed (network): {e}")
         except Exception as e:
-            logging.warning(f"Predict API 检查失败: {e}")
-            status['predict'] = False
+            logging.warning(f"Predict API check failed: {e}")
+    else:
+        logging.warning("Predict API: no API key configured")
 
     return status
 
@@ -163,8 +168,8 @@ def fetch_polymarket_markets(config):
     try:
         from src.polymarket_api import PolymarketClient
         client = PolymarketClient(config)
-        # 获取所有标签的市场（覆盖全站）
-        markets = client.get_all_tags_markets(limit_per_tag=200)
+        # 全站分页获取（比 tag-by-tag 更高效，避免去重损失）
+        markets = client.get_markets(limit=3000, active_only=True)
 
         parsed = []
         for m in markets:
