@@ -182,8 +182,21 @@ def fetch_polymarket_markets(config):
                 no = float(prices[1])
                 if yes <= 0 or no <= 0:
                     continue
+                question = m.get('question', '')
+                events = m.get('events', [])
+                event_title = events[0].get('title', '') if events else ''
+
+                # Include event context for matching (prevents sub-question false matches)
+                # e.g. "Trump out as President" under "What will happen before GTA VI?"
+                # must not match "Trump out as President before 2027?"
+                if event_title and event_title.lower().rstrip('?').strip() != question.lower().rstrip('?').strip():
+                    match_title = f"{question} | {event_title}"
+                else:
+                    match_title = question
+
                 parsed.append({
-                    'title': m.get('question', '')[:80],
+                    'title': question[:80],
+                    'match_title': match_title,
                     'yes': yes, 'no': no,
                     'volume': float(m.get('volume24hr', 0) or 0),
                     'end_date': m.get('endDate', ''),
@@ -336,60 +349,76 @@ def parse_end_date(date_str):
 
 
 def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2):
-    """Find cross-platform arbitrage opportunities"""
-    results = []
+    """Find cross-platform arbitrage opportunities (one-to-one matching)
 
-    for ma in markets_a:
-        ka = extract_keywords(ma['title'])
+    Uses greedy best-match-first to prevent the same market from matching
+    multiple targets (which causes false arbitrage from mismatched markets).
+    Uses match_title (with event context) when available.
+    """
+    # Phase 1: Find all potential matches with similarity scores
+    all_matches = []
+    for i, ma in enumerate(markets_a):
+        ka = extract_keywords(ma.get('match_title', ma['title']))
         if not ka:
             continue
-        for mb in markets_b:
-            kb = extract_keywords(mb['title'])
+        for j, mb in enumerate(markets_b):
+            kb = extract_keywords(mb.get('match_title', mb['title']))
             if not kb:
                 continue
 
             inter = ka & kb
             union = ka | kb
             sim = len(inter) / len(union) if union else 0
-            if sim < 0.35:  # 提高默认相似度阈值到 0.35
+            if sim < 0.35:
                 continue
 
-            # 检查结束时间相似度（不能相差超过 30 天）
+            # End date check
             end_a = parse_end_date(ma.get('end_date', ''))
             end_b = parse_end_date(mb.get('end_date', ''))
-
             if end_a and end_b:
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 5:  # 超过 5 天不匹配
+                if time_diff > 5:
                     continue
 
-            # Direction 1: A Yes + B No
-            comb1 = ma['yes'] + mb['no']
-            arb1 = (1.0 - comb1) * 100
+            all_matches.append((i, j, sim, inter))
 
-            # Direction 2: B Yes + A No
-            comb2 = mb['yes'] + ma['no']
-            arb2 = (1.0 - comb2) * 100
+    # Phase 2: One-to-one matching (greedy, highest similarity first)
+    # Prevents market A matching multiple B targets → false arbitrage
+    all_matches.sort(key=lambda x: x[2], reverse=True)
+    matched_a = set()
+    matched_b = set()
 
-            # 创建唯一标识符（基于市场关键词和方向）
-            # 这样如果同样的套利机会再次出现，可以识别为重复
-            market_key = f"{name_a}-{name_b}-{','.join(sorted(inter))}"
+    results = []
+    for i, j, sim, inter in all_matches:
+        if i in matched_a or j in matched_b:
+            continue
+        matched_a.add(i)
+        matched_b.add(j)
 
-            for arb_pct, direction, market_title, ya, na, yb, nb in [
-                (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma['title'], ma['yes'], ma['no'], mb['yes'], mb['no']),
-                (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb['title'], mb['yes'], mb['no'], ma['yes'], ma['no']),
-            ]:
-                if arb_pct >= threshold:
-                    results.append({
-                        'market': market_title,
-                        'platforms': f"{name_a} <-> {name_b}",
-                        'direction': direction,
-                        'arbitrage': round(arb_pct, 2),
-                        'a_yes': round(ya * 100, 2), 'a_no': round(na * 100, 2),
-                        'b_yes': round(yb * 100, 2), 'b_no': round(nb * 100, 2),
-                        'confidence': round(sim, 2),
-                        'market_key': market_key,  # 用于去重
-                    })
+        ma, mb = markets_a[i], markets_b[j]
+        market_key = f"{name_a}-{name_b}-{','.join(sorted(inter))}"
+
+        comb1 = ma['yes'] + mb['no']
+        arb1 = (1.0 - comb1) * 100
+
+        comb2 = mb['yes'] + ma['no']
+        arb2 = (1.0 - comb2) * 100
+
+        for arb_pct, direction, market_title, ya, na, yb, nb in [
+            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma['title'], ma['yes'], ma['no'], mb['yes'], mb['no']),
+            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb['title'], mb['yes'], mb['no'], ma['yes'], ma['no']),
+        ]:
+            if arb_pct >= threshold:
+                results.append({
+                    'market': market_title,
+                    'platforms': f"{name_a} <-> {name_b}",
+                    'direction': direction,
+                    'arbitrage': round(arb_pct, 2),
+                    'a_yes': round(ya * 100, 2), 'a_no': round(na * 100, 2),
+                    'b_yes': round(yb * 100, 2), 'b_no': round(nb * 100, 2),
+                    'confidence': round(sim, 2),
+                    'market_key': market_key,
+                })
 
     results.sort(key=lambda x: x['arbitrage'], reverse=True)
     return results

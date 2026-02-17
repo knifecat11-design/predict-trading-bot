@@ -213,18 +213,29 @@ def fetch_polymarket_data(config):
                 if yes_price <= 0 or no_price <= 0:
                     continue
 
+                question = m.get('question', '')
+                events = m.get('events', [])
+                event_title = events[0].get('title', '') if events else ''
+
+                # Build match_title: include event context for cross-platform matching
+                # Sub-questions like "Trump out as President" under event
+                # "What will happen before GTA VI?" must include event context,
+                # otherwise they falsely match "Trump out as President before 2027?"
+                if event_title and event_title.lower().rstrip('?').strip() != question.lower().rstrip('?').strip():
+                    match_title = f"{question} | {event_title}"
+                else:
+                    match_title = question
+
                 # Use market-level slug (unique per question), NOT event slug
-                # Event slug is shared by all questions in the same event → wrong links
                 market_slug = m.get('slug', '')
                 if not market_slug:
-                    events = m.get('events', [])
                     market_slug = events[0].get('slug', '') if events else ''
                 if not market_slug:
                     market_slug = condition_id
 
                 parsed.append({
                     'id': condition_id,
-                    'title': f"<a href='https://polymarket.com/event/{market_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'title': f"<a href='https://polymarket.com/event/{market_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{question[:80]}</a>",
                     'url': f"https://polymarket.com/event/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
@@ -232,6 +243,7 @@ def fetch_polymarket_data(config):
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'polymarket',
                     'end_date': m.get('endDate', ''),
+                    'match_title': match_title,
                 })
             except (ValueError, TypeError, KeyError):
                 continue
@@ -446,6 +458,8 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         m_copy = m.copy()
         m_copy['title_plain'] = strip_html(m.get('title', ''))
         m_copy['title_with_html'] = m.get('title', '')
+        # Use match_title (includes event context for Polymarket sub-questions)
+        m_copy['match_title'] = m.get('match_title', '') or m_copy['title_plain']
         markets_a_plain.append(m_copy)
 
     markets_b_plain = []
@@ -453,12 +467,13 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         m_copy = m.copy()
         m_copy['title_plain'] = strip_html(m.get('title', ''))
         m_copy['title_with_html'] = m.get('title', '')
+        m_copy['match_title'] = m.get('match_title', '') or m_copy['title_plain']
         markets_b_plain.append(m_copy)
 
     matcher = MarketMatcher({})
     matched_pairs = matcher.match_markets_cross_platform(
         markets_a_plain, markets_b_plain,
-        title_field_a='title_plain', title_field_b='title_plain',
+        title_field_a='match_title', title_field_b='match_title',
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
         min_similarity=0.50,
