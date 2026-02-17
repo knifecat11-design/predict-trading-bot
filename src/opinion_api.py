@@ -282,7 +282,7 @@ class OpinionAPIClient:
             return None
 
     def _get_price_sdk(self, token_id: str) -> Optional[float]:
-        """使用 SDK 获取价格（返回 best ask - 买入价）"""
+        """使用 SDK 获取价格（返回中间价 mid = (bid+ask)/2，和网站显示一致）"""
         response = self._client.get_orderbook(token_id)
 
         if hasattr(response, 'errno') and response.errno != 0:
@@ -295,20 +295,23 @@ class OpinionAPIClient:
         asks = getattr(result, 'asks', []) or []
         bids = getattr(result, 'bids', []) or []
 
-        # 优先使用 best ask（最低卖价）
+        # 使用中间价 (bid + ask) / 2（和网站显示一致）
+        if asks and bids:
+            mid = (float(bids[0].price) + float(asks[0].price)) / 2
+            return round(mid, 4)
+
+        # Fallback: 只有 ask
         if asks:
             return round(float(asks[0].price), 4)
 
-        # Fallback: 如果没有 asks，使用最佳 bid 估算
+        # Fallback: 只有 bid
         if bids:
-            best_bid = float(bids[0].price)
-            logger.debug(f"SDK: Token {token_id} 无 asks，使用 bid 估算")
-            return round(1.0 - best_bid, 4)
+            return round(float(bids[0].price), 4)
 
         return None
 
     def _get_price_http(self, token_id: str) -> Optional[float]:
-        """使用 HTTP 获取价格（返回 best ask - 买入价）"""
+        """使用 HTTP 获取价格（返回中间价 mid = (bid+ask)/2，和网站显示一致）"""
         params = {'token_id': token_id}
         response = self.session.get(
             f"{self.base_url}/token/orderbook",
@@ -323,16 +326,20 @@ class OpinionAPIClient:
             if not isinstance(result, dict):
                 result = {}
             asks = result.get('asks', [])
-            # 返回 best ask（最低卖价）用于买入
+            bids = result.get('bids', [])
+
+            # 使用中间价 (bid + ask) / 2（和网站显示一致）
+            if asks and bids:
+                mid = (float(bids[0]['price']) + float(asks[0]['price'])) / 2
+                return round(mid, 4)
+
+            # Fallback: 只有 ask
             if asks:
                 return round(float(asks[0]['price']), 4)
 
-            # Fallback: 如果没有 asks，使用最佳 bid 估算（流动性低时）
-            bids = result.get('bids', [])
+            # Fallback: 只有 bid
             if bids:
-                best_bid = float(bids[0]['price'])
-                logger.debug(f"Token {token_id} 无 asks，使用 bid 估算: {best_bid}")
-                return round(1.0 - best_bid, 4)
+                return round(float(bids[0]['price']), 4)
 
             logger.debug(f"Token {token_id} 订单簿为空（无 bids 也无 asks）")
             return None
