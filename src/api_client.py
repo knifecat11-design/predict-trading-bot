@@ -180,7 +180,16 @@ class PredictAPIClient:
             )
             if response.status_code == 200:
                 data = response.json()
-                # v1 API may wrap in { "success": true, "data": { "bids": [], "asks": [] } }
+
+                # Debug: log raw response structure for first few calls
+                if not hasattr(self, '_ob_logged'):
+                    self._ob_logged = True
+                    logger.info(f"Orderbook raw response (market={market_id}): "
+                                f"type={type(data).__name__}, "
+                                f"keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}, "
+                                f"sample={str(data)[:500]}")
+
+                # v1 API may wrap in { "success": true, "data": { ... } }
                 if isinstance(data, dict) and 'data' in data:
                     ob_data = data['data']
                 else:
@@ -193,16 +202,34 @@ class PredictAPIClient:
                     logger.debug(f"订单簿为空 (market={market_id})")
                     return {'yes_bid': None, 'yes_ask': None, 'bid_size': 0, 'ask_size': 0}
 
+                # Handle both object format {"price":x} and array format [price, qty]
+                def parse_entry(entry):
+                    if isinstance(entry, dict):
+                        p = entry.get('price', entry.get('p'))
+                        q = entry.get('quantity', entry.get('amount', entry.get('q', entry.get('size', 100))))
+                        return float(p), float(q)
+                    elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                        return float(entry[0]), float(entry[1])
+                    else:
+                        return float(entry), 100.0
+
+                bid_price, bid_size = parse_entry(bids[0]) if bids else (None, 0)
+                ask_price, ask_size = parse_entry(asks[0]) if asks else (None, 0)
+
                 return {
-                    'yes_bid': float(bids[0]['price']) if bids else None,
-                    'yes_ask': float(asks[0]['price']) if asks else None,
-                    'bid_size': float(bids[0].get('quantity', bids[0].get('amount', 100))) if bids else 0,
-                    'ask_size': float(asks[0].get('quantity', asks[0].get('amount', 100))) if asks else 0
+                    'yes_bid': bid_price,
+                    'yes_ask': ask_price,
+                    'bid_size': bid_size,
+                    'ask_size': ask_size
                 }
             else:
-                logger.debug(f"订单簿 HTTP {response.status_code} (market={market_id})")
+                if not hasattr(self, '_ob_err_logged'):
+                    self._ob_err_logged = True
+                    logger.warning(f"Orderbook HTTP {response.status_code} (market={market_id}): {response.text[:300]}")
         except Exception as e:
-            logger.debug(f"获取订单簿失败: {e}")
+            if not hasattr(self, '_ob_exc_logged'):
+                self._ob_exc_logged = True
+                logger.warning(f"获取订单簿失败 (market={market_id}): {e}")
 
         return {'yes_bid': None, 'yes_ask': None, 'bid_size': 0, 'ask_size': 0}
 
