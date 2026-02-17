@@ -218,15 +218,19 @@ def fetch_polymarket_data(config):
                 if yes_price <= 0 or no_price <= 0:
                     continue
 
-                events = m.get('events', [])
-                event_slug = events[0].get('slug', '') if events else ''
-                if not event_slug:
-                    event_slug = condition_id
+                # Use market-level slug (unique per question), NOT event slug
+                # Event slug is shared by all questions in the same event → wrong links
+                market_slug = m.get('slug', '')
+                if not market_slug:
+                    events = m.get('events', [])
+                    market_slug = events[0].get('slug', '') if events else ''
+                if not market_slug:
+                    market_slug = condition_id
 
                 parsed.append({
                     'id': condition_id,
-                    'title': f"<a href='https://polymarket.com/event/{event_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
-                    'url': f"https://polymarket.com/event/{event_slug}",
+                    'title': f"<a href='https://polymarket.com/event/{market_slug}' target='_blank' style='color:#03a9f4;font-weight:600'>{m.get('question', '')[:80]}</a>",
+                    'url': f"https://polymarket.com/event/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
                     'volume': float(m.get('volume24hr', 0) or 0),
