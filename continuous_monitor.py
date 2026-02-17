@@ -116,17 +116,17 @@ def check_platform_api(config):
         'predict': False,
     }
 
-    # Check Predict.fun API
+    # Check Predict.fun API (v1 API: x-api-key header, /v1/ prefix)
     predict_key = config.get('api', {}).get('api_key', '')
     if predict_key:
         try:
             import requests
             base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
-            logging.info(f"Predict API check: {base_url}/markets (key: {predict_key[:8]}...)")
+            logging.info(f"Predict API check: {base_url}/v1/markets (key: {predict_key[:8]}...)")
             resp = requests.get(
-                f"{base_url}/markets",
-                headers={'Authorization': f'Bearer {predict_key}'},
-                params={'limit': 1},
+                f"{base_url}/v1/markets",
+                headers={'x-api-key': predict_key},
+                params={'first': 1, 'status': 'OPEN'},
                 timeout=10
             )
             if resp.status_code == 200:
