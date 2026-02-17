@@ -40,7 +40,7 @@ class Order:
 
 
 class PredictAPIClient:
-    """Predict.fun API 客户端"""
+    """Predict.fun API 客户端 (v1 API)"""
 
     def __init__(self, config: Dict):
         self.config = config
@@ -52,10 +52,10 @@ class PredictAPIClient:
 
         if self.api_key:
             self.session.headers.update({
-                'Authorization': f'Bearer {self.api_key}',
+                'x-api-key': self.api_key,
                 'Content-Type': 'application/json'
             })
-            logger.info(f"Predict.fun API: {self.base_url} (已配置认证)")
+            logger.info(f"Predict.fun API: {self.base_url}/v1 (已配置认证)")
         else:
             logger.warning("未设置 API Key")
 
@@ -65,18 +65,34 @@ class PredictAPIClient:
         self._cache_duration = config.get('api', {}).get('cache_seconds', 30)
 
     def get_markets(self, status: str = 'open', sort: str = 'popular', limit: int = 100) -> List[Dict]:
-        """获取市场列表"""
+        """获取市场列表 (v1 API)"""
         try:
             cache_key = f"{status}:{sort}"
             if time.time() - self._cache_time < self._cache_duration and self._cache and getattr(self, '_cache_key', '') == cache_key:
                 return self._cache[:limit]
 
-            params = {'status': status, 'sort': sort, 'limit': min(limit, 100)}
-            response = self.session.get(f"{self.base_url}/markets", params=params, timeout=15)
+            # Map old param values to v1 API format
+            status_map = {'open': 'OPEN', 'resolved': 'RESOLVED', 'closed': 'RESOLVED'}
+            sort_map = {
+                'popular': 'VOLUME_24H_DESC',
+                'newest': 'CHANCE_24H_CHANGE_DESC',
+                'volume': 'VOLUME_24H_DESC',
+            }
+
+            params = {
+                'first': min(limit, 100),
+                'status': status_map.get(status.lower(), status.upper()),
+                'sort': sort_map.get(sort.lower(), sort),
+            }
+            response = self.session.get(f"{self.base_url}/v1/markets", params=params, timeout=15)
 
             if response.status_code == 200:
                 data = response.json()
-                markets = data if isinstance(data, list) else data.get('data', data.get('markets', []))
+                # v1 API returns: { "success": true, "data": [...], "after": "cursor" }
+                if isinstance(data, dict):
+                    markets = data.get('data', data.get('markets', []))
+                else:
+                    markets = data
 
                 if markets:
                     self._cache = markets
@@ -87,7 +103,7 @@ class PredictAPIClient:
                     logger.warning(f"Predict API returned 200 but no markets (response keys: {list(data.keys()) if isinstance(data, dict) else 'list'})")
 
             elif response.status_code == 401:
-                logger.error("Predict API 401: 认证失败，请检查 API Key 或在网站上下单激活")
+                logger.error("Predict API 401: 认证失败，请检查 API Key")
             else:
                 logger.error(f"Predict API HTTP {response.status_code}: {response.text[:300]}")
 
@@ -151,80 +167,66 @@ class PredictAPIClient:
 
     def _get_orderbook(self, market_id: str, outcome_id: int = 1) -> Dict:
         """
-        获取订单簿
+        获取订单簿 (v1 API - 只返回 Yes outcome 的订单簿)
 
         Args:
             market_id: 市场 ID
-            outcome_id: 1=Yes token, 0=No token（默认 1）
+            outcome_id: 忽略，v1 API 只支持 Yes outcome
         """
         try:
-            # Predict.fun API 支持通过 outcomeId 参数获取不同 token 的订单簿
-            params = {'outcomeId': outcome_id} if outcome_id != 1 else {}
-            response = self.session.get(f"{self.base_url}/markets/{market_id}/orderbook",
-                                   params=params, timeout=10)
+            response = self.session.get(
+                f"{self.base_url}/v1/markets/{market_id}/orderbook",
+                timeout=10
+            )
             if response.status_code == 200:
                 data = response.json()
-                bids = data.get('bids', [])
-                asks = data.get('asks', [])
+                # v1 API may wrap in { "success": true, "data": { "bids": [], "asks": [] } }
+                if isinstance(data, dict) and 'data' in data:
+                    ob_data = data['data']
+                else:
+                    ob_data = data
 
-                # 检查订单簿是否有效（验证 outcomeId 参数是否被支持）
+                bids = ob_data.get('bids', [])
+                asks = ob_data.get('asks', [])
+
                 if not bids and not asks:
-                    logger.warning(f"订单簿为空 (outcome_id={outcome_id}, market={market_id})，API 可能不支持 outcomeId 参数")
+                    logger.debug(f"订单簿为空 (market={market_id})")
                     return {'yes_bid': None, 'yes_ask': None, 'bid_size': 0, 'ask_size': 0}
 
                 return {
                     'yes_bid': float(bids[0]['price']) if bids else None,
                     'yes_ask': float(asks[0]['price']) if asks else None,
-                    'bid_size': float(bids[0].get('amount', 100)) if bids else 0,
-                    'ask_size': float(asks[0].get('amount', 100)) if asks else 0
+                    'bid_size': float(bids[0].get('quantity', bids[0].get('amount', 100))) if bids else 0,
+                    'ask_size': float(asks[0].get('quantity', asks[0].get('amount', 100))) if asks else 0
                 }
+            else:
+                logger.debug(f"订单簿 HTTP {response.status_code} (market={market_id})")
         except Exception as e:
-            logger.debug(f"获取订单簿失败 (outcome_id={outcome_id}): {e}")
+            logger.debug(f"获取订单簿失败: {e}")
 
-        # 返回 None 表示获取失败，而不是假数据
         return {'yes_bid': None, 'yes_ask': None, 'bid_size': 0, 'ask_size': 0}
 
     def get_full_orderbook(self, market_id: str) -> Optional[Dict]:
         """
-        获取完整订单簿（Yes 和 No token）
+        获取完整订单簿（Yes 和 No）
+        v1 API 只返回 Yes outcome 订单簿，No 价格通过 1 - yes_price 推导
 
         Returns:
             {'yes_bid': float, 'yes_ask': float, 'no_bid': float, 'no_ask': float}
-            或 None（如果任一 token 订单簿获取失败）
+            或 None
         """
-        yes_ob = self._get_orderbook(market_id, outcome_id=1)
-        no_ob = self._get_orderbook(market_id, outcome_id=0)
+        yes_ob = self._get_orderbook(market_id)
 
-        # 检查是否都有有效的买卖价
-        if None in [yes_ob['yes_bid'], yes_ob['yes_ask'], no_ob['yes_bid'], no_ob['yes_ask']]:
+        if yes_ob['yes_bid'] is None or yes_ob['yes_ask'] is None:
             logger.debug(f"市场 {market_id} 订单簿不完整")
             return None
 
-        # 验证 No token 订单簿是否真的不同于 Yes（防止 API 不支持 outcomeId）
-        # 如果价格相同或非常接近，说明 API 忽略了 outcomeId 参数
-        yes_mid = (yes_ob['yes_bid'] + yes_ob['yes_ask']) / 2 if yes_ob['yes_bid'] and yes_ob['yes_ask'] else None
-        no_mid = (no_ob['yes_bid'] + no_ob['yes_ask']) / 2 if no_ob['yes_bid'] and no_ob['yes_ask'] else None
-
-        if yes_mid and no_mid:
-            diff_pct = abs(yes_mid - no_mid) / yes_mid * 100 if yes_mid > 0 else 100
-            if diff_pct < 1:  # 差异小于 1%，认为 API 返回了相同数据
-                logger.warning(f"市场 {market_id} 的 Yes/No 订单簿数据相同 (diff={diff_pct:.2f}%)，API 可能不支持 outcomeId 参数")
-                # Fallback: 使用 1 - yes_price 推导 No 价格
-                if yes_ob['yes_ask'] is not None:
-                    no_bid = round(1.0 - yes_ob['yes_bid'], 4)
-                    no_ask = round(1.0 - yes_ob['yes_ask'], 4)
-                    return {
-                        'yes_bid': yes_ob['yes_bid'],
-                        'yes_ask': yes_ob['yes_ask'],
-                        'no_bid': no_bid,
-                        'no_ask': no_ask,
-                    }
-
+        # v1 API orderbook is Yes-based; derive No prices
         return {
             'yes_bid': yes_ob['yes_bid'],
             'yes_ask': yes_ob['yes_ask'],
-            'no_bid': no_ob['yes_bid'],
-            'no_ask': no_ob['yes_ask'],
+            'no_bid': round(1.0 - yes_ob['yes_ask'], 4),
+            'no_ask': round(1.0 - yes_ob['yes_bid'], 4),
         }
 
     def _default_data(self, market_id: str) -> MarketData:
@@ -237,7 +239,7 @@ class PredictAPIClient:
 
         try:
             params = {'market_id': market_id} if market_id else {}
-            response = self.session.get(f"{self.base_url}/orders", params=params, timeout=10)
+            response = self.session.get(f"{self.base_url}/v1/orders", params=params, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
@@ -271,7 +273,7 @@ class PredictAPIClient:
                     market_id = markets[0].get('id', 'default')
 
             payload = {'market_id': market_id, 'side': side.lower(), 'price': price, 'amount': size, 'type': 'limit'}
-            response = self.session.post(f"{self.base_url}/orders", json=payload, timeout=15)
+            response = self.session.post(f"{self.base_url}/v1/orders", json=payload, timeout=15)
 
             if response.status_code in [200, 201]:
                 data = response.json()
@@ -289,7 +291,7 @@ class PredictAPIClient:
             return False
 
         try:
-            response = self.session.delete(f"{self.base_url}/orders/{order_id}", timeout=10)
+            response = self.session.delete(f"{self.base_url}/v1/orders/{order_id}", timeout=10)
             if response.status_code in [200, 204]:
                 logger.info(f"撤单成功: {order_id}")
                 return True

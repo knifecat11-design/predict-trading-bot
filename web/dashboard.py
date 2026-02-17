@@ -340,7 +340,7 @@ def fetch_predict_data(config):
         logger.warning("Predict: no API key configured (PREDICT_API_KEY env var)")
         return 'no_key', []
 
-    logger.info(f"Predict: checking API at {base_url} (key: {api_key[:8]}...)")
+    logger.info(f"Predict: checking API at {base_url}/v1 (key: {api_key[:8]}...)")
 
     try:
         from src.api_client import PredictAPIClient
