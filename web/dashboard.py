@@ -47,11 +47,13 @@ _ws_clients = 0  # Track connected WebSocket clients
 MAX_MARKETS_DISPLAY = 15          # Max markets to store in state per platform (for UI)
 MAX_ARBITRAGE_DISPLAY = 30        # Max arbitrage opportunities to keep
 ARBITRAGE_EXPIRY_MINUTES = 10     # Remove stale arbitrage after N minutes
-OPINION_DETAILED_FETCH = 30       # Individual No price fetches (was 80 -> reduced to 30)
-PREDICT_DETAILED_FETCH = 25       # Individual orderbook fetches (was 80 -> reduced to 25)
-POLYMARKET_LIMIT_PER_TAG = 100    # Markets per tag (was 200 -> reduced to 100)
-OPINION_MARKET_LIMIT = 200        # Total opinion markets to process (was 500 -> reduced)
-OPINION_PARSED_LIMIT = 150        # Max parsed opinion markets (was 300 -> reduced)
+OPINION_DETAILED_FETCH = 100      # Individual No price fetches (concurrent)
+PREDICT_DETAILED_FETCH = 100      # Individual orderbook fetches (concurrent)
+POLYMARKET_LIMIT_PER_TAG = 100    # Markets per tag
+OPINION_MARKET_LIMIT = 500        # Total opinion markets to process
+OPINION_PARSED_LIMIT = 400        # Max parsed opinion markets
+PREDICT_MARKET_LIMIT = 400        # Total predict markets (via pagination)
+PRICE_FETCH_WORKERS = 8           # Concurrent threads for price/orderbook fetching
 MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
 
 # Global state
@@ -262,7 +264,7 @@ def fetch_polymarket_data(config):
 
 
 def fetch_opinion_data(config):
-    """Fetch Opinion.trade markets - optimized: reduced individual price fetches"""
+    """Fetch Opinion.trade markets - concurrent price fetching for speed"""
     api_key = config.get('opinion', {}).get('api_key', '')
     if not api_key:
         logger.warning("Opinion: no API key")
@@ -277,39 +279,90 @@ def fetch_opinion_data(config):
         if not raw_markets:
             return 'error', []
 
-        logger.info(f"Opinion: {len(raw_markets)} raw markets, parsing prices...")
+        logger.info(f"Opinion: {len(raw_markets)} raw markets, fetching prices concurrently...")
 
+        # Filter markets with yes_token first
+        valid_markets = []
+        for m in raw_markets:
+            if m.get('yesTokenId'):
+                valid_markets.append(m)
+        logger.info(f"Opinion: {len(valid_markets)} markets have yes tokens")
+
+        # Concurrent Yes price fetching with rate limiting
+        yes_prices = {}
+        _op_call_count = [0]
+        _op_lock = threading.Lock()
+
+        def fetch_yes_price(token_id):
+            with _op_lock:
+                _op_call_count[0] += 1
+                # Rate limit: ~12 req/s (stay under 15 req/s limit)
+                if _op_call_count[0] % 12 == 0:
+                    time.sleep(1.0)
+            return token_id, client.get_token_price(token_id)
+
+        with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='op-yes') as ex:
+            futures = {ex.submit(fetch_yes_price, m['yesTokenId']): m for m in valid_markets}
+            for future in as_completed(futures, timeout=90):
+                try:
+                    token_id, price = future.result(timeout=15)
+                    if price is not None:
+                        yes_prices[token_id] = price
+                except Exception:
+                    pass
+
+        logger.info(f"Opinion: got {len(yes_prices)} Yes prices")
+
+        # Concurrent No price fetching for top markets
+        no_prices = {}
+        _op_call_count[0] = 0
+        no_tokens_to_fetch = []
+        for idx, m in enumerate(valid_markets):
+            if idx >= OPINION_DETAILED_FETCH:
+                break
+            no_token = m.get('noTokenId', '')
+            yes_token = m.get('yesTokenId', '')
+            if no_token and yes_token in yes_prices:
+                no_tokens_to_fetch.append(no_token)
+
+        if no_tokens_to_fetch:
+            def fetch_no_price(token_id):
+                with _op_lock:
+                    _op_call_count[0] += 1
+                    if _op_call_count[0] % 12 == 0:
+                        time.sleep(1.0)
+                return token_id, client.get_token_price(token_id)
+
+            with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='op-no') as ex:
+                futures = {ex.submit(fetch_no_price, t): t for t in no_tokens_to_fetch}
+                for future in as_completed(futures, timeout=90):
+                    try:
+                        token_id, price = future.result(timeout=15)
+                        if price is not None:
+                            no_prices[token_id] = price
+                    except Exception:
+                        pass
+
+            logger.info(f"Opinion: got {len(no_prices)} No prices (detailed)")
+
+        # Build parsed list
         parsed = []
-
-        for idx, m in enumerate(raw_markets):
+        for m in valid_markets:
             try:
                 market_id = str(m.get('marketId', ''))
                 title = m.get('marketTitle', '')
                 yes_token = m.get('yesTokenId', '')
                 no_token = m.get('noTokenId', '')
 
-                if not yes_token:
-                    continue
-
-                yes_price = client.get_token_price(yes_token)
+                yes_price = yes_prices.get(yes_token)
                 if yes_price is None:
                     continue
 
-                # Only fetch individual No price for top markets, use fallback for rest
-                if idx < OPINION_DETAILED_FETCH and no_token:
-                    no_price = client.get_token_price(no_token)
-                    if no_price is None:
-                        no_price = round(1.0 - yes_price, 4)
-                    # Rate limit: small delay every 10 requests to respect 15 req/s
-                    if idx > 0 and idx % 10 == 0:
-                        time.sleep(0.2)
-                elif no_token:
-                    no_price = round(1.0 - yes_price, 4)
-                else:
-                    no_price = None
-
+                # Use detailed No price if available, otherwise fallback
+                no_price = no_prices.get(no_token)
                 if no_price is None:
-                    continue
+                    no_price = round(1.0 - yes_price, 4)
+
                 if yes_price <= 0 or yes_price >= 1 or no_price <= 0 or no_price >= 1:
                     continue
 
@@ -333,7 +386,7 @@ def fetch_opinion_data(config):
             if len(parsed) >= OPINION_PARSED_LIMIT:
                 break
 
-        logger.info(f"Opinion: {len(parsed)} markets (detailed: {OPINION_DETAILED_FETCH}, fallback: rest)")
+        logger.info(f"Opinion: {len(parsed)} markets (yes={len(yes_prices)}, no_detailed={len(no_prices)})")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
@@ -344,7 +397,7 @@ def fetch_opinion_data(config):
 
 
 def fetch_predict_data(config):
-    """Fetch Predict.fun markets - optimized: reduced orderbook fetches"""
+    """Fetch Predict.fun markets - paginated + concurrent orderbook fetching"""
     api_key = config.get('api', {}).get('api_key', '')
     base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
     if not api_key:
@@ -357,68 +410,144 @@ def fetch_predict_data(config):
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
 
+        # Fetch markets with pagination across multiple sort methods
         all_raw = []
-        for sort_by in ['popular', 'newest']:
+        seen_ids = set()
+
+        for sort_by in ['popular', 'newest', 'volume']:
             try:
                 batch = client.get_markets(status='open', sort=sort_by, limit=100)
                 logger.info(f"Predict [{sort_by}]: got {len(batch)} markets")
                 for m in batch:
                     mid = m.get('id', m.get('market_id', ''))
-                    if mid and mid not in {x.get('id', x.get('market_id', '')) for x in all_raw}:
+                    if mid and mid not in seen_ids:
+                        seen_ids.add(mid)
                         all_raw.append(m)
             except Exception as e:
                 logger.error(f"Predict [{sort_by}] fetch failed: {e}")
+
+        # Paginated fetch to get more markets (use cursor from v1 API)
+        if len(all_raw) < PREDICT_MARKET_LIMIT:
+            try:
+                import requests as req
+                session = req.Session()
+                session.headers.update({'x-api-key': api_key, 'Content-Type': 'application/json'})
+                cursor = None
+                pages_fetched = 0
+                while len(all_raw) < PREDICT_MARKET_LIMIT and pages_fetched < 5:
+                    params = {'first': 100, 'status': 'OPEN', 'sort': 'VOLUME_24H_DESC'}
+                    if cursor:
+                        params['after'] = cursor
+                    resp = session.get(f"{base_url}/v1/markets", params=params, timeout=15)
+                    if resp.status_code != 200:
+                        break
+                    data = resp.json()
+                    markets_page = data.get('data', []) if isinstance(data, dict) else data
+                    if not markets_page:
+                        break
+                    for m in markets_page:
+                        mid = m.get('id', m.get('market_id', ''))
+                        if mid and mid not in seen_ids:
+                            seen_ids.add(mid)
+                            all_raw.append(m)
+                    # Get cursor for next page
+                    cursor = data.get('after') if isinstance(data, dict) else None
+                    if not cursor:
+                        break
+                    pages_fetched += 1
+                    logger.info(f"Predict [page {pages_fetched}]: total {len(all_raw)} markets")
+            except Exception as e:
+                logger.warning(f"Predict pagination failed: {e}")
 
         if not all_raw:
             logger.warning("Predict: 0 raw markets returned from API")
             return 'error', []
 
-        logger.info(f"Predict: {len(all_raw)} raw markets")
+        logger.info(f"Predict: {len(all_raw)} total raw markets (deduped)")
 
-        parsed = []
-
-        # Debug: log first market's raw data to understand v1 API format
+        # Debug first market
         if all_raw:
             first = all_raw[0]
-            logger.info(f"Predict first market keys: {list(first.keys())[:15]}")
-            logger.info(f"Predict first market: id={first.get('id')}, title={first.get('title', '')[:50]}, question={first.get('question', '')[:50]}")
+            logger.info(f"Predict first market: id={first.get('id')}, question={first.get('question', '')[:50]}")
 
-        for idx, m in enumerate(all_raw):
+        # Concurrent orderbook fetching
+        orderbook_results = {}  # market_id -> {yes_ask, no_ask}
+
+        def fetch_orderbook(market_id):
+            full_ob = client.get_full_orderbook(market_id)
+            return market_id, full_ob
+
+        # Fetch orderbooks for top PREDICT_DETAILED_FETCH markets concurrently
+        markets_to_fetch = []
+        for m in all_raw[:PREDICT_DETAILED_FETCH]:
+            mid = m.get('id', m.get('market_id', ''))
+            if mid:
+                markets_to_fetch.append(mid)
+
+        with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='pred-ob') as ex:
+            futures = {ex.submit(fetch_orderbook, mid): mid for mid in markets_to_fetch}
+            for future in as_completed(futures, timeout=120):
+                try:
+                    mid, ob = future.result(timeout=15)
+                    if ob is not None:
+                        orderbook_results[mid] = ob
+                except Exception:
+                    pass
+
+        logger.info(f"Predict: got {len(orderbook_results)} orderbooks (concurrent)")
+
+        # For remaining markets beyond PREDICT_DETAILED_FETCH, use fast single-call mode
+        remaining_ids = []
+        for m in all_raw[PREDICT_DETAILED_FETCH:]:
+            mid = m.get('id', m.get('market_id', ''))
+            if mid and mid not in orderbook_results:
+                remaining_ids.append(mid)
+
+        if remaining_ids:
+            def fetch_fast_ob(market_id):
+                try:
+                    yes_ob = client._get_orderbook(market_id, outcome_id=1)
+                    if yes_ob and yes_ob.get('yes_ask') is not None:
+                        return market_id, {
+                            'yes_ask': yes_ob['yes_ask'],
+                            'no_ask': round(1.0 - yes_ob['yes_bid'], 4) if yes_ob.get('yes_bid') else round(1.0 - yes_ob['yes_ask'], 4),
+                        }
+                except Exception:
+                    pass
+                return market_id, None
+
+            with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='pred-fast') as ex:
+                futures = {ex.submit(fetch_fast_ob, mid): mid for mid in remaining_ids}
+                for future in as_completed(futures, timeout=120):
+                    try:
+                        mid, ob = future.result(timeout=15)
+                        if ob is not None:
+                            orderbook_results[mid] = ob
+                    except Exception:
+                        pass
+
+            logger.info(f"Predict: total {len(orderbook_results)} orderbooks (detailed + fast)")
+
+        # Build parsed list
+        parsed = []
+        for m in all_raw:
             try:
                 market_id = m.get('id', m.get('market_id', ''))
                 if not market_id:
-                    if idx < 3:
-                        logger.warning(f"Predict market #{idx}: no id field, keys={list(m.keys())[:10]}")
                     continue
 
-                question_text = (m.get('question') or m.get('title', ''))
+                ob = orderbook_results.get(market_id)
+                if not ob:
+                    continue
 
-                if idx < PREDICT_DETAILED_FETCH:
-                    full_ob = client.get_full_orderbook(market_id)
-                    if full_ob is None:
-                        if idx < 3:
-                            logger.warning(f"Predict market #{idx} (id={market_id}): orderbook returned None")
-                        continue
-                    yes_price = full_ob['yes_ask']
-                    no_price = full_ob['no_ask']
-                else:
-                    # Fast mode: single orderbook call, derive No price
-                    try:
-                        yes_ob = client._get_orderbook(market_id, outcome_id=1)
-                        if yes_ob is None:
-                            continue
-                        yes_price = yes_ob.get('yes_ask') or yes_ob.get('best_ask')
-                        if yes_price is None:
-                            continue
-                        no_price = round(1.0 - yes_price, 4)
-                    except Exception:
-                        continue
-
+                yes_price = ob.get('yes_ask')
+                no_price = ob.get('no_ask')
                 if yes_price is None or no_price is None:
                     continue
                 if yes_price <= 0 or no_price <= 0:
                     continue
 
+                question_text = (m.get('question') or m.get('title', ''))
                 market_slug = slugify(question_text)
                 parsed.append({
                     'id': market_id,
@@ -435,7 +564,7 @@ def fetch_predict_data(config):
                 logger.debug(f"Predict parse error: {e}")
                 continue
 
-        logger.info(f"Predict: {len(parsed)} markets (detailed: {PREDICT_DETAILED_FETCH})")
+        logger.info(f"Predict: {len(parsed)} markets with prices")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Predict import error: {e}")
