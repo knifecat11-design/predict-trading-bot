@@ -198,22 +198,17 @@ def fetch_polymarket_data(config):
                 if not condition_id:
                     continue
 
-                best_bid = m.get('bestBid')
-                best_ask = m.get('bestAsk')
-
-                if best_bid is not None and best_ask is not None:
-                    yes_price = float(best_ask)
-                    no_price = 1.0 - float(best_bid)
+                # Use outcomePrices (mid-market prices, matches what Polymarket website shows)
+                # NOT bestBid/bestAsk which are spread prices and don't match the website
+                outcome_str = m.get('outcomePrices', '[]')
+                if isinstance(outcome_str, str):
+                    prices = json.loads(outcome_str)
                 else:
-                    outcome_str = m.get('outcomePrices', '[]')
-                    if isinstance(outcome_str, str):
-                        prices = json.loads(outcome_str)
-                    else:
-                        prices = outcome_str
-                    if not prices or len(prices) < 2:
-                        continue
-                    yes_price = float(prices[0])
-                    no_price = float(prices[1])
+                    prices = outcome_str
+                if not prices or len(prices) < 2:
+                    continue
+                yes_price = float(prices[0])
+                no_price = float(prices[1])
 
                 if yes_price <= 0 or no_price <= 0:
                     continue
