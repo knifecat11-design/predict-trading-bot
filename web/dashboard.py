@@ -366,10 +366,18 @@ def fetch_predict_data(config):
 
         parsed = []
 
+        # Debug: log first market's raw data to understand v1 API format
+        if all_raw:
+            first = all_raw[0]
+            logger.info(f"Predict first market keys: {list(first.keys())[:15]}")
+            logger.info(f"Predict first market: id={first.get('id')}, title={first.get('title', '')[:50]}, question={first.get('question', '')[:50]}")
+
         for idx, m in enumerate(all_raw):
             try:
                 market_id = m.get('id', m.get('market_id', ''))
                 if not market_id:
+                    if idx < 3:
+                        logger.warning(f"Predict market #{idx}: no id field, keys={list(m.keys())[:10]}")
                     continue
 
                 question_text = (m.get('question') or m.get('title', ''))
@@ -377,6 +385,8 @@ def fetch_predict_data(config):
                 if idx < PREDICT_DETAILED_FETCH:
                     full_ob = client.get_full_orderbook(market_id)
                     if full_ob is None:
+                        if idx < 3:
+                            logger.warning(f"Predict market #{idx} (id={market_id}): orderbook returned None")
                         continue
                     yes_price = full_ob['yes_ask']
                     no_price = full_ob['no_ask']
