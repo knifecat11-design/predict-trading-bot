@@ -60,7 +60,7 @@
         /* Platform status cards */
         .platforms {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -151,12 +151,17 @@
         .tag.poly { background: #1f3a5f; color: #58a6ff; }
         .tag.opinion { background: #3b2f1a; color: #d29922; }
         .tag.predict { background: #1a3b2f; color: #3fb950; }
+        .tag.kalshi { background: #3b1a1a; color: #e53935; }
         .direction { font-size: 12px; color: #8b949e; }
+
+        /* Price history sparkline */
+        .sparkline { display: inline-block; vertical-align: middle; }
+        .sparkline svg { overflow: visible; }
 
         /* Market list */
         .market-lists {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
         }
         .market-list {
@@ -202,6 +207,9 @@
         .pulse { animation: pulse 2s ease-in-out infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
+        @media (max-width: 1024px) {
+            .platforms, .market-lists { grid-template-columns: repeat(2, 1fr); }
+        }
         @media (max-width: 768px) {
             .platforms, .market-lists { grid-template-columns: 1fr; }
             .header { flex-direction: column; gap: 8px; }
@@ -255,6 +263,16 @@
                     <div>Status: <span class="num" id="status-predict">...</span></div>
                 </div>
             </div>
+            <div class="platform-card" id="card-kalshi">
+                <div class="name">
+                    <span class="status-dot unknown" id="dot-kalshi"></span>
+                    Kalshi
+                </div>
+                <div class="platform-stats">
+                    <div>Markets: <span class="num" id="count-kalshi">-</span></div>
+                    <div>Status: <span class="num" id="status-kalshi">...</span></div>
+                </div>
+            </div>
         </div>
 
         <!-- Scan Statistics -->
@@ -264,6 +282,7 @@
             <span style="color:#03a9f4">Poly <span class="val" id="stat-poly">-</span></span>
             <span style="color:#d29922">OP <span class="val" id="stat-op">-</span></span>
             <span style="color:#9c27b0">Pre <span class="val" id="stat-pre">-</span></span>
+            <span style="color:#e53935">Kal <span class="val" id="stat-kal">-</span></span>
             <span>|</span>
             <span>Same-Plat: <span class="val" id="stat-same">0</span></span>
             <span>Cross-Plat: <span class="val" id="stat-cross">0</span></span>
@@ -283,12 +302,13 @@
                     <th>Combined</th>
                     <th>Gross</th>
                     <th>Net</th>
+                    <th>Trend</th>
                     <th>Conf</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="arb-body">
-                <tr><td colspan="10" class="empty-state pulse">Scanning markets...</td></tr>
+                <tr><td colspan="11" class="empty-state pulse">Scanning markets...</td></tr>
             </tbody>
         </table>
 
@@ -306,6 +326,10 @@
             <div class="market-list">
                 <div class="market-list-header">Predict.fun</div>
                 <div id="list-predict"><div class="empty-state">Loading...</div></div>
+            </div>
+            <div class="market-list">
+                <div class="market-list-header">Kalshi</div>
+                <div id="list-kalshi"><div class="empty-state">Loading...</div></div>
             </div>
         </div>
     </div>
@@ -341,9 +365,22 @@
         }
 
         function platformTag(name) {
-            const cls = name.toLowerCase().includes('poly') ? 'poly' :
-                        name.toLowerCase().includes('opinion') ? 'opinion' : 'predict';
+            const n = name.toLowerCase();
+            const cls = n.includes('poly') ? 'poly' :
+                        n.includes('opinion') ? 'opinion' :
+                        n.includes('kalshi') ? 'kalshi' : 'predict';
             return `<span class="tag ${cls}">${name}</span>`;
+        }
+
+        function sparklineSvg(points, width, height) {
+            if (!points || points.length < 2) return '';
+            const vals = points.map(p => p.arb);
+            const min = Math.min(...vals), max = Math.max(...vals);
+            const range = max - min || 1;
+            const step = width / (vals.length - 1);
+            const coords = vals.map((v, i) => `${i * step},${height - ((v - min) / range) * height}`);
+            const color = vals[vals.length - 1] > 0 ? '#3fb950' : '#f85149';
+            return `<span class="sparkline"><svg width="${width}" height="${height}"><polyline points="${coords.join(' ')}" fill="none" stroke="${color}" stroke-width="1.5"/></svg></span>`;
         }
 
         function arbClass(pct) {
@@ -385,7 +422,7 @@
             document.getElementById('last-scan').textContent = data.last_scan || '-';
 
             // Platforms
-            ['polymarket', 'opinion', 'predict'].forEach(p => {
+            ['polymarket', 'opinion', 'predict', 'kalshi'].forEach(p => {
                 const info = data.platforms[p] || {};
                 const dot = document.getElementById(`dot-${p}`);
                 dot.className = `status-dot ${info.status || 'unknown'}`;
@@ -404,6 +441,7 @@
                 document.getElementById('stat-poly').textContent = stats.poly_count || 0;
                 document.getElementById('stat-op').textContent = stats.opinion_count || 0;
                 document.getElementById('stat-pre').textContent = stats.predict_count || 0;
+                document.getElementById('stat-kal').textContent = stats.kalshi_count || 0;
                 document.getElementById('stat-same').textContent = stats.same_platform_arb || 0;
                 document.getElementById('stat-cross').textContent = stats.cross_platform_arb || 0;
                 document.getElementById('stat-profitable').textContent = stats.profitable_after_fees || 0;
@@ -412,13 +450,16 @@
             // Arbitrage
             const tbody = document.getElementById('arb-body');
             const arbs = data.arbitrage || [];
+            const priceHistory = data.price_history || {};
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No arbitrage opportunities found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No arbitrage opportunities found</td></tr>';
             } else {
                 tbody.innerHTML = arbs.map(a => {
                     const net = a.net_profit !== undefined ? a.net_profit : (a.arbitrage - 2);
                     const netClass = net > 0 ? 'color:#3fb950' : 'color:#f85149';
                     const typeIcon = a.arb_type === 'same_platform' ? '&#9679; ' : '';
+                    const history = priceHistory[a.market_key] || [];
+                    const spark = sparklineSvg(history, 50, 16);
                     return `
                     <tr${a.arb_type === 'same_platform' ? ' style="background:#1a1a0e"' : ''}>
                         <td>${typeIcon}${a.market}</td>
@@ -429,6 +470,7 @@
                         <td>${a.combined}c</td>
                         <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
                         <td><span style="${netClass};font-weight:600">${net > 0 ? '+' : ''}${net.toFixed(1)}%</span></td>
+                        <td>${spark}</td>
                         <td>${(a.confidence * 100).toFixed(0)}%</td>
                         <td>${a.timestamp}</td>
                     </tr>`;
