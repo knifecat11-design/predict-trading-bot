@@ -1,8 +1,8 @@
 """
 Cross-platform prediction market arbitrage dashboard
-Platforms: Polymarket, Opinion.trade, Predict.fun
+Platforms: Polymarket, Opinion.trade, Predict.fun, Kalshi
 
-v3.1: WebSocket push + concurrent fetching + scan guard + memory limits
+v3.2: + Kalshi platform, price history tracking, inverted-index matching
 """
 
 import os
@@ -54,12 +54,15 @@ OPINION_PARSED_LIMIT = 400        # Max parsed opinion markets
 PREDICT_EXTREME_FILTER = 0.03     # Filter markets with Yes < 3% or > 97%
 PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching
 MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
+KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
+PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 
 # Platform fee rates (used for net profit calculation)
 PLATFORM_FEES = {
     'polymarket': 0.02,    # 2% taker fee
     'opinion': 0.02,       # 2% estimated
     'predict': 0.02,       # feeRateBps: 200 = 2%
+    'kalshi': 0.02,        # ~2% effective (Kalshi: 7% of profit ≈ 2% of trade value)
 }
 
 # Global state
@@ -68,6 +71,7 @@ _state = {
         'polymarket': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
         'opinion': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
         'predict': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
+        'kalshi': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
     },
     'arbitrage': [],
     'scan_count': 0,
@@ -75,6 +79,7 @@ _state = {
     'threshold': 2.0,
     'last_scan': '-',
     'error': None,
+    'price_history': {},  # market_key → [{timestamp, arbitrage, net_profit}, ...]
 }
 _lock = threading.Lock()
 _scanning = threading.Event()  # Scan guard: prevents overlapping scans
@@ -178,6 +183,7 @@ def platform_link_html(platform_name, market_url=None):
         'Opinion.trade': '#d29922',
         'Predict': '#9c27b0',
         'Predict.fun': '#9c27b0',
+        'Kalshi': '#e53935',
     }
     platform_urls = {
         'Polymarket': 'https://polymarket.com',
@@ -185,6 +191,7 @@ def platform_link_html(platform_name, market_url=None):
         'Opinion.trade': 'https://opinion.trade',
         'Predict': 'https://predict.fun',
         'Predict.fun': 'https://predict.fun',
+        'Kalshi': 'https://kalshi.com',
     }
     color = platform_colors.get(platform_name, '#888')
     url = market_url if market_url else platform_urls.get(platform_name, '#')
@@ -550,6 +557,105 @@ def fetch_predict_data(config):
         return 'error', []
 
 
+def fetch_kalshi_data(config):
+    """Fetch Kalshi markets — prices included in /markets response (no orderbook calls)"""
+    try:
+        from src.kalshi_api import KalshiClient
+        client = KalshiClient(config)
+        raw_markets = client.get_markets(status='open', limit=KALSHI_FETCH_LIMIT)
+        logger.info(f"Kalshi: fetched {len(raw_markets)} raw markets")
+
+        parsed = []
+        for m in raw_markets:
+            try:
+                ticker = m.get('ticker', '')
+                title = m.get('title', '') or m.get('subtitle', '') or ticker
+                event_ticker = m.get('event_ticker', '')
+
+                # Parse prices from dollar strings
+                yes_ask_str = m.get('yes_ask_dollars', '0')
+                no_ask_str = m.get('no_ask_dollars', '0')
+                yes_ask = float(yes_ask_str) if yes_ask_str else 0
+                no_ask = float(no_ask_str) if no_ask_str else 0
+
+                if yes_ask <= 0 and no_ask <= 0:
+                    continue
+
+                # Fallback: derive missing price
+                if yes_ask <= 0 and no_ask > 0:
+                    yes_ask = 1.0 - float(m.get('no_bid_dollars', '0') or '0')
+                if no_ask <= 0 and yes_ask > 0:
+                    no_ask = 1.0 - float(m.get('yes_bid_dollars', '0') or '0')
+
+                # Filter extreme prices
+                if yes_ask < PREDICT_EXTREME_FILTER or yes_ask > (1 - PREDICT_EXTREME_FILTER):
+                    continue
+
+                url = f"https://kalshi.com/markets/{event_ticker}"
+                volume = float(m.get('volume_24h', 0) or 0)
+                close_time = m.get('close_time', '')
+
+                parsed.append({
+                    'id': ticker,
+                    'title': f"<a href='{url}' target='_blank' style='color:#58a6ff;text-decoration:none'>{title[:80]}</a>",
+                    'url': url,
+                    'match_title': title,
+                    'yes': round(yes_ask, 4),
+                    'no': round(no_ask, 4),
+                    'volume': volume,
+                    'liquidity': float(m.get('liquidity_dollars', '0') or '0'),
+                    'platform': 'kalshi',
+                    'end_date': close_time,
+                })
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        # Sort by volume
+        parsed.sort(key=lambda x: x['volume'], reverse=True)
+        logger.info(f"Kalshi: {len(parsed)} markets with valid prices")
+        return 'active', parsed
+    except ImportError as e:
+        logger.error(f"Kalshi import error: {e}")
+        return 'error', []
+    except Exception as e:
+        logger.error(f"Kalshi fetch error: {e}")
+        return 'error', []
+
+
+def update_price_history(arbitrage_list):
+    """Track price history for arbitrage opportunities (last N data points per market)"""
+    now_str = datetime.now().strftime('%H:%M:%S')
+    history = _state.get('price_history', {})
+
+    # Record current prices for active opportunities
+    for opp in arbitrage_list:
+        key = opp.get('market_key', '')
+        if not key:
+            continue
+        if key not in history:
+            history[key] = []
+        history[key].append({
+            'time': now_str,
+            'arb': round(opp.get('arbitrage', 0), 2),
+            'net': round(opp.get('net_profit', 0), 2),
+        })
+        # Keep only last N points
+        if len(history[key]) > PRICE_HISTORY_MAX_POINTS:
+            history[key] = history[key][-PRICE_HISTORY_MAX_POINTS:]
+
+    # Prune markets no longer in active arbitrage
+    active_keys = {opp.get('market_key', '') for opp in arbitrage_list}
+    stale_keys = [k for k in history if k not in active_keys]
+    for k in stale_keys:
+        # Keep for a while in case it reappears
+        if len(history[k]) > 0:
+            history[k].append({'time': now_str, 'arb': 0, 'net': 0})
+        if len(history[k]) > PRICE_HISTORY_MAX_POINTS:
+            del history[k]
+
+    _state['price_history'] = history
+
+
 def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
     """Find arbitrage between two platform market lists"""
     from src.market_matcher import MarketMatcher
@@ -781,16 +887,18 @@ def background_scanner():
         try:
             now = time.time()
 
-            # === CONCURRENT FETCHING: all 3 platforms in parallel ===
+            # === CONCURRENT FETCHING: all 4 platforms in parallel ===
             poly_status, poly_markets = 'unknown', []
             opinion_status, opinion_markets = 'unknown', []
             predict_status, predict_markets = 'unknown', []
+            kalshi_status, kalshi_markets = 'unknown', []
 
-            with ThreadPoolExecutor(max_workers=3, thread_name_prefix='fetch') as executor:
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix='fetch') as executor:
                 futures = {
                     executor.submit(fetch_polymarket_data, config): 'polymarket',
                     executor.submit(fetch_opinion_data, config): 'opinion',
                     executor.submit(fetch_predict_data, config): 'predict',
+                    executor.submit(fetch_kalshi_data, config): 'kalshi',
                 }
 
                 for future in as_completed(futures, timeout=120):
@@ -803,6 +911,8 @@ def background_scanner():
                             opinion_status, opinion_markets = status, markets
                         elif platform == 'predict':
                             predict_status, predict_markets = status, markets
+                        elif platform == 'kalshi':
+                            kalshi_status, kalshi_markets = status, markets
 
                         # Update state immediately for this platform
                         with _lock:
@@ -830,30 +940,31 @@ def background_scanner():
 
             # === Same-platform arbitrage (Yes+No < $1.00) ===
             all_arb = []
-            for pname, pmarkets in [('Polymarket', poly_markets), ('Opinion', opinion_markets), ('Predict', predict_markets)]:
+            platform_market_pairs = [
+                ('Polymarket', poly_markets), ('Opinion', opinion_markets),
+                ('Predict', predict_markets), ('Kalshi', kalshi_markets),
+            ]
+            for pname, pmarkets in platform_market_pairs:
                 if pmarkets:
                     same_arb = find_same_platform_arbitrage(pmarkets, pname, threshold=0.5)
                     all_arb.extend(same_arb)
 
-            # === Cross-platform arbitrage ===
+            # === Cross-platform arbitrage (all pairs of 4 platforms) ===
             cross_pairs_checked = 0
-            if poly_markets and opinion_markets:
-                arb = find_cross_platform_arbitrage(
-                    poly_markets, opinion_markets, 'Polymarket', 'Opinion', threshold)
-                all_arb.extend(arb)
-                cross_pairs_checked += 1
-
-            if poly_markets and predict_markets:
-                arb = find_cross_platform_arbitrage(
-                    poly_markets, predict_markets, 'Polymarket', 'Predict', threshold)
-                all_arb.extend(arb)
-                cross_pairs_checked += 1
-
-            if opinion_markets and predict_markets:
-                arb = find_cross_platform_arbitrage(
-                    opinion_markets, predict_markets, 'Opinion', 'Predict', threshold)
-                all_arb.extend(arb)
-                cross_pairs_checked += 1
+            cross_platform_combos = [
+                (poly_markets, opinion_markets, 'Polymarket', 'Opinion'),
+                (poly_markets, predict_markets, 'Polymarket', 'Predict'),
+                (poly_markets, kalshi_markets, 'Polymarket', 'Kalshi'),
+                (opinion_markets, predict_markets, 'Opinion', 'Predict'),
+                (opinion_markets, kalshi_markets, 'Opinion', 'Kalshi'),
+                (predict_markets, kalshi_markets, 'Predict', 'Kalshi'),
+            ]
+            for markets_a, markets_b, name_a, name_b in cross_platform_combos:
+                if markets_a and markets_b:
+                    arb = find_cross_platform_arbitrage(
+                        markets_a, markets_b, name_a, name_b, threshold)
+                    all_arb.extend(arb)
+                    cross_pairs_checked += 1
 
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
@@ -896,10 +1007,11 @@ def background_scanner():
                 profitable = sum(1 for a in all_arb if a.get('net_profit', 0) > 0)
                 _state['scan_stats'] = {
                     'duration': round(scan_duration, 1),
-                    'total_markets': len(poly_markets) + len(opinion_markets) + len(predict_markets),
+                    'total_markets': len(poly_markets) + len(opinion_markets) + len(predict_markets) + len(kalshi_markets),
                     'poly_count': len(poly_markets),
                     'opinion_count': len(opinion_markets),
                     'predict_count': len(predict_markets),
+                    'kalshi_count': len(kalshi_markets),
                     'cross_pairs_checked': cross_pairs_checked,
                     'same_platform_arb': same_count,
                     'cross_platform_arb': cross_count,
@@ -907,10 +1019,13 @@ def background_scanner():
                     'total_arb': len(all_arb),
                 }
 
+                # Update price history for active arb opportunities
+                update_price_history(sorted_arb[:MAX_ARBITRAGE_DISPLAY])
+
             logger.info(
                 f"Scan #{_state['scan_count']} ({scan_duration:.1f}s): "
                 f"Poly={len(poly_markets)} Opinion={len(opinion_markets)} "
-                f"Predict={len(predict_markets)} "
+                f"Predict={len(predict_markets)} Kalshi={len(kalshi_markets)} "
                 f"Arb={len(all_arb)}(same={same_count},cross={cross_count},net+={profitable}) "
                 f"WS={_ws_clients}"
             )

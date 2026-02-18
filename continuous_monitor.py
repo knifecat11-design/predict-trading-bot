@@ -114,6 +114,7 @@ def check_platform_api(config):
         'polymarket': True,  # Public API, always available
         'opinion': bool(config.get('opinion', {}).get('api_key', '')),
         'predict': False,
+        'kalshi': True,  # Public API, always available
     }
 
     # Check Predict.fun API (v1 API: x-api-key header, /v1/ prefix)
@@ -229,6 +230,29 @@ def fetch_predict_markets(config):
         return parsed
     except Exception as e:
         logging.error(f"Predict fetch: {e}")
+        return []
+
+
+def fetch_kalshi_markets(config):
+    """Fetch Kalshi markets — reuse dashboard logic"""
+    try:
+        from web.dashboard import fetch_kalshi_data
+        status, markets = fetch_kalshi_data(config)
+        import re
+        parsed = []
+        for m in markets:
+            title_html = m.get('title', '')
+            title_plain = re.sub(r'<[^>]+>', '', title_html)
+            parsed.append({
+                'title': title_plain[:80],
+                'match_title': m.get('match_title', title_plain),
+                'yes': m['yes'], 'no': m['no'],
+                'volume': m.get('volume', 0),
+                'end_date': m.get('end_date', ''),
+            })
+        return parsed
+    except Exception as e:
+        logging.error(f"Kalshi fetch: {e}")
         return []
 
 
@@ -374,6 +398,7 @@ def main():
     logger.info(f"  Polymarket: {'Active' if api_status['polymarket'] else 'Inactive'}")
     logger.info(f"  Opinion:    {'Active' if api_status['opinion'] else 'No API Key'}")
     logger.info(f"  Predict:    {'Active' if api_status['predict'] else 'No API Key'}")
+    logger.info(f"  Kalshi:     {'Active' if api_status['kalshi'] else 'Inactive'}")
     logger.info(f"Threshold: {threshold}%  Interval: {scan_interval}s  Cooldown: {cooldown_minutes}m")
     logger.info("")
 
@@ -416,8 +441,9 @@ def main():
             poly_markets = fetch_polymarket_markets(config) if api_status['polymarket'] else []
             opinion_markets = fetch_opinion_markets(config) if api_status['opinion'] else []
             predict_markets = fetch_predict_markets(config) if api_status['predict'] else []
+            kalshi_markets = fetch_kalshi_markets(config) if api_status['kalshi'] else []
 
-            logger.info(f"  Polymarket: {len(poly_markets)}  Opinion: {len(opinion_markets)}  Predict: {len(predict_markets)}")
+            logger.info(f"  Polymarket: {len(poly_markets)}  Opinion: {len(opinion_markets)}  Predict: {len(predict_markets)}  Kalshi: {len(kalshi_markets)}")
 
             # Scan all pairs (only between active platforms with real data)
             all_opps = []
@@ -427,9 +453,15 @@ def main():
                 pairs.append((poly_markets, opinion_markets, 'Polymarket', 'Opinion', True))
             if poly_markets and predict_markets:
                 pairs.append((poly_markets, predict_markets, 'Polymarket', 'Predict', api_status['predict']))
+            if poly_markets and kalshi_markets:
+                pairs.append((poly_markets, kalshi_markets, 'Polymarket', 'Kalshi', True))
             if opinion_markets and predict_markets:
                 pairs.append((opinion_markets, predict_markets, 'Opinion', 'Predict',
                               api_status['opinion'] and api_status['predict']))
+            if opinion_markets and kalshi_markets:
+                pairs.append((opinion_markets, kalshi_markets, 'Opinion', 'Kalshi', api_status['opinion']))
+            if predict_markets and kalshi_markets:
+                pairs.append((predict_markets, kalshi_markets, 'Predict', 'Kalshi', api_status['predict']))
 
             for ma, mb, na, nb, is_real in pairs:
                 opps = find_arbitrage(ma, mb, na, nb, threshold, min_confidence)
