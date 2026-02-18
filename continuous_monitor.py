@@ -164,50 +164,23 @@ def extract_keywords(title):
 
 
 def fetch_polymarket_markets(config):
-    """Fetch Polymarket markets (always real data)"""
+    """Fetch Polymarket markets — reuse dashboard logic for best_ask pricing"""
     try:
-        from src.polymarket_api import PolymarketClient
-        client = PolymarketClient(config)
-        # 全站分页获取（比 tag-by-tag 更高效，避免去重损失）
-        markets = client.get_markets(limit=3000, active_only=True)
-
+        from web.dashboard import fetch_polymarket_data
+        status, markets = fetch_polymarket_data(config)
+        # Convert to monitor format (strip HTML, keep match_title)
         parsed = []
+        import re
         for m in markets:
-            try:
-                prices_str = m.get('outcomePrices', '[]')
-                prices = json.loads(prices_str) if isinstance(prices_str, str) else prices_str
-                if len(prices) < 2:
-                    continue
-                yes = float(prices[0])
-                no = float(prices[1])
-                if yes <= 0 or no <= 0:
-                    continue
-                question = m.get('question', '')
-                events = m.get('events', [])
-                event_title = events[0].get('title', '') if events else ''
-
-                # Include event context for matching (prevents sub-question false matches)
-                # e.g. "Trump out as President" under "What will happen before GTA VI?"
-                # must not match "Trump out as President before 2027?"
-                if event_title and event_title.lower().rstrip('?').strip() != question.lower().rstrip('?').strip():
-                    match_title = f"{question} | {event_title}"
-                else:
-                    match_title = question
-
-                parsed.append({
-                    'title': question[:80],
-                    'match_title': match_title,
-                    'yes': yes, 'no': no,
-                    'volume': float(m.get('volume24hr', 0) or 0),
-                    'end_date': m.get('endDate', ''),
-                })
-            except (ValueError, TypeError, KeyError) as e:
-                logging.debug(f"解析 Polymarket 市场失败: {e}")
-                continue
-            except Exception as e:
-                logging.warning(f"解析 Polymarket 市场时出现意外错误: {e}")
-                continue
-        # 按交易量降序排列
+            title_html = m.get('title', '')
+            title_plain = re.sub(r'<[^>]+>', '', title_html)
+            parsed.append({
+                'title': title_plain[:80],
+                'match_title': m.get('match_title', title_plain),
+                'yes': m['yes'], 'no': m['no'],
+                'volume': m.get('volume', 0),
+                'end_date': m.get('end_date', ''),
+            })
         parsed.sort(key=lambda x: x['volume'], reverse=True)
         return parsed
     except Exception as e:
@@ -216,73 +189,21 @@ def fetch_polymarket_markets(config):
 
 
 def fetch_opinion_markets(config):
-    """Fetch Opinion markets (requires API key)"""
+    """Fetch Opinion markets — reuse dashboard logic for best_ask + concurrent"""
     try:
-        from src.opinion_api import OpinionAPIClient
-        client = OpinionAPIClient(config)
-        # 直接获取市场列表，已按 24h 交易量排序
-        raw = client.get_markets(status='activated', sort_by=5, limit=500)
-
-        if not raw:
-            return []
-
-        # 优化：只对前 50 个市场获取独立 No 价格，避免太多 HTTP 请求
-        # 如果仍然全部失败，直接返回空列表（避免继续尝试）
-        max_detailed_fetch = 80   # 前 80 个独立获取 No 价格
-        max_total_markets = 300   # 最多处理 300 个市场
-
-        logging.info(f"Opinion: 获取到 {len(raw)} 个原始市场（限制处理 {max_total_markets} 个，前 {max_detailed_fetch} 个获取独立价格）...")
-
+        from web.dashboard import fetch_opinion_data
+        status, markets = fetch_opinion_data(config)
+        import re
         parsed = []
-
-        for idx, m in enumerate(raw):
-            try:
-                yes_token = m.get('yesTokenId', '')
-                no_token = m.get('noTokenId', '')
-
-                if not yes_token:
-                    continue
-
-                # 独立获取 Yes 价格（必需）
-                yes_price = client.get_token_price(yes_token)
-                if yes_price is None:
-                    continue
-
-                # 对于前 N 个市场，尝试独立获取 No 价格
-                # 对于其他市场，直接用 1 - yes_price 估算（避免 1000 次 HTTP 请求）
-                if idx < max_detailed_fetch and no_token:
-                    no_price = client.get_token_price(no_token)
-                    if no_price is None:
-                        # Fallback: 使用 1 - yes_price
-                        logging.debug(f"No 价格获取失败，使用 fallback 1 - yes")
-                        no_price = round(1.0 - yes_price, 4)
-                elif no_token:
-                    # 对于后续市场，直接用 1 - yes_price 估算
-                    no_price = round(1.0 - yes_price, 4)
-                else:
-                    no_price = None
-
-                # 跳过价格获取失败的市场
-                if yes_price is None or no_price is None:
-                    continue
-
-                parsed.append({
-                    'title': m.get('marketTitle', '')[:80],
-                    'yes': yes_price,
-                    'no': no_price,
-                    'volume': float(m.get('volume24h', 0) or 0),
-                    'end_date': m.get('cutoff_at', ''),
-                })
-
-                # 如果达到最大处理数量，停止解析（避免太多失败导致超时）
-                if len(parsed) >= max_total_markets:
-                    logging.warning(f"已达到最大处理数量 {max_total_markets}，停止解析剩余市场")
-                    break
-            except Exception as e:
-                logging.debug(f"解析 Opinion 市场失败: {e}")
-                continue
-
-        logging.info(f"Opinion: 解析完成，成功解析 {len(parsed)} 个市场")
+        for m in markets:
+            title_html = m.get('title', '')
+            title_plain = re.sub(r'<[^>]+>', '', title_html)
+            parsed.append({
+                'title': title_plain[:80],
+                'yes': m['yes'], 'no': m['no'],
+                'volume': m.get('volume', 0),
+                'end_date': m.get('end_date', ''),
+            })
         return parsed
     except Exception as e:
         logging.error(f"Opinion fetch: {e}")
@@ -290,37 +211,21 @@ def fetch_opinion_markets(config):
 
 
 def fetch_predict_markets(config):
-    """Fetch Predict.fun markets (requires API key) - 改进版：独立获取 No 价格"""
+    """Fetch Predict.fun markets — reuse dashboard logic for full pagination + concurrent"""
     try:
-        from src.api_client import PredictAPIClient
-        client = PredictAPIClient(config)
-        raw = client.get_markets(status='open', limit=100)
-
+        from web.dashboard import fetch_predict_data
+        status, markets = fetch_predict_data(config)
+        import re
         parsed = []
-        for m in raw:
-            try:
-                market_id = m.get('id', m.get('market_id', ''))
-                if not market_id:
-                    continue
-
-                # 使用新的完整订单簿方法（独立获取 Yes 和 No 价格）
-                full_ob = client.get_full_orderbook(market_id)
-                if full_ob is None:
-                    continue
-
-                yes_price = (full_ob['yes_bid'] + full_ob['yes_ask']) / 2
-                no_price = (full_ob['no_bid'] + full_ob['no_ask']) / 2
-
-                parsed.append({
-                    'title': (m.get('question') or m.get('title', ''))[:80],
-                    'yes': yes_price,
-                    'no': no_price,
-                    'volume': float(m.get('volume', 0) or 0),
-                    'end_date': '',  # Predict 可能没有这个字段
-                })
-            except Exception as e:
-                logging.debug(f"解析 Predict 市场失败: {e}")
-                continue
+        for m in markets:
+            title_html = m.get('title', '')
+            title_plain = re.sub(r'<[^>]+>', '', title_html)
+            parsed.append({
+                'title': title_plain[:80],
+                'yes': m['yes'], 'no': m['no'],
+                'volume': m.get('volume', 0),
+                'end_date': m.get('end_date', ''),
+            })
         return parsed
     except Exception as e:
         logging.error(f"Predict fetch: {e}")

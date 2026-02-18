@@ -257,6 +257,19 @@
             </div>
         </div>
 
+        <!-- Scan Statistics -->
+        <div class="scan-stats" id="scan-stats" style="display:none;margin-bottom:16px;background:#161b22;border:1px solid #21262d;border-radius:10px;padding:12px 20px;font-size:13px;color:#8b949e;display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+            <span>Scan <span class="val" id="stat-duration">-</span>s</span>
+            <span>Markets: <span class="val" id="stat-total">-</span></span>
+            <span style="color:#03a9f4">Poly <span class="val" id="stat-poly">-</span></span>
+            <span style="color:#d29922">OP <span class="val" id="stat-op">-</span></span>
+            <span style="color:#9c27b0">Pre <span class="val" id="stat-pre">-</span></span>
+            <span>|</span>
+            <span>Same-Plat: <span class="val" id="stat-same">0</span></span>
+            <span>Cross-Plat: <span class="val" id="stat-cross">0</span></span>
+            <span style="color:#3fb950">Net+: <span class="val" id="stat-profitable" style="color:#3fb950">0</span></span>
+        </div>
+
         <!-- Arbitrage Opportunities -->
         <div class="section-title">Arbitrage Opportunities</div>
         <table class="arb-table">
@@ -268,13 +281,14 @@
                     <th>Platform A</th>
                     <th>Platform B</th>
                     <th>Combined</th>
-                    <th>Arbitrage</th>
-                    <th>Confidence</th>
+                    <th>Gross</th>
+                    <th>Net</th>
+                    <th>Conf</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="arb-body">
-                <tr><td colspan="9" class="empty-state pulse">Scanning markets...</td></tr>
+                <tr><td colspan="10" class="empty-state pulse">Scanning markets...</td></tr>
             </tbody>
         </table>
 
@@ -380,25 +394,45 @@
                 renderMarkets(`list-${p}`, info.markets);
             });
 
+            // Scan Statistics
+            const stats = data.scan_stats;
+            if (stats) {
+                const el = document.getElementById('scan-stats');
+                el.style.display = 'flex';
+                document.getElementById('stat-duration').textContent = stats.duration || '-';
+                document.getElementById('stat-total').textContent = stats.total_markets || 0;
+                document.getElementById('stat-poly').textContent = stats.poly_count || 0;
+                document.getElementById('stat-op').textContent = stats.opinion_count || 0;
+                document.getElementById('stat-pre').textContent = stats.predict_count || 0;
+                document.getElementById('stat-same').textContent = stats.same_platform_arb || 0;
+                document.getElementById('stat-cross').textContent = stats.cross_platform_arb || 0;
+                document.getElementById('stat-profitable').textContent = stats.profitable_after_fees || 0;
+            }
+
             // Arbitrage
             const tbody = document.getElementById('arb-body');
             const arbs = data.arbitrage || [];
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No arbitrage opportunities found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No arbitrage opportunities found</td></tr>';
             } else {
-                tbody.innerHTML = arbs.map(a => `
-                    <tr>
-                        <td>${a.market}</td>
+                tbody.innerHTML = arbs.map(a => {
+                    const net = a.net_profit !== undefined ? a.net_profit : (a.arbitrage - 2);
+                    const netClass = net > 0 ? 'color:#3fb950' : 'color:#f85149';
+                    const typeIcon = a.arb_type === 'same_platform' ? '&#9679; ' : '';
+                    return `
+                    <tr${a.arb_type === 'same_platform' ? ' style="background:#1a1a0e"' : ''}>
+                        <td>${typeIcon}${a.market}</td>
                         <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
                         <td class="direction">${a.direction}</td>
                         <td>Y:${a.a_yes}c N:${a.a_no}c</td>
                         <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                         <td>${a.combined}c</td>
                         <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
+                        <td><span style="${netClass};font-weight:600">${net > 0 ? '+' : ''}${net.toFixed(1)}%</span></td>
                         <td>${(a.confidence * 100).toFixed(0)}%</td>
                         <td>${a.timestamp}</td>
-                    </tr>
-                `).join('');
+                    </tr>`;
+                }).join('');
             }
 
             // Error display
