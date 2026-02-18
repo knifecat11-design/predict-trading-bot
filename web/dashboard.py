@@ -48,12 +48,11 @@ MAX_MARKETS_DISPLAY = 15          # Max markets to store in state per platform (
 MAX_ARBITRAGE_DISPLAY = 30        # Max arbitrage opportunities to keep
 ARBITRAGE_EXPIRY_MINUTES = 10     # Remove stale arbitrage after N minutes
 OPINION_DETAILED_FETCH = 100      # Individual No price fetches (concurrent)
-PREDICT_DETAILED_FETCH = 100      # Individual orderbook fetches (concurrent)
-POLYMARKET_LIMIT_PER_TAG = 100    # Markets per tag
+POLYMARKET_FETCH_LIMIT = 5000     # Polymarket markets to fetch (total active ~28k)
 OPINION_MARKET_LIMIT = 500        # Total opinion markets to process
 OPINION_PARSED_LIMIT = 400        # Max parsed opinion markets
-PREDICT_MARKET_LIMIT = 400        # Total predict markets (via pagination)
-PRICE_FETCH_WORKERS = 8           # Concurrent threads for price/orderbook fetching
+PREDICT_EXTREME_FILTER = 0.03     # Filter markets with Yes < 3% or > 97%
+PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching
 MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
 
 # Global state
@@ -190,8 +189,8 @@ def fetch_polymarket_data(config):
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
-        # Full-site paginated fetch (more efficient than tag-by-tag with dedup loss)
-        markets = poly_client.get_markets(limit=3000, active_only=True)
+        # Full-site paginated fetch — Polymarket has ~28k active markets
+        markets = poly_client.get_markets(limit=POLYMARKET_FETCH_LIMIT, active_only=True)
 
         parsed = []
         for m in markets:
@@ -405,7 +404,7 @@ def fetch_opinion_data(config):
 
 
 def fetch_predict_data(config):
-    """Fetch Predict.fun markets - paginated + concurrent orderbook fetching"""
+    """Fetch ALL Predict.fun open markets via cursor pagination + concurrent orderbook"""
     api_key = config.get('api', {}).get('api_key', '')
     base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
     if not api_key:
@@ -415,86 +414,70 @@ def fetch_predict_data(config):
     logger.info(f"Predict: checking API at {base_url}/v1 (key: {api_key[:8]}...)")
 
     try:
+        import requests as req
         from src.api_client import PredictAPIClient
         client = PredictAPIClient(config)
 
-        # Fetch markets with pagination across multiple sort methods
+        # === Phase 1: Fetch ALL open markets via cursor pagination ===
+        # Predict v1 API uses 'cursor' field (NOT 'after') for pagination
+        # Total open markets: ~500+, page size max: 100
+        session = req.Session()
+        session.headers.update({'x-api-key': api_key, 'Content-Type': 'application/json'})
+
         all_raw = []
         seen_ids = set()
+        cursor = None
 
-        for sort_by in ['popular', 'newest', 'volume']:
-            try:
-                batch = client.get_markets(status='open', sort=sort_by, limit=100)
-                logger.info(f"Predict [{sort_by}]: got {len(batch)} markets")
-                for m in batch:
-                    mid = m.get('id', m.get('market_id', ''))
-                    if mid and mid not in seen_ids:
-                        seen_ids.add(mid)
-                        all_raw.append(m)
-            except Exception as e:
-                logger.error(f"Predict [{sort_by}] fetch failed: {e}")
-
-        # Paginated fetch to get more markets (use cursor from v1 API)
-        if len(all_raw) < PREDICT_MARKET_LIMIT:
-            try:
-                import requests as req
-                session = req.Session()
-                session.headers.update({'x-api-key': api_key, 'Content-Type': 'application/json'})
-                cursor = None
-                pages_fetched = 0
-                while len(all_raw) < PREDICT_MARKET_LIMIT and pages_fetched < 5:
-                    params = {'first': 100, 'status': 'OPEN', 'sort': 'VOLUME_24H_DESC'}
-                    if cursor:
-                        params['after'] = cursor
-                    resp = session.get(f"{base_url}/v1/markets", params=params, timeout=15)
-                    if resp.status_code != 200:
-                        break
-                    data = resp.json()
-                    markets_page = data.get('data', []) if isinstance(data, dict) else data
-                    if not markets_page:
-                        break
-                    for m in markets_page:
-                        mid = m.get('id', m.get('market_id', ''))
-                        if mid and mid not in seen_ids:
-                            seen_ids.add(mid)
-                            all_raw.append(m)
-                    # Get cursor for next page
-                    cursor = data.get('after') if isinstance(data, dict) else None
-                    if not cursor:
-                        break
-                    pages_fetched += 1
-                    logger.info(f"Predict [page {pages_fetched}]: total {len(all_raw)} markets")
-            except Exception as e:
-                logger.warning(f"Predict pagination failed: {e}")
+        for page in range(10):  # max 10 pages = 1000 markets
+            params = {'first': 100, 'status': 'OPEN', 'sort': 'VOLUME_24H_DESC'}
+            if cursor:
+                params['after'] = cursor
+            resp = session.get(f"{base_url}/v1/markets", params=params, timeout=15)
+            if resp.status_code != 200:
+                logger.warning(f"Predict page {page}: HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            batch = data.get('data', []) if isinstance(data, dict) else data
+            if not batch:
+                break
+            new_count = 0
+            for m in batch:
+                mid = m.get('id', m.get('market_id', ''))
+                if mid and mid not in seen_ids:
+                    seen_ids.add(mid)
+                    all_raw.append(m)
+                    new_count += 1
+            # v1 API returns cursor in 'cursor' field
+            cursor = data.get('cursor') if isinstance(data, dict) else None
+            logger.info(f"Predict [page {page}]: {len(batch)} fetched, {new_count} new, total={len(all_raw)}")
+            if not cursor or len(batch) < 100:
+                break
 
         if not all_raw:
             logger.warning("Predict: 0 raw markets returned from API")
             return 'error', []
 
-        logger.info(f"Predict: {len(all_raw)} total raw markets (deduped)")
+        logger.info(f"Predict: {len(all_raw)} total open markets (full pagination)")
 
-        # Debug first market
-        if all_raw:
-            first = all_raw[0]
-            logger.info(f"Predict first market: id={first.get('id')}, question={first.get('question', '')[:50]}")
-
-        # Concurrent orderbook fetching
-        orderbook_results = {}  # market_id -> {yes_ask, no_ask}
+        # === Phase 2: Concurrent orderbook fetching for ALL markets ===
+        orderbook_results = {}
 
         def fetch_orderbook(market_id):
             full_ob = client.get_full_orderbook(market_id)
             return market_id, full_ob
 
-        # Fetch orderbooks for top PREDICT_DETAILED_FETCH markets concurrently
+        # Fetch ALL market orderbooks concurrently
         markets_to_fetch = []
-        for m in all_raw[:PREDICT_DETAILED_FETCH]:
+        for m in all_raw:
             mid = m.get('id', m.get('market_id', ''))
             if mid:
                 markets_to_fetch.append(mid)
 
+        logger.info(f"Predict: fetching {len(markets_to_fetch)} orderbooks concurrently...")
+
         with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='pred-ob') as ex:
             futures = {ex.submit(fetch_orderbook, mid): mid for mid in markets_to_fetch}
-            for future in as_completed(futures, timeout=120):
+            for future in as_completed(futures, timeout=180):
                 try:
                     mid, ob = future.result(timeout=15)
                     if ob is not None:
@@ -502,41 +485,9 @@ def fetch_predict_data(config):
                 except Exception:
                     pass
 
-        logger.info(f"Predict: got {len(orderbook_results)} orderbooks (concurrent)")
+        logger.info(f"Predict: got {len(orderbook_results)} orderbooks")
 
-        # For remaining markets beyond PREDICT_DETAILED_FETCH, use fast single-call mode
-        remaining_ids = []
-        for m in all_raw[PREDICT_DETAILED_FETCH:]:
-            mid = m.get('id', m.get('market_id', ''))
-            if mid and mid not in orderbook_results:
-                remaining_ids.append(mid)
-
-        if remaining_ids:
-            def fetch_fast_ob(market_id):
-                try:
-                    yes_ob = client._get_orderbook(market_id, outcome_id=1)
-                    if yes_ob and yes_ob.get('yes_ask') is not None:
-                        return market_id, {
-                            'yes_ask': yes_ob['yes_ask'],
-                            'no_ask': round(1.0 - yes_ob['yes_bid'], 4) if yes_ob.get('yes_bid') else round(1.0 - yes_ob['yes_ask'], 4),
-                        }
-                except Exception:
-                    pass
-                return market_id, None
-
-            with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='pred-fast') as ex:
-                futures = {ex.submit(fetch_fast_ob, mid): mid for mid in remaining_ids}
-                for future in as_completed(futures, timeout=120):
-                    try:
-                        mid, ob = future.result(timeout=15)
-                        if ob is not None:
-                            orderbook_results[mid] = ob
-                    except Exception:
-                        pass
-
-            logger.info(f"Predict: total {len(orderbook_results)} orderbooks (detailed + fast)")
-
-        # Build parsed list — filter extreme prices and sort by volume
+        # === Phase 3: Build parsed list — filter extreme prices, sort by volume ===
         parsed = []
         extreme_count = 0
         for m in all_raw:
@@ -558,7 +509,7 @@ def fetch_predict_data(config):
 
                 # Filter extreme prices: skip markets where outcome is near-certain
                 # These markets (< 3% or > 97%) have no arbitrage value
-                if yes_price < 0.03 or yes_price > 0.97:
+                if yes_price < PREDICT_EXTREME_FILTER or yes_price > (1 - PREDICT_EXTREME_FILTER):
                     extreme_count += 1
                     continue
 
@@ -740,9 +691,9 @@ def background_scanner():
     scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 60))
 
     logger.info(f"Scanner started: threshold={threshold}%, interval={scan_interval}s")
-    logger.info(f"Limits: poly_per_tag={POLYMARKET_LIMIT_PER_TAG}, "
+    logger.info(f"Limits: poly={POLYMARKET_FETCH_LIMIT}, "
                 f"opinion_detailed={OPINION_DETAILED_FETCH}, "
-                f"predict_detailed={PREDICT_DETAILED_FETCH}")
+                f"predict=ALL(paginated), workers={PRICE_FETCH_WORKERS}")
 
     while True:
         # Scan guard: skip if previous scan is still running
