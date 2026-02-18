@@ -55,6 +55,13 @@ PREDICT_EXTREME_FILTER = 0.03     # Filter markets with Yes < 3% or > 97%
 PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching
 MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
 
+# Platform fee rates (used for net profit calculation)
+PLATFORM_FEES = {
+    'polymarket': 0.02,    # 2% taker fee
+    'opinion': 0.02,       # 2% estimated
+    'predict': 0.02,       # feeRateBps: 200 = 2%
+}
+
 # Global state
 _state = {
     'platforms': {
@@ -611,7 +618,11 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         market_key_base = f"{platform_a_name}-{platform_b_name}-{ma.get('id','')}-{mb.get('id','')}"
         now_str = datetime.now().strftime('%H:%M:%S')
 
+        fee_a = PLATFORM_FEES.get(platform_a_name.lower(), 0.02)
+        fee_b = PLATFORM_FEES.get(platform_b_name.lower(), 0.02)
+
         if arb1 >= threshold:
+            fee_cost1 = (ma['yes'] * fee_a + mb['no'] * fee_b) * 100
             opportunities.append({
                 'market': strip_html(ma['title_with_html']),
                 'platform_a': platform_link_html(platform_a_name, ma.get('url')),
@@ -623,13 +634,16 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'b_no': round(mb['no'] * 100, 2),
                 'combined': round(combined1 * 100, 2),
                 'arbitrage': round(arb1, 2),
+                'net_profit': round(arb1 - fee_cost1, 2),
                 'confidence': round(confidence, 2),
                 'timestamp': now_str,
                 'market_key': f"{market_key_base}-yes1_no2",
                 '_created_at': time.time(),
+                'arb_type': 'cross_platform',
             })
 
         if arb2 >= threshold:
+            fee_cost2 = (mb['yes'] * fee_b + ma['no'] * fee_a) * 100
             opportunities.append({
                 'market': strip_html(mb['title_with_html']),
                 'platform_a': platform_link_html(platform_b_name, mb.get('url')),
@@ -641,10 +655,12 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'b_no': round(ma['no'] * 100, 2),
                 'combined': round(combined2 * 100, 2),
                 'arbitrage': round(arb2, 2),
+                'net_profit': round(arb2 - fee_cost2, 2),
                 'confidence': round(confidence, 2),
                 'timestamp': now_str,
                 'market_key': f"{market_key_base}-yes2_no1",
                 '_created_at': time.time(),
+                'arb_type': 'cross_platform',
             })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
@@ -655,6 +671,63 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         f"Found: {len(opportunities)}"
     )
 
+    return opportunities
+
+
+def find_same_platform_arbitrage(markets, platform_name, threshold=0.5):
+    """Detect same-platform arbitrage: Yes_ask + No_ask < $1.00
+    If you can buy both Yes and No for less than $1, guaranteed profit on resolution.
+    """
+    opportunities = []
+    fee_rate = PLATFORM_FEES.get(platform_name.lower(), 0.02)
+    now_str = datetime.now().strftime('%H:%M:%S')
+
+    for m in markets:
+        try:
+            yes_ask = m.get('yes', 0)
+            no_ask = m.get('no', 0)
+            if not yes_ask or not no_ask or yes_ask <= 0 or no_ask <= 0:
+                continue
+
+            total_cost = yes_ask + no_ask  # cost to buy both outcomes
+            if total_cost >= 1.0:
+                continue  # no arbitrage
+
+            gross_pct = (1.0 - total_cost) * 100
+            # Net profit after fees on both legs
+            fee_cost = (yes_ask * fee_rate + no_ask * fee_rate) * 100
+            net_pct = gross_pct - fee_cost
+
+            if gross_pct < threshold:
+                continue
+
+            title_plain = strip_html(m.get('title', ''))
+            market_key = f"SAME-{platform_name}-{m.get('id', '')}"
+
+            opportunities.append({
+                'market': title_plain,
+                'platform_a': platform_link_html(platform_name, m.get('url')),
+                'platform_b': platform_link_html(platform_name, m.get('url')),
+                'direction': f"{platform_name} Buy Yes + Buy No (same platform)",
+                'a_yes': round(yes_ask * 100, 2),
+                'a_no': round(no_ask * 100, 2),
+                'b_yes': round(yes_ask * 100, 2),
+                'b_no': round(no_ask * 100, 2),
+                'combined': round(total_cost * 100, 2),
+                'arbitrage': round(gross_pct, 2),
+                'net_profit': round(net_pct, 2),
+                'confidence': 1.0,  # same platform = 100% confidence
+                'timestamp': now_str,
+                'market_key': market_key,
+                '_created_at': time.time(),
+                'arb_type': 'same_platform',
+            })
+        except Exception:
+            continue
+
+    opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
+    if opportunities:
+        logger.info(f"[{platform_name} SAME] Found {len(opportunities)} same-platform arbitrage")
     return opportunities
 
 
@@ -755,23 +828,32 @@ def background_scanner():
                             }
                         _emit_platform_update(platform, 'error', 0)
 
-            # Find arbitrage across all pairs
+            # === Same-platform arbitrage (Yes+No < $1.00) ===
             all_arb = []
+            for pname, pmarkets in [('Polymarket', poly_markets), ('Opinion', opinion_markets), ('Predict', predict_markets)]:
+                if pmarkets:
+                    same_arb = find_same_platform_arbitrage(pmarkets, pname, threshold=0.5)
+                    all_arb.extend(same_arb)
 
+            # === Cross-platform arbitrage ===
+            cross_pairs_checked = 0
             if poly_markets and opinion_markets:
                 arb = find_cross_platform_arbitrage(
                     poly_markets, opinion_markets, 'Polymarket', 'Opinion', threshold)
                 all_arb.extend(arb)
+                cross_pairs_checked += 1
 
             if poly_markets and predict_markets:
                 arb = find_cross_platform_arbitrage(
                     poly_markets, predict_markets, 'Polymarket', 'Predict', threshold)
                 all_arb.extend(arb)
+                cross_pairs_checked += 1
 
             if opinion_markets and predict_markets:
                 arb = find_cross_platform_arbitrage(
                     opinion_markets, predict_markets, 'Opinion', 'Predict', threshold)
                 all_arb.extend(arb)
+                cross_pairs_checked += 1
 
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
@@ -807,12 +889,30 @@ def background_scanner():
                 _state['threshold'] = threshold
                 _state['error'] = None
 
-            scan_duration = time.time() - scan_start
+                # Scan statistics for UI
+                scan_duration = time.time() - scan_start
+                same_count = sum(1 for a in all_arb if a.get('arb_type') == 'same_platform')
+                cross_count = sum(1 for a in all_arb if a.get('arb_type') == 'cross_platform')
+                profitable = sum(1 for a in all_arb if a.get('net_profit', 0) > 0)
+                _state['scan_stats'] = {
+                    'duration': round(scan_duration, 1),
+                    'total_markets': len(poly_markets) + len(opinion_markets) + len(predict_markets),
+                    'poly_count': len(poly_markets),
+                    'opinion_count': len(opinion_markets),
+                    'predict_count': len(predict_markets),
+                    'cross_pairs_checked': cross_pairs_checked,
+                    'same_platform_arb': same_count,
+                    'cross_platform_arb': cross_count,
+                    'profitable_after_fees': profitable,
+                    'total_arb': len(all_arb),
+                }
+
             logger.info(
                 f"Scan #{_state['scan_count']} ({scan_duration:.1f}s): "
                 f"Poly={len(poly_markets)} Opinion={len(opinion_markets)} "
-                f"Predict={len(predict_markets)} Arb={len(all_arb)} "
-                f"WS_clients={_ws_clients}"
+                f"Predict={len(predict_markets)} "
+                f"Arb={len(all_arb)}(same={same_count},cross={cross_count},net+={profitable}) "
+                f"WS={_ws_clients}"
             )
 
             # Push full state update to all WebSocket clients
