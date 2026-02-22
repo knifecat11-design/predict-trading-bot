@@ -287,6 +287,8 @@
             <span>Same-Plat: <span class="val" id="stat-same">0</span></span>
             <span>Cross-Plat: <span class="val" id="stat-cross">0</span></span>
             <span style="color:#3fb950">Net+: <span class="val" id="stat-profitable" style="color:#3fb950">0</span></span>
+            <span>|</span>
+            <span>WS: <span class="val" id="stat-ws-updates">0</span> <span id="ws-feed-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#484f58;vertical-align:middle"></span></span>
         </div>
 
         <!-- Arbitrage Opportunities -->
@@ -445,6 +447,16 @@
                 document.getElementById('stat-same').textContent = stats.same_platform_arb || 0;
                 document.getElementById('stat-cross').textContent = stats.cross_platform_arb || 0;
                 document.getElementById('stat-profitable').textContent = stats.profitable_after_fees || 0;
+                document.getElementById('stat-ws-updates').textContent = stats.ws_updates || 0;
+            }
+
+            // WebSocket feed status indicator
+            const wsFeed = data.ws_feed;
+            if (wsFeed) {
+                const dot = document.getElementById('ws-feed-dot');
+                const connected = wsFeed.poly_connected || wsFeed.kalshi_connected;
+                dot.style.background = connected ? '#3fb950' : '#484f58';
+                dot.title = `Poly: ${wsFeed.poly_subscribed || 0} subs (${wsFeed.poly_connected ? 'connected' : 'disconnected'})\nKalshi: ${wsFeed.kalshi_subscribed || 0} subs (${wsFeed.kalshi_connected ? 'connected' : 'disconnected'})`;
             }
 
             // Arbitrage
@@ -514,6 +526,21 @@
                 socket.on('platform_update', function(data) {
                     // Flash the platform card on real-time update
                     flashCard(data.platform);
+                });
+
+                socket.on('ws_price_update', function(data) {
+                    // Real-time price update from Polymarket/Kalshi WebSocket
+                    const dot = document.getElementById('ws-feed-dot');
+                    if (dot) {
+                        dot.style.background = '#3fb950';
+                        dot.style.boxShadow = '0 0 6px #3fb950';
+                        setTimeout(() => { dot.style.boxShadow = 'none'; }, 300);
+                    }
+                    // Update WS counter
+                    const wsEl = document.getElementById('stat-ws-updates');
+                    if (wsEl) {
+                        wsEl.textContent = parseInt(wsEl.textContent || '0') + 1;
+                    }
                 });
 
                 socket.on('disconnect', function(reason) {

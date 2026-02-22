@@ -13,6 +13,7 @@ import logging
 import threading
 import traceback
 from datetime import datetime, timedelta
+from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
@@ -83,6 +84,12 @@ _state = {
 }
 _lock = threading.Lock()
 _scanning = threading.Event()  # Scan guard: prevents overlapping scans
+
+# Real-time WebSocket price feed (initialized in background_scanner)
+_realtime_feed = None
+# In-memory price cache updated by WS (platform → market_id → {yes_ask, no_ask})
+_ws_prices: Dict[str, Dict[str, Dict[str, float]]] = {}
+_ws_update_count = 0
 
 
 def load_config():
@@ -862,9 +869,36 @@ def _emit_platform_update(platform, status, count):
             logger.debug(f"WebSocket platform emit error: {e}")
 
 
+def _on_ws_price_update(platform: str, market_id: str, yes_ask: float, no_ask: float):
+    """Callback from WebSocket feeds when a price changes in real-time.
+
+    Updates the in-memory price cache and pushes incremental updates to frontend.
+    """
+    global _ws_update_count
+    _ws_update_count += 1
+
+    with _lock:
+        if platform not in _ws_prices:
+            _ws_prices[platform] = {}
+        _ws_prices[platform][market_id] = {"yes_ask": yes_ask, "no_ask": no_ask}
+
+    # Push real-time price update to frontend via Flask-SocketIO
+    if _ws_clients > 0:
+        try:
+            socketio.emit('ws_price_update', {
+                'platform': platform,
+                'market_id': market_id,
+                'yes_ask': round(yes_ask, 4),
+                'no_ask': round(no_ask, 4),
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+            }, namespace='/')
+        except Exception:
+            pass
+
+
 def background_scanner():
     """Background thread: scan all platforms with concurrent fetch + WebSocket push"""
-    global _state
+    global _state, _realtime_feed
     config = load_config()
     threshold = float(config.get('opinion_poly', {}).get('min_arbitrage_threshold', 2.0))
     scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 60))
@@ -873,6 +907,16 @@ def background_scanner():
     logger.info(f"Limits: poly={POLYMARKET_FETCH_LIMIT}, "
                 f"opinion_detailed={OPINION_DETAILED_FETCH}, "
                 f"predict=ALL(paginated), workers={PRICE_FETCH_WORKERS}")
+
+    # Start real-time WebSocket price feeds
+    try:
+        from src.ws_price_feed import RealtimePriceFeed
+        _realtime_feed = RealtimePriceFeed(on_price_update=_on_ws_price_update)
+        _realtime_feed.start()
+        logger.info("Real-time WebSocket price feeds started")
+    except Exception as e:
+        logger.warning(f"WebSocket feeds failed to start (falling back to polling only): {e}")
+        _realtime_feed = None
 
     while True:
         # Scan guard: skip if previous scan is still running
@@ -1017,6 +1061,7 @@ def background_scanner():
                     'cross_platform_arb': cross_count,
                     'profitable_after_fees': profitable,
                     'total_arb': len(all_arb),
+                    'ws_updates': _ws_update_count,
                 }
 
                 # Update price history for active arb opportunities
@@ -1032,6 +1077,28 @@ def background_scanner():
 
             # Push full state update to all WebSocket clients
             _emit_state()
+
+            # Update real-time WebSocket subscriptions for active arb markets
+            if _realtime_feed:
+                try:
+                    _realtime_feed.update_arb_markets(
+                        all_arb,
+                        {
+                            'polymarket': poly_markets,
+                            'kalshi': kalshi_markets,
+                        }
+                    )
+                    ws_stats = _realtime_feed.stats
+                    with _lock:
+                        _state['ws_feed'] = {
+                            'poly_subscribed': ws_stats.get('poly_subscribed', 0),
+                            'kalshi_subscribed': ws_stats.get('kalshi_subscribed', 0),
+                            'poly_connected': ws_stats.get('poly_connected', False),
+                            'kalshi_connected': ws_stats.get('kalshi_connected', False),
+                            'ws_updates': _ws_update_count,
+                        }
+                except Exception as e:
+                    logger.debug(f"WS subscription update error: {e}")
 
         except Exception as e:
             logger.error(f"Scanner error: {e}")
