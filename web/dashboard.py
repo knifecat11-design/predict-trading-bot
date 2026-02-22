@@ -324,54 +324,47 @@ def fetch_opinion_data(config):
                 valid_markets.append(m)
         logger.info(f"Opinion: {len(valid_markets)} markets have yes+no tokens")
 
-        # Concurrent orderbook fetching — extract best_ask (卖一价)
-        # Opinion has separate orderbooks for Yes and No tokens
-        # We fetch BOTH in one pass to minimize total API calls
-        token_asks = {}  # token_id -> best_ask price
+        # Concurrent orderbook fetching — extract best_ask and best_bid (卖一价/买一价)
+        # We ONLY fetch the Yes token's orderbook and derive No from it:
+        #   yes_price = yes_ask (cost to buy Yes)
+        #   no_price  = 1 - yes_bid (implied cost to buy No)
+        # This ensures Yes + No = 1 + spread (consistent, no cross-book mismatch)
+        # Fetching No token separately causes huge deviations in illiquid markets
+        token_prices = {}  # token_id -> (yes_ask, yes_bid)
         _op_call_count = [0]
         _op_lock = threading.Lock()
 
-        def fetch_token_ask(token_id):
-            """Fetch orderbook for a token and return its best_ask (卖一价)"""
+        def fetch_token_orderbook(token_id):
+            """Fetch orderbook for a token and return its best_ask and best_bid"""
             with _op_lock:
                 _op_call_count[0] += 1
                 # Rate limit: ~12 req/s (stay under 15 req/s limit)
                 if _op_call_count[0] % 12 == 0:
                     time.sleep(1.0)
             ob = client.get_order_book(token_id)
-            if ob is not None:
-                return token_id, ob.yes_ask  # yes_ask field = ask price of queried token
-            return token_id, None
+            if ob is not None and ob.yes_ask > 0 and ob.yes_bid > 0:
+                return token_id, ob.yes_ask, ob.yes_bid
+            return token_id, None, None
 
-        # Build list of all tokens to fetch (yes + no for top OPINION_DETAILED_FETCH,
-        # yes-only for the rest)
+        # Only fetch Yes token orderbooks (No price is derived, not fetched separately)
         tokens_to_fetch = []
-        token_to_market = {}  # token_id -> (market_index, 'yes'|'no')
         for idx, m in enumerate(valid_markets):
             yes_tok = m['yesTokenId']
             tokens_to_fetch.append(yes_tok)
-            token_to_market[yes_tok] = (idx, 'yes')
-            # Fetch No token orderbook for top markets
-            if idx < OPINION_DETAILED_FETCH:
-                no_tok = m['noTokenId']
-                tokens_to_fetch.append(no_tok)
-                token_to_market[no_tok] = (idx, 'no')
 
-        logger.info(f"Opinion: fetching {len(tokens_to_fetch)} orderbooks concurrently ({len(valid_markets)} yes + {min(len(valid_markets), OPINION_DETAILED_FETCH)} no)")
+        logger.info(f"Opinion: fetching {len(tokens_to_fetch)} Yes-token orderbooks concurrently")
 
         with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='op-ob') as ex:
-            futures = {ex.submit(fetch_token_ask, t): t for t in tokens_to_fetch}
+            futures = {ex.submit(fetch_token_orderbook, t): t for t in tokens_to_fetch}
             for future in as_completed(futures, timeout=120):
                 try:
-                    token_id, ask_price = future.result(timeout=15)
+                    token_id, ask_price, bid_price = future.result(timeout=15)
                     if ask_price is not None:
-                        token_asks[token_id] = ask_price
+                        token_prices[token_id] = (ask_price, bid_price)
                 except Exception:
                     pass
 
-        yes_count = sum(1 for t in valid_markets if t['yesTokenId'] in token_asks)
-        no_count = sum(1 for t in valid_markets[:OPINION_DETAILED_FETCH] if t['noTokenId'] in token_asks)
-        logger.info(f"Opinion: got {yes_count} Yes asks, {no_count} No asks (best_ask)")
+        logger.info(f"Opinion: got {len(token_prices)} Yes orderbooks (bid+ask)")
 
         # Build parsed list
         parsed = []
@@ -380,16 +373,14 @@ def fetch_opinion_data(config):
                 market_id = str(m.get('marketId', ''))
                 title = m.get('marketTitle', '')
                 yes_token = m['yesTokenId']
-                no_token = m['noTokenId']
 
-                yes_ask = token_asks.get(yes_token)
-                if yes_ask is None:
+                prices = token_prices.get(yes_token)
+                if prices is None:
                     continue
 
-                # Use No token's ask if fetched, otherwise fallback to 1 - yes_ask
-                no_ask = token_asks.get(no_token)
-                if no_ask is None:
-                    no_ask = round(1.0 - yes_ask, 4)
+                yes_ask, yes_bid = prices
+                # Derive No price from Yes orderbook: No_ask = 1 - Yes_bid
+                no_ask = round(1.0 - yes_bid, 4)
 
                 if yes_ask <= 0 or yes_ask >= 1 or no_ask <= 0 or no_ask >= 1:
                     continue
