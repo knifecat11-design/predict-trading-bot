@@ -4,7 +4,7 @@ This file provides guidance for AI assistants working on this codebase.
 
 ## Project Overview
 
-Cross-platform prediction market arbitrage monitoring system written in Python. It monitors three prediction market platforms (Polymarket, Opinion.trade, Predict.fun) for arbitrage opportunities and sends real-time Telegram notifications when profitable spreads are detected.
+Cross-platform prediction market arbitrage monitoring system written in Python. It monitors four prediction market platforms (Polymarket, Opinion.trade, Predict.fun, Kalshi) for arbitrage opportunities and sends real-time Telegram notifications when profitable spreads are detected.
 
 **Core business logic:** When `Yes_Price + No_Price < 100%` across different platforms, buying both outcomes simultaneously locks in risk-free profit. The system detects these opportunities automatically.
 
@@ -28,7 +28,9 @@ predict-trading-bot/
 │   ├── api_client.py          # Predict.fun API client (v1) + MockAPIClient
 │   ├── polymarket_api.py      # Polymarket Gamma API client (public, no auth)
 │   ├── opinion_api.py         # Opinion.trade API client (SDK + HTTP fallback)
-│   ├── market_matcher.py      # Cross-platform market matching (manual + auto)
+│   ├── kalshi_api.py          # Kalshi public API client (no auth)
+│   ├── market_matcher.py      # Cross-platform market matching (inverted keyword index)
+│   ├── ws_price_feed.py       # Real-time WebSocket price feeds (Polymarket + Kalshi)
 │   └── config_helper.py       # Configuration loading (env vars override YAML)
 ├── web/
 │   ├── dashboard.py           # Flask + SocketIO real-time dashboard
@@ -47,7 +49,8 @@ predict-trading-bot/
 - **Language:** Python 3.11+
 - **Web framework:** Flask 3.0+ with Flask-SocketIO 5.3+
 - **HTTP:** requests 2.31+
-- **WebSocket:** websocket-client 1.6+, websockets 16.0+
+- **WebSocket:** websocket-client 1.6+, websockets 16.0+, simple-websocket (SocketIO transport)
+- **Concurrency:** ThreadPoolExecutor (10 workers for price/orderbook fetching)
 - **Config:** PyYAML 6.0+, python-dotenv 1.0+
 - **Deployment:** Railway with Nixpacks builder
 - **Notifications:** Telegram Bot API
@@ -88,6 +91,9 @@ Key environment variables:
 | `SCAN_INTERVAL` | No | Seconds between scans (default: 60) |
 | `COOLDOWN_MINUTES` | No | Notification cooldown per market (default: 5) |
 | `LOG_LEVEL` | No | Logging verbosity (default: INFO) |
+| `PORT` | No | Server port (default: 5000) |
+| `SECRET_KEY` | No | Flask secret key |
+| `OPINION_POLY_THRESHOLD` | No | Arbitrage threshold % (default: 2.0) |
 
 **Important:** `config.yaml` and `.env` are gitignored. Use the `.example` files as templates.
 
@@ -145,21 +151,55 @@ Key environment variables:
 
 ### Opinion.trade (`src/opinion_api.py`)
 - **Endpoint:** `https://proxy.opinion.trade:8443/openapi`
-- **Auth:** API key; optional SDK mode with wallet credentials
+- **Auth:** API key in lowercase `apikey` header (not Authorization or X-API-Key)
 - **Coverage:** ~150 markets
-- **Modes:** SDK (full trading) or HTTP-only (read-only fallback)
+- **Rate limit:** 15 req/s
+- **Modes:** SDK (full trading with `opinion-clob-sdk`, needs private_key + multi_sig_addr) or HTTP-only (read-only fallback)
+- **CRITICAL pricing logic:** Each market has separate Yes and No tokens with independent orderbooks. Use MID PRICE `(bid+ask)/2` from Yes token orderbook, derive No as `1 - yes_mid`. This matches what Opinion.trade website displays. Using raw `yes_bid` or `yes_ask` alone causes extreme price deviations because illiquid markets have very thin bids.
+
+### Kalshi (`src/kalshi_api.py`)
+- **Endpoint:** `https://api.elections.kalshi.com/trade-api/v2`
+- **Auth:** None (public API)
+- **Coverage:** ~4,000 valid priced markets
+- **Pagination:** Cursor-based, 1000/page max, rate limit 20 req/s
+- **Prices:** Included in `/markets` response (`yes_ask_dollars`, `no_ask_dollars`) — no separate orderbook call needed
+- **Important:** Must use `mve_filter=exclude` to skip multivariate sports combo markets (otherwise ~72% of results have zero prices)
 
 ## Market Matching (`src/market_matcher.py`)
 
 Two-layer strategy to match identical markets across platforms:
 
 1. **Manual mappings:** Hardcoded market pairs with 100% accuracy
-2. **Automatic matching:** Weighted scoring algorithm
-   - Entity match: 40%
-   - Number/date match: 30%
-   - Vocabulary overlap: 20%
-   - String similarity: 10%
+2. **Automatic matching:** Inverted keyword index for O(n+m) cross-platform matching
+   - Pre-computes keywords for all B-side markets and builds inverted index
+   - Document frequency filtering: tokens in >20% of markets are pruned as noise
+   - Early exit: skip expensive SequenceMatcher when keyword score < 0.15
+   - Weighted scoring: Entity (40%) + Number/date (30%) + Vocabulary (20%) + String similarity (10%)
    - Hard constraints: Year and price values must match (prevents e.g., "Trump 2024" matching "Trump 2028")
+   - Performance: 24x speedup (41s → 1.68s) vs brute-force O(n*m)
+
+## Pricing Model
+
+- All platforms use ASK prices (cost to buy) for arbitrage detection
+- **Exception:** Opinion uses MID prices `(bid+ask)/2` because ask-only produces values inconsistent with website
+- Cross-platform arbitrage: `Buy Yes on A + Buy No on B < $1.00`
+- Same-platform arbitrage: `Buy Yes + Buy No < $1.00` (on same platform)
+- Platform fees (all ~2%): deducted to show net profit
+
+## WebSocket Real-time Feeds (`src/ws_price_feed.py`)
+
+- **PolymarketFeed:** `wss://ws-subscriptions-clob.polymarket.com/ws/market`, PING heartbeat every 10s
+- **KalshiFeed:** `wss://api.elections.kalshi.com/trade-api/ws/v2`, public ticker channel
+- Both run in daemon threads with own asyncio event loops
+- Exponential backoff reconnect (2-60s), max 10 retries then stop
+- May return 403 in sandbox environments (graceful fallback to polling)
+
+## Dashboard State Management
+
+- `_state` dict protected by `threading.Lock`
+- `_scanning` Event prevents overlapping scan cycles
+- Arbitrage entries expire after 10 minutes (ARBITRAGE_EXPIRY_MINUTES)
+- Price history: in-memory dict, last 30 data points per market, SVG sparkline in UI
 
 ## Testing
 
@@ -189,6 +229,15 @@ Two-layer strategy to match identical markets across platforms:
 - **Never commit** `config.yaml` or `.env` files (they are gitignored)
 - `railway.json` currently contains hardcoded secrets in the `variables` section - these should be moved to Railway's environment variable UI and removed from the file
 - API keys and bot tokens must only be set via environment variables or gitignored config files
+
+## Common Pitfalls
+
+1. **Opinion orderbook field naming:** `yes_bid`/`yes_ask` fields are named for the token being queried, not the outcome. When querying the Yes token, `yes_bid` = bid on the Yes token.
+2. **Opinion pricing:** Never fetch both Yes and No token orderbooks separately — in illiquid markets the asks are independently high, causing Yes+No sums of 150-200c. Derive No from Yes mid price instead.
+3. **Opinion pricing (bid trap):** Never use raw `yes_bid` to derive No price (`1 - yes_bid`). In illiquid markets, `yes_bid` can be near 0, making No price ~99.9c. Always use mid price `(bid+ask)/2`.
+4. **Polymarket outcomePrices:** It's a JSON string, not a list. Must `json.loads()` it.
+5. **Predict.fun pagination:** Uses `cursor` response field but `after` query parameter.
+6. **Kalshi MVE filter:** Without `mve_filter=exclude`, ~72% of returned markets are zero-priced multivariate events.
 
 ## Git Workflow
 
