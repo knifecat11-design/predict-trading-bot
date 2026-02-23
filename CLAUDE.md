@@ -239,6 +239,32 @@ Two-layer strategy to match identical markets across platforms:
 5. **Predict.fun pagination:** Uses `cursor` response field but `after` query parameter.
 6. **Kalshi MVE filter:** Without `mve_filter=exclude`, ~72% of returned markets are zero-priced multivariate events.
 
+## Session Summary (`会话总结.md`)
+
+**Important:** After completing significant work, AI assistants should automatically append a summary to `会话总结.md`. This file is gitignored (not tracked in version control) and serves as cross-session memory for all AI assistants working on this project.
+
+### What to summarize:
+- Features implemented (with file names and key functions)
+- Bugs fixed (root cause + solution)
+- Architecture decisions (why, not just what)
+- API discoveries (quirks, rate limits, auth issues)
+- Performance improvements (before/after metrics)
+- Known issues and TODOs for next session
+
+### Format:
+```markdown
+# 第N天 - YYYY-MM-DD
+
+## 本次会话完成的工作
+### 1. Feature/Fix name
+- What was done
+- Key files modified
+- Important details for future reference
+
+## 待办事项
+- [ ] Next steps
+```
+
 ## Git Workflow
 
 - Feature branches follow the pattern `claude/review-trading-bot-*`
