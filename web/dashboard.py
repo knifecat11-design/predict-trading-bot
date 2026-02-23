@@ -194,7 +194,7 @@ def platform_link_html(platform_name, market_url=None):
         'Opinion.trade': '#d29922',
         'Predict': '#9c27b0',
         'Predict.fun': '#9c27b0',
-        'Kalshi': '#e53935',
+        'Kalshi': '#3fb950',
     }
     platform_urls = {
         'Polymarket': 'https://polymarket.com',
@@ -612,7 +612,7 @@ def fetch_kalshi_data(config):
 
                 parsed.append({
                     'id': ticker,
-                    'title': f"<a href='{url}' target='_blank' style='color:#58a6ff;text-decoration:none'>{title[:80]}</a>",
+                    'title': f"<a href='{url}' target='_blank' style='color:#3fb950;text-decoration:none'>{title[:80]}</a>",
                     'url': url,
                     'match_title': title,
                     'yes': round(yes_ask, 4),
@@ -678,6 +678,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
     opportunities = []
     checked_pairs = 0
     skipped_end_date = 0
+    skipped_price_sanity = 0
 
     markets_a_plain = []
     for m in markets_a:
@@ -702,7 +703,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         title_field_a='match_title', title_field_b='match_title',
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
-        min_similarity=0.50,
+        min_similarity=0.60,
     )
 
     logger.info(f"[{platform_a_name} vs {platform_b_name}] Matched {len(matched_pairs)} pairs")
@@ -729,6 +730,14 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                     continue
             except Exception:
                 pass
+
+        # Price sanity check: genuine matched markets must roughly agree on probability.
+        # If Yes prices diverge by >40c they are almost certainly asking OPPOSITE or
+        # completely unrelated questions (e.g. "Trump out?" at 3c vs "Trump remain?" at 54c).
+        # No legitimate cross-platform arb survives a 40c directional gap.
+        if abs(ma['yes'] - mb['yes']) > 0.40:
+            skipped_price_sanity += 1
+            continue
 
         combined1 = ma['yes'] + mb['no']
         arb1 = (1.0 - combined1) * 100
@@ -789,6 +798,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
     logger.info(
         f"[{platform_a_name} vs {platform_b_name}] Checked: {checked_pairs}, "
         f"Skipped(end_date): {skipped_end_date}, "
+        f"Skipped(price_sanity): {skipped_price_sanity}, "
         f"Found: {len(opportunities)}"
     )
 

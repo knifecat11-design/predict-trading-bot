@@ -261,6 +261,40 @@ class KeywordExtractor:
             if len(core_overlap) == 0:
                 return 0.0
 
+        # === 硬约束 3：实体相同时的语义反转检测 ===
+        # 同一人/事件的"离职"问题 vs "留任"问题不能互相匹配。
+        # 示例：Poly "Trump out as President by March?" (2.8c) 与
+        #       Opinion "Will Trump remain president?" (54c) 共享 trump/president
+        #       但方向完全相反，不应匹配。
+        if entities1 & entities2:  # 存在共同实体（同一个人/事件）
+            exit_words = {
+                'out', 'leave', 'leaves', 'leaving', 'left',
+                'resign', 'resigns', 'resigned', 'resignation',
+                'removed', 'removal', 'remove',
+                'fired', 'fire', 'dismiss', 'dismissed',
+                'oust', 'ousted', 'ousting',
+                'impeach', 'impeached', 'impeachment',
+                'depart', 'departed', 'departure', 'step', 'steps', 'stepped',
+                'quit', 'quits', 'quitting',
+            }
+            stay_words = {
+                'remain', 'remains', 'remained', 'remaining',
+                'stay', 'stays', 'stayed', 'staying',
+                'continue', 'continues', 'continued', 'continuing',
+                'retain', 'retains', 'retained',
+                'keep', 'keeps', 'kept', 'keeping',
+                'hold', 'holds', 'held', 'holding',
+                'serve', 'serves', 'served', 'serving',
+                'reelect', 'reelected', 'win', 'wins', 'winning', 'won',
+            }
+            has_exit1 = bool(words1 & exit_words)
+            has_stay1 = bool(words1 & stay_words)
+            has_exit2 = bool(words2 & exit_words)
+            has_stay2 = bool(words2 & stay_words)
+            # 一边有"离职"词，另一边有"留任"词 → 问的是互斥的事件方向 → 判 0
+            if (has_exit1 and has_stay2) or (has_exit2 and has_stay1):
+                return 0.0
+
         # === 加权评分（调整后的权重）===
         score = 0.0
 
