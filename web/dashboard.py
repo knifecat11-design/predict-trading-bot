@@ -84,8 +84,11 @@ _state = {
     'price_history': {},  # market_key → [{timestamp, arbitrage, net_profit}, ...]
 }
 
-# Cache for raw Polymarket markets (used for multi-outcome arbitrage detection)
+# Cache for raw Polymarket markets (cross-platform matching)
 _poly_raw_markets = []
+# Cache for Polymarket events (multi-outcome arbitrage detection)
+# Each entry: {id, slug, title, markets: [{conditionId, question, bestAsk, ...}, ...]}
+_poly_events_cache = []
 _lock = threading.Lock()
 _scanning = threading.Event()  # Scan guard: prevents overlapping scans
 
@@ -211,15 +214,27 @@ def platform_link_html(platform_name, market_url=None):
 
 def fetch_polymarket_data(config):
     """Fetch Polymarket markets - use best_ask (卖一价) for accurate arbitrage pricing"""
-    global _poly_raw_markets
+    global _poly_raw_markets, _poly_events_cache
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
         # Full-site paginated fetch — Polymarket has ~28k active markets
         markets = poly_client.get_markets(limit=POLYMARKET_FETCH_LIMIT, active_only=True)
 
-        # Cache raw markets for multi-outcome arbitrage analysis
+        # Cache raw markets for cross-platform matching
         _poly_raw_markets = markets
+
+        # Also fetch events for multi-outcome arbitrage.
+        # The /events endpoint guarantees ALL sub-markets of each event are returned,
+        # whereas /markets only returns top-volume markets so multi-outcome event
+        # sub-markets may be missing from the batch.
+        try:
+            events = poly_client.get_events(limit=200, active_only=True)
+            _poly_events_cache = events
+            logger.info(f"Polymarket events: {len(events)} events (multi-outcome analysis)")
+        except Exception as ev_err:
+            logger.warning(f"Polymarket events fetch failed (multi-outcome disabled): {ev_err}")
+            _poly_events_cache = []
 
         parsed = []
         for m in markets:
@@ -862,55 +877,48 @@ def find_same_platform_arbitrage(markets, platform_name, threshold=0.5):
     return opportunities
 
 
-def find_polymarket_multi_outcome_arbitrage(raw_markets, threshold=0.5):
+def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
     """检测 Polymarket 同平台多结果套利机会。
 
-    Polymarket 的事件（event）由多个二元市场组成，每个市场代表一个可能的结果。
-    由于每个事件中有且仅有一个结果会解析为 $1，因此购买所有结果的 Yes 仓位
-    的总成本若 < $1，则存在无风险套利。
+    使用 /events API（而非 /markets 分组）确保每个事件的所有子市场都被完整获取。
+    Polymarket 事件中有且仅有一个结果会解析为 $1，因此若所有 Yes-ask 之和 < $1
+    则购买全部结果是无风险套利。
 
-    例：某事件有 A(0.50), B(0.40), C(0.05) 三个结果
+    例：事件有 A(0.50), B(0.40), C(0.05) 三个结果
         总成本 = 0.95 < $1 → 套利利润 5%
 
     Args:
-        raw_markets: 从 Polymarket API 获取的原始市场数据列表
+        poly_events: 从 Polymarket /events API 获取的事件列表
+                     （每个事件包含 markets[] 数组）
         threshold:   最低套利百分比阈值（默认 0.5%）
 
     Returns:
         套利机会列表，按利润降序排列
     """
-    if not raw_markets:
+    if not poly_events:
         return []
-
-    # 按事件 ID 分组（同一事件的各结果市场归为一组）
-    event_groups = {}
-    for m in raw_markets:
-        events = m.get('events', [])
-        if not events:
-            continue
-        event = events[0]
-        # 优先用事件 ID，回退到 slug
-        event_id = event.get('id') or event.get('slug', '')
-        if not event_id:
-            continue
-        if event_id not in event_groups:
-            event_groups[event_id] = {'event': event, 'markets': []}
-        event_groups[event_id]['markets'].append(m)
 
     opportunities = []
     fee_rate = PLATFORM_FEES.get('polymarket', 0.02)
     now_str = datetime.now().strftime('%H:%M:%S')
+    events_checked = 0
+    events_with_3plus = 0
 
-    for event_id, grp in event_groups.items():
-        markets_in_event = grp['markets']
-        event = grp['event']
-
-        # 至少需要 3 个结果才构成多结果套利
-        if len(markets_in_event) < 3:
+    for event in poly_events:
+        sub_markets = event.get('markets', [])
+        if len(sub_markets) < 3:
             continue
 
+        events_checked += 1
+        events_with_3plus += 1
+
+        event_id = event.get('id') or event.get('slug', '')
+        event_slug = event.get('slug', str(event_id))
+        event_title = event.get('title', event_slug)
+        event_url = f"https://polymarket.com/event/{event_slug}"
+
         outcomes = []
-        for m in markets_in_event:
+        for m in sub_markets:
             # 优先使用 bestAsk（实际挂单买价）
             best_ask = m.get('bestAsk')
             yes_price = None
@@ -934,11 +942,7 @@ def find_polymarket_multi_outcome_arbitrage(raw_markets, threshold=0.5):
                 continue
 
             question = m.get('question', '')
-            market_slug = m.get('slug', '')
-            if not market_slug:
-                ev_list = m.get('events', [])
-                market_slug = ev_list[0].get('slug', '') if ev_list else ''
-
+            market_slug = m.get('slug', '') or event_slug
             outcomes.append({
                 'name': question[:60],
                 'price': round(yes_price, 4),
@@ -951,7 +955,7 @@ def find_polymarket_multi_outcome_arbitrage(raw_markets, threshold=0.5):
 
         total_cost = sum(o['price'] for o in outcomes)
         if total_cost >= 1.0:
-            continue  # 无套利机会
+            continue  # 无套利
 
         gross_pct = (1.0 - total_cost) * 100
         if gross_pct < threshold:
@@ -961,11 +965,7 @@ def find_polymarket_multi_outcome_arbitrage(raw_markets, threshold=0.5):
         fee_cost = sum(o['price'] * fee_rate for o in outcomes) * 100
         net_pct = gross_pct - fee_cost
 
-        event_title = event.get('title', str(event_id))
-        event_slug = event.get('slug', str(event_id))
-        event_url = f"https://polymarket.com/event/{event_slug}"
         market_key = f"MULTI-poly-{event_id}"
-
         opportunities.append({
             'event_title': event_title,
             'event_url': event_url,
@@ -983,8 +983,11 @@ def find_polymarket_multi_outcome_arbitrage(raw_markets, threshold=0.5):
         })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
-    if opportunities:
-        logger.info(f"[Polymarket MULTI] Found {len(opportunities)} multi-outcome arbitrage opportunities")
+    logger.info(
+        f"[Polymarket MULTI] {len(poly_events)} events → "
+        f"{events_with_3plus} with 3+ outcomes → "
+        f"{len(opportunities)} arb found"
+    )
     return opportunities
 
 
@@ -1157,7 +1160,9 @@ def background_scanner():
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
             # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes) ===
-            multi_outcome_arb = find_polymarket_multi_outcome_arbitrage(_poly_raw_markets, threshold=0.5)
+            # Uses _poly_events_cache populated by fetch_polymarket_data via /events endpoint.
+            # Falls back to empty list if events fetch failed.
+            multi_outcome_arb = find_polymarket_multi_outcome_arbitrage(_poly_events_cache, threshold=0.5)
 
             with _lock:
                 # Merge with existing, but expire stale entries

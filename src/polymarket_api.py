@@ -337,6 +337,61 @@ class PolymarketClient:
             logger.error(f"获取订单簿失败 {condition_id}: {e}")
             return None
 
+    def get_events(self, limit: int = 200, active_only: bool = True) -> List[Dict]:
+        """
+        获取 Polymarket 事件列表（每个事件包含所有子市场）
+
+        用于多结果套利检测：事件的各结果是独立的二元市场。
+        使用 /events 端点而非 /markets，确保每个事件的所有子市场都被完整获取。
+
+        Args:
+            limit: 返回事件数量上限
+            active_only: 是否只返回活跃事件
+
+        Returns:
+            事件列表，每个事件包含 markets[] 数组
+        """
+        try:
+            all_events = []
+            page_size = 100
+            max_pages = (limit + page_size - 1) // page_size
+
+            for page in range(max_pages):
+                offset = page * page_size
+                params = {
+                    'limit': page_size,
+                    'offset': offset,
+                }
+                if active_only:
+                    params['active'] = 'true'
+                    params['closed'] = 'false'
+
+                response = self.session.get(
+                    f"{self.base_url}/events",
+                    params=params,
+                    timeout=15
+                )
+
+                if response.status_code != 200:
+                    logger.error(f"Polymarket /events 错误: HTTP {response.status_code}")
+                    break
+
+                batch = response.json()
+                if not batch:
+                    break
+
+                all_events.extend(batch)
+
+                if len(batch) < page_size:
+                    break
+
+            logger.info(f"Polymarket events: 获取到 {len(all_events)} 个事件")
+            return all_events[:limit]
+
+        except Exception as e:
+            logger.error(f"获取 Polymarket 事件失败: {e}")
+            return []
+
     def clear_cache(self):
         """清除缓存"""
         self._markets_cache.clear()
