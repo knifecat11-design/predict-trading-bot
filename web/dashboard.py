@@ -171,18 +171,27 @@ def slugify(text):
 
 def question_to_predict_slug(question_text):
     """将问题文本转换为 Predict.fun 风格的 slug
-    处理两种市场类型：
 
-    1. 竞猜类市场（"Will X win Y?"）：
-       - 去掉主语（子市场名称）如 "England"
-       - 提取核心事件
-       - 动词名词化：win → winner
-       例："Will England win the 2026 FIFA World Cup?" → "2026-fifa-world-cup-winner"
+    核心原则：URL 只包含父市场/预测主体，不包含子市场选项
 
-    2. 阈值类市场（"X above Y?"）：
-       - 去掉具体数值（如 "$3B"）
-       - 保留核心描述
-       例："MetaMask FDV above $3B one day after launch?" → "metamask-fdv-above-one-day-after-launch"
+    Predict.fun 的市场类型和 URL 规则：
+    1. "by ___" 填空型市场（子市场是具体日期/时间）：
+       - "Will Opinion launch a token by March?" → "will-opinion-launch-a-token-by"
+       - "Will Opinion launch a token by June?" → "will-opinion-launch-a-token-by"（同父市场）
+       - "Will Opinion launch a token by end of 2025?" → "will-opinion-launch-a-token-by"
+       - 规则：保留 "by"，移除后面的具体月份/日期
+
+    2. "above/below ___" 阈值型市场（子市场是具体数值）：
+       - "Bitcoin price above $100k?" → "bitcoin-price-above"
+       - 规则：保留 "above/below"，移除具体数值
+
+    3. 竞猜类市场（子市场是候选人/队伍）：
+       - "Will England win the 2026 FIFA World Cup?" → "2026-fifa-world-cup-winner"
+       - 规则：移除候选人/队伍，保留事件+动词名词化
+
+    4. "in ___" 时间型市场（子市场是年份）：
+       - "Will BTC hit $100k in 2025?" → "will-btc-hit-100k-in"
+       - 规则：保留 "in"，移除具体年份
     """
     import re
 
@@ -190,60 +199,84 @@ def question_to_predict_slug(question_text):
         return ''
 
     text = question_text.lower().strip()
-
     # 移除末尾的问号
     text = text.rstrip('?').strip()
 
-    # === 模式1: 竞猜类 "Will [Team/Person] [verb] the [Event]?" ===
-    # 例: "Will England win the 2026 FIFA World Cup?"
-    # 例: "Will Trump be President in 2025?"
-    win_patterns = [
-        r'^will\s+(?:.+?)\s+(win|be|become|take|get)\s+(.+)$',
-    ]
+    # === 模式1: "by [具体日期/时间]" 填空型市场 ===
+    # "Will Opinion launch a token by March?" → "will-opinion-launch-a-token-by"
+    # "Will Opinion launch a token by end of 2025?" → "will-opinion-launch-a-token-by"
+    # 保留 "by"，移除后面的任何时间表达
+    # 匹配: by [month], by end of [year/quarter], by [date], by middle/start/end of...
+    by_pattern = r'^(.+?)\s+by\s+(?:.+?)\s*$'
+    match = re.match(by_pattern, text)
+    if match:
+        base = match.group(1).strip()
+        # 检查后面是否跟着时间相关词汇（月份、季度、年份等）
+        after_by = text[len(base):-2].strip()  # 去掉 "by " 后的部分
+        time_keywords = [
+            'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+            'september', 'october', 'november', 'december', 'jan', 'feb', 'mar', 'apr',
+            'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+            'q1', 'q2', 'q3', 'q4', 'end', 'middle', 'start', 'beginning'
+        ]
+        # 如果 by 后面包含时间关键词，则认为是填空型市场
+        if any(kw in after_by for kw in time_keywords) or re.search(r'\d{4}', after_by):
+            return f"{slugify(base)}-by"
 
-    for pattern in win_patterns:
-        match = re.match(pattern, text)
-        if match:
-            verb = match.group(1)
-            rest = match.group(2).strip()
+    # === 模式2: "in [具体年份]" 时间型市场 ===
+    # "Will BTC hit $100k in 2025?" → "will-btc-hit-100k-in"
+    in_pattern = r'^(.+?)\s+in\s+\d{4}\s*$'
+    match = re.match(in_pattern, text)
+    if match:
+        base = match.group(1).strip()
+        return f"{slugify(base)}-in"
 
-            # 移除常见的冠词
-            rest = re.sub(r'^(the|a|an)\s+', '', rest)
+    # === 模式3: 竞猜类 "Will [Subject] [verb] [object]?" ===
+    # "Will England win the 2026 FIFA World Cup?" → "2026-fifa-world-cup-winner"
+    win_pattern = r'^will\s+([a-z\s]+?)\s+(win|be|become|take|get)\s+(.+)$'
+    match = re.match(win_pattern, text)
+    if match:
+        subject = match.group(1).strip()
+        verb = match.group(2)
+        obj = match.group(3).strip()
 
-            # 动词名词化映射
-            verb_noun_map = {
-                'win': 'winner',
-                'be': '',  # "Trump be President" → "president"
-                'become': '',
-                'take': 'taker',
-                'get': 'getter',
-            }
+        # 移除常见的冠词
+        obj = re.sub(r'^(the|a|an)\s+', '', obj)
 
-            noun_suffix = verb_noun_map.get(verb, '')
+        # 检查 object 是否以 "in/by" 结尾（如 "President in 2025"）
+        # 如果是，需要处理成填空型
+        if re.search(r'\s+(?:in|by)\s+\d{4}\s*$', obj):
+            obj = re.sub(r'\s+(?:in|by)\s+\d{4}\s*$', '', obj)
+            suffix = 'in' if ' in ' in text else 'by'
+            base_slug = slugify(obj)
+            return f"{base_slug}-{suffix}"
 
-            # 如果 rest 以年份开头（如 "2026 FIFA World Cup"），
-            # 结果应该是 "2026-fifa-world-cup-winner"
-            base_slug = slugify(rest)
+        # 动词名词化映射
+        verb_noun_map = {
+            'win': 'winner',
+            'be': '',
+            'become': '',
+            'take': 'taker',
+            'get': 'getter',
+        }
 
-            if noun_suffix:
-                # 确保名词后缀在末尾
-                # 对于 "2026-fifa-world-cup" + "winner" → "2026-fifa-world-cup-winner"
-                result_slug = f"{base_slug}-{noun_suffix}" if base_slug else noun_suffix
-            else:
-                # 对于 be/become，直接使用 base_slug
-                result_slug = base_slug
+        noun_suffix = verb_noun_map.get(verb, '')
+        base_slug = slugify(obj)
 
-            return result_slug
+        if noun_suffix:
+            result_slug = f"{base_slug}-{noun_suffix}" if base_slug else noun_suffix
+        else:
+            result_slug = base_slug
 
-    # === 模式2: 阈值类 "[Subject] [condition] [value] [context]?" ===
-    # 例: "MetaMask FDV above $3B one day after launch?"
-    # 例: "Bitcoin price above $100k by end of 2025?"
+        return result_slug
 
-    # 移除具体数值：$符号 + 数字 + B/M/k 单位
-    # 匹配: $3B, $100k, $1.5M 等
-    text_without_values = re.sub(r'\$[\d.]+[bkmb]?\b', '', text, flags=re.IGNORECASE)
-    # 匹配纯数字（可能带百分号）: 3%, 100
-    text_without_values = re.sub(r'\b[\d.]+%?\b', '', text_without_values)
+    # === 模式4: 阈值类 "[Subject] [above/below] [value]?" ===
+    # 先移除 $数值 格式（$100k, $3B, $1.5M）
+    text_without_values = re.sub(r'\$[\d.]+[bkmbtkmg]?', '', text, flags=re.IGNORECASE)
+    # 移除剩余的纯数字（包括带百分号的）
+    text_without_values = re.sub(r'\b\d+\.?\d*%?\b', '', text_without_values)
+    # 清理多余空格
+    text_without_values = re.sub(r'\s+', ' ', text_without_values).strip()
 
     # 清理并生成 slug
     result = slugify(text_without_values)
