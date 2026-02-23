@@ -525,12 +525,10 @@ def fetch_predict_data(config):
 
         logger.info(f"Predict: got {len(orderbook_results)} orderbooks")
 
-        # 调试：记录第一个市场的全部字段，帮助确认 slug/groupSlug 等字段是否存在
+        # 调试：打印第一个市场的完整字段和值，找出正确的父市场 slug 字段名
         if all_raw:
-            sample_keys = list(all_raw[0].keys())
-            native_slug = all_raw[0].get('slug') or all_raw[0].get('marketSlug') or all_raw[0].get('groupSlug')
-            logger.info(f"Predict sample market keys: {sample_keys}")
-            logger.info(f"Predict sample native slug: {native_slug!r}")
+            sample = all_raw[0]
+            logger.info(f"Predict DEBUG - sample market full data: {sample}")
 
         # === Phase 3: Build parsed list — filter extreme prices, sort by volume ===
         parsed = []
@@ -559,20 +557,24 @@ def fetch_predict_data(config):
                     continue
 
                 question_text = (m.get('question') or m.get('title', ''))
-                # Predict.fun 链接格式: https://predict.fun/market/{slug}
-                # slug 与标题高度对应（全小写+连字符，不去停用词），
-                # 例："2026 NBA Champion" → "2026-nba-champion"
-                #     "Opensea FDV above ___ one day after launch?" → "opensea-fdv-above-one-day-after-launch"
-                # 优先用 API 原生 slug，然后尝试 title，最后才用 question
-                native_slug = (m.get('slug') or m.get('marketSlug') or
-                               m.get('market_slug') or m.get('groupSlug'))
-                if native_slug:
-                    market_slug = native_slug
+                # Predict.fun 链接格式: https://predict.fun/market/{父市场slug}
+                # 注意：m['slug'] 是子结果的 slug（如 "england"），不能用
+                # 父市场 slug（如 "2026-fifa-world-cup-winner"）在以下字段中查找
+                parent_slug = (
+                    m.get('groupSlug') or        # 最可能的字段名
+                    m.get('parentSlug') or
+                    m.get('eventSlug') or
+                    m.get('marketSlug') or
+                    m.get('market_slug') or
+                    m.get('group_slug') or
+                    m.get('parent_slug')
+                )
+                if parent_slug:
+                    market_slug = parent_slug
                 else:
-                    # title 通常是父市场标题（如 "2026 NBA Champion"），
-                    # question 是具体结果问法（如 "Will the Lakers win?"）
-                    slug_source = m.get('title') or question_text
-                    market_slug = slugify(slug_source)
+                    # 没有找到父市场 slug 字段——用 question/title slugify 兜底
+                    # (等看到 DEBUG 日志里的字段名后再精确对应)
+                    market_slug = slugify(question_text)
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
