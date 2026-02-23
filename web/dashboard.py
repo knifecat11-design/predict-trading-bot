@@ -75,6 +75,7 @@ _state = {
         'kalshi': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
     },
     'arbitrage': [],
+    'multi_outcome_arb': [],   # Multi-result arbitrage: sum of Yes prices < $1 on same platform
     'scan_count': 0,
     'started_at': datetime.now().isoformat(),
     'threshold': 2.0,
@@ -82,6 +83,9 @@ _state = {
     'error': None,
     'price_history': {},  # market_key → [{timestamp, arbitrage, net_profit}, ...]
 }
+
+# Cache for raw Polymarket markets (used for multi-outcome arbitrage detection)
+_poly_raw_markets = []
 _lock = threading.Lock()
 _scanning = threading.Event()  # Scan guard: prevents overlapping scans
 
@@ -207,11 +211,15 @@ def platform_link_html(platform_name, market_url=None):
 
 def fetch_polymarket_data(config):
     """Fetch Polymarket markets - use best_ask (卖一价) for accurate arbitrage pricing"""
+    global _poly_raw_markets
     try:
         from src.polymarket_api import PolymarketClient
         poly_client = PolymarketClient(config)
         # Full-site paginated fetch — Polymarket has ~28k active markets
         markets = poly_client.get_markets(limit=POLYMARKET_FETCH_LIMIT, active_only=True)
+
+        # Cache raw markets for multi-outcome arbitrage analysis
+        _poly_raw_markets = markets
 
         parsed = []
         for m in markets:
@@ -844,6 +852,132 @@ def find_same_platform_arbitrage(markets, platform_name, threshold=0.5):
     return opportunities
 
 
+def find_polymarket_multi_outcome_arbitrage(raw_markets, threshold=0.5):
+    """检测 Polymarket 同平台多结果套利机会。
+
+    Polymarket 的事件（event）由多个二元市场组成，每个市场代表一个可能的结果。
+    由于每个事件中有且仅有一个结果会解析为 $1，因此购买所有结果的 Yes 仓位
+    的总成本若 < $1，则存在无风险套利。
+
+    例：某事件有 A(0.50), B(0.40), C(0.05) 三个结果
+        总成本 = 0.95 < $1 → 套利利润 5%
+
+    Args:
+        raw_markets: 从 Polymarket API 获取的原始市场数据列表
+        threshold:   最低套利百分比阈值（默认 0.5%）
+
+    Returns:
+        套利机会列表，按利润降序排列
+    """
+    if not raw_markets:
+        return []
+
+    # 按事件 ID 分组（同一事件的各结果市场归为一组）
+    event_groups = {}
+    for m in raw_markets:
+        events = m.get('events', [])
+        if not events:
+            continue
+        event = events[0]
+        # 优先用事件 ID，回退到 slug
+        event_id = event.get('id') or event.get('slug', '')
+        if not event_id:
+            continue
+        if event_id not in event_groups:
+            event_groups[event_id] = {'event': event, 'markets': []}
+        event_groups[event_id]['markets'].append(m)
+
+    opportunities = []
+    fee_rate = PLATFORM_FEES.get('polymarket', 0.02)
+    now_str = datetime.now().strftime('%H:%M:%S')
+
+    for event_id, grp in event_groups.items():
+        markets_in_event = grp['markets']
+        event = grp['event']
+
+        # 至少需要 3 个结果才构成多结果套利
+        if len(markets_in_event) < 3:
+            continue
+
+        outcomes = []
+        for m in markets_in_event:
+            # 优先使用 bestAsk（实际挂单买价）
+            best_ask = m.get('bestAsk')
+            yes_price = None
+            if best_ask is not None:
+                try:
+                    yes_price = float(best_ask)
+                except (ValueError, TypeError):
+                    yes_price = None
+
+            # 回退：使用 outcomePrices[0]
+            if yes_price is None or yes_price <= 0:
+                outcome_str = m.get('outcomePrices', '[]')
+                try:
+                    prices = json.loads(outcome_str) if isinstance(outcome_str, str) else outcome_str
+                    if prices:
+                        yes_price = float(prices[0])
+                except Exception:
+                    yes_price = None
+
+            if yes_price is None or yes_price <= 0 or yes_price >= 1:
+                continue
+
+            question = m.get('question', '')
+            market_slug = m.get('slug', '')
+            if not market_slug:
+                ev_list = m.get('events', [])
+                market_slug = ev_list[0].get('slug', '') if ev_list else ''
+
+            outcomes.append({
+                'name': question[:60],
+                'price': round(yes_price, 4),
+                'url': f"https://polymarket.com/event/{market_slug}",
+            })
+
+        # 需要至少 3 个有效价格的结果
+        if len(outcomes) < 3:
+            continue
+
+        total_cost = sum(o['price'] for o in outcomes)
+        if total_cost >= 1.0:
+            continue  # 无套利机会
+
+        gross_pct = (1.0 - total_cost) * 100
+        if gross_pct < threshold:
+            continue
+
+        # 每条腿收取 2% 手续费
+        fee_cost = sum(o['price'] * fee_rate for o in outcomes) * 100
+        net_pct = gross_pct - fee_cost
+
+        event_title = event.get('title', str(event_id))
+        event_slug = event.get('slug', str(event_id))
+        event_url = f"https://polymarket.com/event/{event_slug}"
+        market_key = f"MULTI-poly-{event_id}"
+
+        opportunities.append({
+            'event_title': event_title,
+            'event_url': event_url,
+            'platform': 'Polymarket',
+            'platform_color': '#03a9f4',
+            'outcomes': outcomes,
+            'outcome_count': len(outcomes),
+            'total_cost': round(total_cost * 100, 2),
+            'arbitrage': round(gross_pct, 2),
+            'net_profit': round(net_pct, 2),
+            'timestamp': now_str,
+            'market_key': market_key,
+            '_created_at': time.time(),
+            'arb_type': 'multi_outcome',
+        })
+
+    opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
+    if opportunities:
+        logger.info(f"[Polymarket MULTI] Found {len(opportunities)} multi-outcome arbitrage opportunities")
+    return opportunities
+
+
 def _emit_state(event='state_update'):
     """Push current state to all connected WebSocket clients"""
     if _ws_clients > 0:
@@ -1012,6 +1146,9 @@ def background_scanner():
 
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
+            # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes) ===
+            multi_outcome_arb = find_polymarket_multi_outcome_arbitrage(_poly_raw_markets, threshold=0.5)
+
             with _lock:
                 # Merge with existing, but expire stale entries
                 existing_arb = _state.get('arbitrage', [])
@@ -1039,6 +1176,18 @@ def background_scanner():
                 # Sort and limit
                 sorted_arb = sorted(new_arb_map.values(), key=lambda x: x['arbitrage'], reverse=True)
                 _state['arbitrage'] = sorted_arb[:MAX_ARBITRAGE_DISPLAY]
+
+                # Merge multi-outcome arb with existing (same expiry logic)
+                existing_multi = _state.get('multi_outcome_arb', [])
+                new_multi_map = {opp['market_key']: opp for opp in multi_outcome_arb if opp.get('market_key')}
+                old_multi_map = {opp['market_key']: opp for opp in existing_multi if opp.get('market_key')}
+                for key, old_opp in old_multi_map.items():
+                    if key not in new_multi_map:
+                        if old_opp.get('_created_at', 0) > expiry_cutoff:
+                            new_multi_map[key] = old_opp
+                sorted_multi = sorted(new_multi_map.values(), key=lambda x: x['arbitrage'], reverse=True)
+                _state['multi_outcome_arb'] = sorted_multi[:MAX_ARBITRAGE_DISPLAY]
+
                 _state['scan_count'] += 1
                 _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 _state['threshold'] = threshold
@@ -1061,6 +1210,7 @@ def background_scanner():
                     'cross_platform_arb': cross_count,
                     'profitable_after_fees': profitable,
                     'total_arb': len(all_arb),
+                    'multi_outcome_arb': len(multi_outcome_arb),
                     'ws_updates': _ws_update_count,
                 }
 
