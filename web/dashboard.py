@@ -293,12 +293,20 @@ def fetch_polymarket_data(config):
                 else:
                     match_title = question
 
-                # Use market-level slug (unique per question), NOT event slug
-                market_slug = m.get('slug', '')
-                if not market_slug:
-                    market_slug = events[0].get('slug', '') if events else ''
-                if not market_slug:
-                    market_slug = condition_id
+                # Polymarket 正确链接格式: https://polymarket.com/event/{event_slug}-{event_id}
+                # 必须用 events[0] 的 slug（事件级），NOT market 自身的 slug（子问题级）
+                # 例：event slug = "2026-fifa-world-cup-winner", id = 595
+                #     → https://polymarket.com/event/2026-fifa-world-cup-winner-595
+                event = events[0] if events else {}
+                event_slug = event.get('slug', '')
+                event_id = event.get('id', '')
+                if event_slug and event_id:
+                    market_slug = f"{event_slug}-{event_id}"
+                elif event_slug:
+                    market_slug = event_slug
+                else:
+                    # 回退：使用 market 本身的 slug 或 conditionId
+                    market_slug = m.get('slug', '') or condition_id
 
                 parsed.append({
                     'id': condition_id,
@@ -546,6 +554,13 @@ def fetch_predict_data(config):
 
         logger.info(f"Predict: got {len(orderbook_results)} orderbooks")
 
+        # 调试：记录第一个市场的全部字段，帮助确认 slug/groupSlug 等字段是否存在
+        if all_raw:
+            sample_keys = list(all_raw[0].keys())
+            native_slug = all_raw[0].get('slug') or all_raw[0].get('marketSlug') or all_raw[0].get('groupSlug')
+            logger.info(f"Predict sample market keys: {sample_keys}")
+            logger.info(f"Predict sample native slug: {native_slug!r}")
+
         # === Phase 3: Build parsed list — filter extreme prices, sort by volume ===
         parsed = []
         extreme_count = 0
@@ -573,7 +588,12 @@ def fetch_predict_data(config):
                     continue
 
                 question_text = (m.get('question') or m.get('title', ''))
-                market_slug = slugify(question_text)
+                # Predict.fun 正确链接格式: https://predict.fun/market/{slug}
+                # 优先使用 API 返回的原生 slug 字段（父市场级别），
+                # 回退到对问题标题进行 slugify（会产生子问题级别的错误 slug）
+                market_slug = (m.get('slug') or m.get('marketSlug') or
+                               m.get('market_slug') or m.get('groupSlug') or
+                               slugify(question_text))
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
@@ -927,10 +947,14 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
         events_checked += 1
         events_with_3plus += 1
 
-        event_id = event.get('id') or event.get('slug', '')
+        event_id = event.get('id', '')
         event_slug = event.get('slug', str(event_id))
         event_title = event.get('title', event_slug)
-        event_url = f"https://polymarket.com/event/{event_slug}"
+        # 使用 {event_slug}-{event_id} 格式
+        if event_slug and event_id:
+            event_url = f"https://polymarket.com/event/{event_slug}-{event_id}"
+        else:
+            event_url = f"https://polymarket.com/event/{event_slug}"
 
         now_utc = datetime.now(timezone.utc)
         outcomes = []
@@ -972,11 +996,11 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
                 continue
 
             question = m.get('question', '')
-            market_slug = m.get('slug', '') or event_slug
+            # 多结果市场的各选项都指向同一个 event URL
             outcomes.append({
                 'name': question[:60],
                 'price': round(yes_price, 4),
-                'url': f"https://polymarket.com/event/{market_slug}",
+                'url': event_url,
             })
 
         # 需要至少 3 个有效价格的结果
