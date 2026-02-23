@@ -282,7 +282,7 @@ class OpinionAPIClient:
             return None
 
     def _get_price_sdk(self, token_id: str) -> Optional[float]:
-        """使用 SDK 获取价格（返回中间价 mid = (bid+ask)/2，和网站显示一致）"""
+        """使用 SDK 获取价格（返回中间价 mid = (bid+ask)/2）"""
         response = self._client.get_orderbook(token_id)
 
         if hasattr(response, 'errno') and response.errno != 0:
@@ -295,23 +295,22 @@ class OpinionAPIClient:
         asks = getattr(result, 'asks', []) or []
         bids = getattr(result, 'bids', []) or []
 
-        # 使用中间价 (bid + ask) / 2（和网站显示一致）
         if asks and bids:
-            mid = (float(bids[0].price) + float(asks[0].price)) / 2
+            best_ask = min(float(a.price) for a in asks)
+            best_bid = max(float(b.price) for b in bids)
+            mid = (best_bid + best_ask) / 2
             return round(mid, 4)
 
-        # Fallback: 只有 ask
         if asks:
-            return round(float(asks[0].price), 4)
+            return round(min(float(a.price) for a in asks), 4)
 
-        # Fallback: 只有 bid
         if bids:
-            return round(float(bids[0].price), 4)
+            return round(max(float(b.price) for b in bids), 4)
 
         return None
 
     def _get_price_http(self, token_id: str) -> Optional[float]:
-        """使用 HTTP 获取价格（返回中间价 mid = (bid+ask)/2，和网站显示一致）"""
+        """使用 HTTP 获取价格（返回中间价 mid = (bid+ask)/2）"""
         params = {'token_id': token_id}
         response = self.session.get(
             f"{self.base_url}/token/orderbook",
@@ -328,18 +327,17 @@ class OpinionAPIClient:
             asks = result.get('asks', [])
             bids = result.get('bids', [])
 
-            # 使用中间价 (bid + ask) / 2（和网站显示一致）
             if asks and bids:
-                mid = (float(bids[0]['price']) + float(asks[0]['price'])) / 2
+                best_ask = min(float(a['price']) for a in asks)
+                best_bid = max(float(b['price']) for b in bids)
+                mid = (best_bid + best_ask) / 2
                 return round(mid, 4)
 
-            # Fallback: 只有 ask
             if asks:
-                return round(float(asks[0]['price']), 4)
+                return round(min(float(a['price']) for a in asks), 4)
 
-            # Fallback: 只有 bid
             if bids:
-                return round(float(bids[0]['price']), 4)
+                return round(max(float(b['price']) for b in bids), 4)
 
             logger.debug(f"Token {token_id} 订单簿为空（无 bids 也无 asks）")
             return None
@@ -379,10 +377,15 @@ class OpinionAPIClient:
             logger.debug(f"Token {token_id} 订单簿为空")
             return None
 
-        yes_bid = float(bids[0].price)
-        yes_ask = float(asks[0].price)
-        bid_size = float(bids[0].size)
-        ask_size = float(asks[0].size)
+        # 使用 min/max 获取真正的最优报价，避免依赖 API 排序顺序
+        # best_bid = 最高买价, best_ask = 最低卖价
+        best_bid_entry = max(bids, key=lambda b: float(b.price))
+        best_ask_entry = min(asks, key=lambda a: float(a.price))
+
+        yes_bid = float(best_bid_entry.price)
+        yes_ask = float(best_ask_entry.price)
+        bid_size = float(best_bid_entry.size)
+        ask_size = float(best_ask_entry.size)
 
         return OpinionOrderBook(
             yes_bid=round(yes_bid, 4),
@@ -414,10 +417,16 @@ class OpinionAPIClient:
                 logger.debug(f"Token {token_id} 订单簿为空")
                 return None
 
-            yes_bid = float(bids[0]['price'])
-            yes_ask = float(asks[0]['price'])
-            bid_size = float(bids[0]['size'])
-            ask_size = float(asks[0]['size'])
+            # 使用 min/max 获取真正的最优报价，避免依赖 API 排序顺序
+            # Opinion API 的 asks 按降序排列（最差报价在前），不能直接取 [0]
+            # best_bid = 最高买价, best_ask = 最低卖价
+            best_bid_entry = max(bids, key=lambda b: float(b['price']))
+            best_ask_entry = min(asks, key=lambda a: float(a['price']))
+
+            yes_bid = float(best_bid_entry['price'])
+            yes_ask = float(best_ask_entry['price'])
+            bid_size = float(best_bid_entry['size'])
+            ask_size = float(best_ask_entry['size'])
 
             return OpinionOrderBook(
                 yes_bid=yes_bid,
