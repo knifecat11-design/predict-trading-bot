@@ -169,6 +169,92 @@ def slugify(text):
     return text
 
 
+def question_to_predict_slug(question_text):
+    """将问题文本转换为 Predict.fun 风格的 slug
+    处理两种市场类型：
+
+    1. 竞猜类市场（"Will X win Y?"）：
+       - 去掉主语（子市场名称）如 "England"
+       - 提取核心事件
+       - 动词名词化：win → winner
+       例："Will England win the 2026 FIFA World Cup?" → "2026-fifa-world-cup-winner"
+
+    2. 阈值类市场（"X above Y?"）：
+       - 去掉具体数值（如 "$3B"）
+       - 保留核心描述
+       例："MetaMask FDV above $3B one day after launch?" → "metamask-fdv-above-one-day-after-launch"
+    """
+    import re
+
+    if not question_text:
+        return ''
+
+    text = question_text.lower().strip()
+
+    # 移除末尾的问号
+    text = text.rstrip('?').strip()
+
+    # === 模式1: 竞猜类 "Will [Team/Person] [verb] the [Event]?" ===
+    # 例: "Will England win the 2026 FIFA World Cup?"
+    # 例: "Will Trump be President in 2025?"
+    win_patterns = [
+        r'^will\s+(?:.+?)\s+(win|be|become|take|get)\s+(.+)$',
+    ]
+
+    for pattern in win_patterns:
+        match = re.match(pattern, text)
+        if match:
+            verb = match.group(1)
+            rest = match.group(2).strip()
+
+            # 移除常见的冠词
+            rest = re.sub(r'^(the|a|an)\s+', '', rest)
+
+            # 动词名词化映射
+            verb_noun_map = {
+                'win': 'winner',
+                'be': '',  # "Trump be President" → "president"
+                'become': '',
+                'take': 'taker',
+                'get': 'getter',
+            }
+
+            noun_suffix = verb_noun_map.get(verb, '')
+
+            # 如果 rest 以年份开头（如 "2026 FIFA World Cup"），
+            # 结果应该是 "2026-fifa-world-cup-winner"
+            base_slug = slugify(rest)
+
+            if noun_suffix:
+                # 确保名词后缀在末尾
+                # 对于 "2026-fifa-world-cup" + "winner" → "2026-fifa-world-cup-winner"
+                result_slug = f"{base_slug}-{noun_suffix}" if base_slug else noun_suffix
+            else:
+                # 对于 be/become，直接使用 base_slug
+                result_slug = base_slug
+
+            return result_slug
+
+    # === 模式2: 阈值类 "[Subject] [condition] [value] [context]?" ===
+    # 例: "MetaMask FDV above $3B one day after launch?"
+    # 例: "Bitcoin price above $100k by end of 2025?"
+
+    # 移除具体数值：$符号 + 数字 + B/M/k 单位
+    # 匹配: $3B, $100k, $1.5M 等
+    text_without_values = re.sub(r'\$[\d.]+[bkmb]?\b', '', text, flags=re.IGNORECASE)
+    # 匹配纯数字（可能带百分号）: 3%, 100
+    text_without_values = re.sub(r'\b[\d.]+%?\b', '', text_without_values)
+
+    # 清理并生成 slug
+    result = slugify(text_without_values)
+
+    # 如果结果为空或太短，回退到原始文本的 slugify
+    if len(result) < 5:
+        result = slugify(question_text)
+
+    return result
+
+
 def platform_link_html(platform_name, market_url=None):
     """Generate colored platform link HTML"""
     platform_colors = {
@@ -571,10 +657,12 @@ def fetch_predict_data(config):
                 )
                 if parent_slug:
                     market_slug = parent_slug
+                    logger.debug(f"Predict slug from parent field: {market_slug}")
                 else:
-                    # 没有找到父市场 slug 字段——用 question/title slugify 兜底
-                    # (等看到 DEBUG 日志里的字段名后再精确对应)
-                    market_slug = slugify(question_text)
+                    # 没有找到父市场 slug 字段——用智能 slug 生成兜底
+                    # question_to_predict_slug 会根据问题类型智能生成 slug
+                    market_slug = question_to_predict_slug(question_text)
+                    logger.debug(f"Predict slug from question ({question_text[:40]}...): {market_slug}")
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
