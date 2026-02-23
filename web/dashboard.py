@@ -733,7 +733,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         title_field_a='match_title', title_field_b='match_title',
         id_field_a='id', id_field_b='id',
         platform_a=platform_a_name.lower(), platform_b=platform_b_name.lower(),
-        min_similarity=0.60,
+        min_similarity=0.50,
     )
 
     logger.info(f"[{platform_a_name} vs {platform_b_name}] Matched {len(matched_pairs)} pairs")
@@ -755,7 +755,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                     end_b = end_date_b
 
                 time_diff = abs((end_a - end_b).days)
-                if time_diff > 30:
+                if time_diff > 60:
                     skipped_end_date += 1
                     continue
             except Exception:
