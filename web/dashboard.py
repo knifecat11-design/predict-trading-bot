@@ -12,7 +12,7 @@ import time
 import logging
 import threading
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, render_template, jsonify
@@ -62,6 +62,7 @@ PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # Non-exhaustive markets (e.g. FDV buckets missing a "<$1B" tier) sum to 10–30c and
 # must be excluded — if no outcome covers the actual result, all positions expire worthless.
 MULTI_OUTCOME_MIN_TOTAL_COST = 0.50   # Require sum ≥ 50c to pass MECE sanity check
+MULTI_OUTCOME_MIN_PRICE = 0.01        # Skip outcomes priced below 1c (expired/unresolvable dust)
 
 # Platform fee rates (used for net profit calculation)
 PLATFORM_FEES = {
@@ -922,8 +923,21 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
         event_title = event.get('title', event_slug)
         event_url = f"https://polymarket.com/event/{event_slug}"
 
+        now_utc = datetime.now(timezone.utc)
         outcomes = []
         for m in sub_markets:
+            # 过滤已过期的子市场（截止时间已过）
+            # "Kraken IPO in 2025?" 类型的市场在 2026 年仍会出现在 API 中，
+            # 但其截止时间已过，价格接近 0，不可再交易，应剔除。
+            end_date_str = m.get('endDate') or m.get('endDateIso', '')
+            if end_date_str:
+                try:
+                    end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    if end_dt < now_utc:
+                        continue  # 截止时间已过，跳过
+                except Exception:
+                    pass  # 日期解析失败则不过滤，保守处理
+
             # 优先使用 bestAsk（实际挂单买价）
             best_ask = m.get('bestAsk')
             yes_price = None
@@ -943,7 +957,9 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
                 except Exception:
                     yes_price = None
 
-            if yes_price is None or yes_price <= 0 or yes_price >= 1:
+            # 过滤价格极低的结果（< 1c）：通常是即将结算为 No 的市场
+            # 这些市场已无实际交易价值，计入总成本会产生虚假套利信号
+            if yes_price is None or yes_price < MULTI_OUTCOME_MIN_PRICE or yes_price >= 1:
                 continue
 
             question = m.get('question', '')
