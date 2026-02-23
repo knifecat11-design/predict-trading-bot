@@ -486,6 +486,9 @@ class KeywordExtractor:
         # === 加权评分（调整后的权重）===
         score = 0.0
 
+        # 检测是否有共同实体
+        has_shared_entity = bool(entities1 & entities2)
+
         # 实体匹配（权重 0.25，从 0.4 降低）
         if entities1 and entities2:
             entity_similarity = len(entities1 & entities2) / len(entities1 | entities2)
@@ -512,6 +515,17 @@ class KeywordExtractor:
         # 字符串相似度（权重 0.2，从 0.1 提高）
         str_similarity = SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
         score += str_similarity * 0.2
+
+        # === 关键修复：无实体共享时应用惩罚 ===
+        # 如果两个市场没有任何共同实体（如 trump, bitcoin, fed 等），
+        # 说明它们可能是完全不同的主题，即使词汇相似（如 "FDV above" 模式）
+        # 也应该被惩罚或拒绝。
+        # 示例： "Based FDV above $300M" vs "EdgeX FDV above $10B"
+        #       共享词汇: fdv, above, day, after, launch 但无共同实体 → 不是同一市场
+        if not has_shared_entity:
+            # 无实体共享时，对分数应用 0.7 的惩罚系数
+            # 这样原本 0.6 的分数会降到 0.42，低于 0.5 阈值而被拒绝
+            score *= 0.65
 
         return min(1.0, score)
 
