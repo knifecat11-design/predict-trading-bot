@@ -120,7 +120,7 @@ def load_manual_mappings_from_file(filepath: str = None) -> List[ManualMapping]:
 # ==================== 关键词提取器（保留原有实现）====================
 
 class KeywordExtractor:
-    """关键词提取器（保留原有良好实现，新增硬约束支持）"""
+    """关键词提取器 v4：扩展实体库 + 词形归一化 + 缩写等价"""
 
     # 常见停用词
     STOP_WORDS = {
@@ -139,15 +139,154 @@ class KeywordExtractor:
         'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
     }
 
-    # 常见实体模式
+    # 数值类 pattern 名称（提取到 numbers，不进入 entities）
+    _NUMERIC_PATTERNS = {'year', 'price', 'percent'}
+
+    # 实体 pattern：键名 = 规范实体名，值 = 匹配正则
+    # 同一实体的不同写法（缩写/全称/变体）统一映射到同一键名，
+    # 跨平台即使写法不同也能正确匹配。
     PATTERNS = {
-        'year': r'\b(20[12][0-9]|20[3-9][0-9])\b',
-        'price': r'\$[\d,]+(?:\.\d+)?|\d+\s*(?:dollars?|USD|million|billion)',
+        # ── 数值 ──────────────────────────────────────────────────
+        'year':    r'\b(20[12][0-9]|20[3-9][0-9])\b',
+        'price':   r'\$[\d,]+(?:\.\d+)?[kKmMbBtT]?|\d+[kKmMbBtT]?\s*(?:dollars?|USD|million|billion)',
         'percent': r'\d+(?:\.\d+)?%',
-        'trump': r'\bTrump\b',
-        'biden': r'\bBiden\b',
-        'crypto': r'\b(?:Bitcoin|BTC|Ethereum|ETH|crypto)\b',
-        'gta': r'\bGTA\s*(?:VI|V|4|5|6)?\b',
+
+        # ── 人物 ──────────────────────────────────────────────────
+        'trump':     r'\bTrump\b',
+        'biden':     r'\bBiden\b',
+        'harris':    r'\b(?:Harris|Kamala)\b',
+        'musk':      r'\bMusk\b',
+        'zelensky':  r'\bZelensk(?:y|yy|iy)\b',
+        'putin':     r'\bPutin\b',
+        'xi':        r'\bXi\b',
+        'netanyahu': r'\bNetanyahu\b',
+        'modi':      r'\bModi\b',
+        'macron':    r'\bMacron\b',
+        'powell':    r'\bPowell\b',
+
+        # ── 国家/地区（含缩写等价）──────────────────────────────
+        'us':      r'\b(?:U\.?S\.?A?\.?|United States?)\b',
+        'ukraine': r'\bUkraine\b',
+        'russia':  r'\bRussia\b',
+        'china':   r'\bChina\b',
+        'iran':    r'\bIran\b',
+        'israel':  r'\bIsrael\b',
+        'taiwan':  r'\bTaiwan\b',
+        'gaza':    r'\bGaza\b',
+
+        # ── 机构/组织 ─────────────────────────────────────────────
+        'fed':   r'\b(?:Federal Reserve|Fed)\b',
+        'nato':  r'\bNATO\b',
+        'sec':   r'\bSEC\b',
+        'opec':  r'\bOPEC\b',
+
+        # ── 加密货币（分开命名，防止 BTC 和 ETH 市场互相误匹配）──
+        'bitcoin':  r'\b(?:Bitcoin|BTC)\b',
+        'ethereum': r'\b(?:Ethereum|ETH)\b',
+        'solana':   r'\b(?:Solana|SOL)\b',
+        'xrp':      r'\b(?:XRP|Ripple)\b',
+        'bnb':      r'\b(?:BNB|Binance Coin)\b',
+        'doge':     r'\b(?:Dogecoin|DOGE)\b',
+        'crypto':   r'\bcrypto(?:currency|currencies)?\b',   # 通用加密货币
+
+        # ── 公司/项目 ─────────────────────────────────────────────
+        'gta':    r'\bGTA\s*(?:VI|V|4|5|6)?\b',
+        'spacex': r'\bSpaceX\b',
+        'tesla':  r'\b(?:Tesla|TSLA)\b',
+        'openai': r'\bOpenAI\b',
+        'nvidia': r'\b(?:NVIDIA|Nvda)\b',
+        'apple':  r'\b(?:Apple|AAPL)\b',
+    }
+
+    # 词形归一化：预测市场常见词的变形 → 基础形式
+    # 提升跨平台词汇重叠率（如 "impeachment" vs "impeached" → 同一 token "impeach"）
+    WORD_STEMS = {
+        # 法律/政治事件
+        'indicted': 'indict', 'indictment': 'indict', 'indictments': 'indict',
+        'pardoned': 'pardon', 'pardoning': 'pardon',
+        'impeached': 'impeach', 'impeachment': 'impeach',
+        'deported': 'deport', 'deportation': 'deport', 'deporting': 'deport',
+        'sanctioned': 'sanction', 'sanctions': 'sanction',
+        'elected': 'elect', 'election': 'elect', 'elections': 'elect', 'electoral': 'elect',
+        'nominated': 'nominate', 'nomination': 'nominate', 'nominees': 'nominate',
+        'inaugurated': 'inaugurate', 'inauguration': 'inaugurate',
+        'invaded': 'invade', 'invasion': 'invade',
+        'annexed': 'annex', 'annexation': 'annex',
+        'arrested': 'arrest',
+        'convicted': 'convict', 'conviction': 'convict',
+        'resigned': 'resign', 'resignation': 'resign',
+        'leave': 'resign', 'leaves': 'resign', 'leaving': 'resign',  # "leave office" ≈ resign
+        'banned': 'ban',
+        'approved': 'approve', 'approval': 'approve',
+        # 常见动词复数/时态
+        'cuts': 'cut', 'cutting': 'cut',
+        'rates': 'rate',
+        'wins': 'win', 'winning': 'win', 'winner': 'win',
+        'loses': 'lose', 'losing': 'lose', 'lost': 'lose',
+        'hits': 'hit', 'hitting': 'hit',
+        'reaches': 'reach', 'reached': 'reach',
+        'drops': 'drop', 'dropped': 'drop', 'dropping': 'drop',
+        'falls': 'fall', 'fell': 'fall', 'fallen': 'fall',
+        'rises': 'rise', 'rose': 'rise', 'risen': 'rise',
+        'beats': 'beat', 'beaten': 'beat',
+        'passes': 'pass', 'passed': 'pass',
+        'fails': 'fail', 'failed': 'fail',
+        'files': 'file', 'filed': 'file',
+        'signs': 'sign', 'signed': 'sign',
+        'votes': 'vote', 'voted': 'vote', 'voting': 'vote', 'voters': 'vote',
+        'markets': 'market',
+        'prices': 'price',
+        # 名词变形
+        'presidency': 'president',
+        # 金融/利率
+        'hike': 'raise', 'hikes': 'raise', 'hiking': 'raise', 'hiked': 'raise',
+        'raises': 'raise', 'raising': 'raise',
+        # 移除/解职
+        'removed': 'resign', 'removal': 'resign',   # removed from office ≈ resign
+        # 购买/收购 同义词组（buy ↔ acquire）
+        'buy': 'acquire', 'buys': 'acquire', 'bought': 'acquire', 'buying': 'acquire',
+        'acquires': 'acquire', 'acquiring': 'acquire',
+        # 动词三单/过去式/其他常见变形
+        'invades': 'invade', 'invading': 'invade',
+        'controls': 'control', 'controlled': 'control',
+        'breaks': 'break', 'broke': 'break', 'broken': 'break',
+        'takes': 'take', 'took': 'take', 'taken': 'take',
+        'makes': 'make', 'made': 'make',
+        'gets': 'get', 'got': 'get',
+        'keeps': 'keep', 'kept': 'keep',
+        'holds': 'hold', 'held': 'hold',
+        'runs': 'run', 'ran': 'run',
+        'seeks': 'seek', 'sought': 'seek',
+        'leads': 'lead', 'led': 'lead',
+        'remains': 'remain', 'remained': 'remain',
+        # 经济/金融
+        'acquired': 'acquire', 'acquisition': 'acquire',
+        'defaulted': 'default',
+        'launched': 'launch',
+        'legalized': 'legalize', 'legalization': 'legalize',
+        'regulated': 'regulate', 'regulation': 'regulate', 'regulations': 'regulate',
+        'merged': 'merge', 'merger': 'merge',
+    }
+
+    # 实体展开词：当某实体被检测到时，从 words 中移除其组成词（避免重复/干扰）
+    # 例：检测到 'fed' 实体时，移除 'federal' 和 'reserve'，防止 HC2 误拦截
+    ENTITY_COMPONENT_WORDS: Dict[str, set] = {
+        'us':      {'united', 'states'},
+        'uk':      {'united', 'kingdom', 'britain'},
+        'eu':      {'european', 'union'},
+        'fed':     {'federal', 'reserve'},
+        'bitcoin': {'bitcoin'},   # remove raw word "bitcoin" (covered by entity)
+        'ethereum':{'ethereum'},
+        'solana':  {'solana'},
+        'zelensky':{'zelensky', 'zelenskyy', 'zelenskiy'},
+        'netanyahu':{'netanyahu'},
+        'harris':  {'harris', 'kamala'},   # Kamala Harris → both forms map to 'harris' entity
+        'musk':    {'musk', 'elon'},       # Elon Musk
+        'spacex':  {'spacex'},
+        'openai':  {'openai'},
+        'nvidia':  {'nvidia'},
+        'tesla':   {'tesla'},
+        'apple':   {'apple'},
     }
 
     @classmethod
@@ -155,54 +294,77 @@ class KeywordExtractor:
         """
         从文本中提取关键词
 
-        Args:
-            text: 市场标题或描述
-
         Returns:
-            关键词字典 {'entities': [], 'numbers': [], 'words': []}
+            {'entities': [规范实体名, ...], 'numbers': ['year_2027', ...], 'words': [...]}
         """
         if not text:
             return {'entities': [], 'numbers': [], 'words': []}
 
         text = text.strip()
-        keywords = {
-            'entities': [],
-            'numbers': [],
-            'words': []
-        }
+        keywords = {'entities': [], 'numbers': [], 'words': []}
 
-        # 提取年份
+        # ── 数值提取 ──────────────────────────────────────────────
         years = re.findall(cls.PATTERNS['year'], text, re.IGNORECASE)
         keywords['numbers'].extend([f"year_{y}" for y in years])
 
-        # 提取价格（归一化：去掉 $, 逗号, 空格, 单位词，只保留数字）
         prices = re.findall(cls.PATTERNS['price'], text, re.IGNORECASE)
         for p in prices:
-            normalized = re.sub(r'[^\d.]', '', p)  # "$90,000" → "90000", "90000 USD" → "90000"
+            # 处理 k/m/b/t 倍数后缀（如 $100k → 100000）
+            p_clean = p.strip()
+            mult = 1
+            suffix = p_clean[-1].lower() if p_clean and p_clean[-1].lower() in 'kmbt' else ''
+            if suffix == 'k':
+                mult = 1_000
+                p_clean = p_clean[:-1]
+            elif suffix == 'm' or 'million' in p_clean.lower():
+                mult = 1_000_000
+                if suffix == 'm':
+                    p_clean = p_clean[:-1]
+            elif suffix == 'b' or 'billion' in p_clean.lower():
+                mult = 1_000_000_000
+                if suffix == 'b':
+                    p_clean = p_clean[:-1]
+            elif suffix == 't' or 'trillion' in p_clean.lower():
+                mult = 1_000_000_000_000
+                if suffix == 't':
+                    p_clean = p_clean[:-1]
+            normalized = re.sub(r'[^\d.]', '', p_clean)
             if normalized:
-                keywords['numbers'].append(f"price_{normalized}")
+                val = float(normalized) * mult
+                keywords['numbers'].append(f"price_{int(val)}")
 
-        # 提取百分比
         percents = re.findall(cls.PATTERNS['percent'], text, re.IGNORECASE)
         keywords['numbers'].extend([f"percent_{p}" for p in percents])
 
-        # 提取人名/实体
+        # ── 实体提取：规范名（pattern key）作为 canonical entity ──
+        # 不同平台的 "BTC" vs "Bitcoin"、"US" vs "United States"
+        # 都映射到同一个规范名，确保跨平台匹配。
         for pattern_name, pattern in cls.PATTERNS.items():
-            if pattern_name in ['trump', 'biden', 'crypto', 'gta']:
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                keywords['entities'].extend([m.lower() for m in matches])
+            if pattern_name not in cls._NUMERIC_PATTERNS:
+                if re.search(pattern, text, re.IGNORECASE):
+                    keywords['entities'].append(pattern_name)
 
-        # 提取核心词汇
+        # ── 核心词汇提取（含词形归一化）────────────────────────────
         clean_text = re.sub(r'[^\w\s]', ' ', text)
         words = clean_text.lower().split()
 
-        # 过滤停用词、短词、纯数字碎片（如 $1,500,000 拆出的 "000", "500"）
-        significant_words = [
-            w for w in words
-            if len(w) > 2 and w not in cls.STOP_WORDS and not w.isdigit()
-        ]
+        significant_words = set()
+        for w in words:
+            if len(w) <= 2 or w in cls.STOP_WORDS or w.isdigit():
+                continue
+            # 词形归一化：election→elect, impeachment→impeach 等
+            w = cls.WORD_STEMS.get(w, w)
+            significant_words.add(w)
 
-        keywords['words'] = list(set(significant_words))
+        # 移除已被实体模式覆盖的组成词，避免其干扰核心词汇约束。
+        # 例："Federal Reserve" 被提取为 'fed' 实体，则从 words 中移除 'federal'/'reserve'，
+        # 否则这两个词会进入 core_words 并因与对方的 "Fed" 标题无法重叠而触发 HC2 误拦截。
+        entity_component_words = set()
+        for entity in keywords['entities']:
+            entity_component_words.update(cls.ENTITY_COMPONENT_WORDS.get(entity, set()))
+        significant_words -= entity_component_words
+
+        keywords['words'] = list(significant_words)
 
         return keywords
 
@@ -279,9 +441,12 @@ class KeywordExtractor:
         core_words2 = words2 - entity_words
 
         # 如果两边都有 >=2 个核心词但没有任何交集 → 主题不同，直接判 0
+        # 例外：两边已经共享相同实体（trump/bitcoin/us 等）时，
+        # 实体匹配本身已足够定位主题，无需额外要求词汇重叠。
+        # 这避免了 "US economy recession" vs "United States GDP shrink" 被错误拦截。
         if len(core_words1) >= 2 and len(core_words2) >= 2:
             core_overlap = core_words1 & core_words2
-            if len(core_overlap) == 0:
+            if len(core_overlap) == 0 and not (entities1 & entities2):
                 return 0.0
 
         # === 硬约束 3：实体相同时的语义反转检测 ===
@@ -327,8 +492,9 @@ class KeywordExtractor:
             score += entity_similarity * 0.25
 
         # 数字匹配（权重 0.2）
-        other_numbers1 = {n for n in numbers1 if not n.startswith(('year_', 'price_', 'percent_'))}
-        other_numbers2 = {n for n in numbers2 if not n.startswith(('year_', 'price_', 'percent_'))}
+        # 包含 price_/percent_（价格目标是强匹配信号），但排除 year_（年份只用于硬约束）
+        other_numbers1 = {n for n in numbers1 if not n.startswith('year_')}
+        other_numbers2 = {n for n in numbers2 if not n.startswith('year_')}
         if other_numbers1 and other_numbers2:
             number_similarity = len(other_numbers1 & other_numbers2) / len(other_numbers1 | other_numbers2)
             score += number_similarity * 0.2
@@ -379,11 +545,13 @@ class MarketMatcher:
     def _get_index_tokens(keywords: Dict) -> Set[str]:
         """从关键词字典中提取用于倒排索引的 token 集合
 
-        将 entities, numbers, words 合并为统一的 token 集合，
-        用于快速候选筛选（两个市场必须共享至少一个 token 才进入精确匹配）
+        实体 token 加 'ent:' 前缀，使其在文档频率剪枝时受到保护：
+          - 'ent:trump'  → 即使出现在 50% 的市场中也不会被剪枝
+          - 'year_2027'  → 数值前缀，同样受保护
+          - 'president'  → 普通词，出现太频繁时会被剪枝（正常行为）
         """
         tokens = set()
-        tokens.update(keywords.get('entities', []))
+        tokens.update(f'ent:{e}' for e in keywords.get('entities', []))
         tokens.update(keywords.get('numbers', []))
         tokens.update(keywords.get('words', []))
         return tokens
@@ -471,14 +639,20 @@ class MarketMatcher:
                     inverted_index[token] = set()
                 inverted_index[token].add(idx)
 
-        # 过滤高频 token（出现在 >20% 的 B 市场中 = 噪音，无区分度）
+        # 过滤高频普通词（出现在 >20% 的 B 市场中 = 噪音，无区分度）
+        # 注意：实体 token（ent:*）和数值 token（year_*/price_*/percent_*）永不剪枝，
+        # 因为即使常见如 "trump" 也是高价值的匹配信号。
         if b_entries:
-            max_df = max(len(b_entries) // 5, 10)  # at least 10 to not over-prune small sets
-            noisy_tokens = {t for t, ids in inverted_index.items() if len(ids) > max_df}
+            max_df = max(len(b_entries) // 5, 10)
+            noisy_tokens = {
+                t for t, ids in inverted_index.items()
+                if len(ids) > max_df
+                and not t.startswith(('ent:', 'year_', 'price_', 'percent_'))
+            }
             for t in noisy_tokens:
                 del inverted_index[t]
             if noisy_tokens:
-                self.logger.debug(f"[Matcher] Pruned {len(noisy_tokens)} noisy tokens (df>{max_df})")
+                self.logger.debug(f"[Matcher] Pruned {len(noisy_tokens)} noisy word-tokens (df>{max_df})")
 
         # Step 3: 预计算 A 侧关键词 + 倒排索引查询候选 — O(n × avg_tokens)
         total_candidates = 0
