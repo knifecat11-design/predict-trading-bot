@@ -57,6 +57,11 @@ PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetch
 MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
 KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
 PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
+# Multi-outcome arb: minimum total cost (sum of all Yes-ask prices) to be considered valid.
+# A genuine MECE event (election, sports champion) has outcomes summing close to $1.
+# Non-exhaustive markets (e.g. FDV buckets missing a "<$1B" tier) sum to 10–30c and
+# must be excluded — if no outcome covers the actual result, all positions expire worthless.
+MULTI_OUTCOME_MIN_TOTAL_COST = 0.50   # Require sum ≥ 50c to pass MECE sanity check
 
 # Platform fee rates (used for net profit calculation)
 PLATFORM_FEES = {
@@ -954,6 +959,14 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
             continue
 
         total_cost = sum(o['price'] for o in outcomes)
+
+        # MECE 完整性检验：若总成本极端偏低，说明结果集不完整（非 MECE），剔除。
+        # 合法的选举/冠军类事件，各结果之和应接近 $1（仅有小幅套利缺口）。
+        # FDV 档位、独立二元市场等非完整集合，总和可能仅有 10–30c，
+        # 此时不能保证有且仅有一个结果兑付 $1，买入所有结果并非无风险套利。
+        if total_cost < MULTI_OUTCOME_MIN_TOTAL_COST:
+            continue
+
         if total_cost >= 1.0:
             continue  # 无套利
 
