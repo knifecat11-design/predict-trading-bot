@@ -154,44 +154,18 @@ def strip_html(html_text):
 
 
 def slugify(text):
-    """Convert text to URL-friendly slug format (improved for Predict.fun)"""
+    """将标题转为 URL slug — 简单版本，不去除停用词
+    与 Predict.fun 实际 URL 保持一致：
+      "Opensea FDV above ___ one day after launch?" → "opensea-fdv-above-one-day-after-launch"
+      "2026 NBA Champion"                          → "2026-nba-champion"
+    规则：全小写 → 空格/下划线 → 连字符 → 去除非字母数字 → 合并连字符
+    """
     import re
     text = text.lower()
-
-    text = re.sub(r'\bequal\s+(to\s+)?(or\s+)?greater\s+than\b', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bgreater\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bless\s+(than\s+)?(or\s+)?equal\s+(to\s+)?\b', '', text, flags=re.IGNORECASE)
-
-    words_to_remove = [
-        'will', 'won', 'would',
-        'the', 'a', 'an',
-        'there', 'this', 'that',
-        'have', 'has', 'had',
-        'be', 'been', 'being',
-        'for', 'from', 'with',
-        'about', 'against',
-        'between', 'into', 'through', 'during',
-        'before', 'after',
-        'above', 'below',
-        'over', 'under', 'again',
-        'off', 'more',
-        'as', 'is', 'are', 'was', 'were',
-        'when', 'where', 'while',
-        'how', 'what', 'which',
-        'who', 'whom', 'whose',
-        'why', 'whether', 'if',
-        'since', 'until', 'unless',
-    ]
-
-    for word in words_to_remove:
-        text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
-
-    text = text.replace('$', '').replace(',', '')
-    text = re.sub(r'[^\w\s-]', ' ', text)
-    text = re.sub(r'[\s_]+', '-', text)
-    text = re.sub(r'-+', '-', text)
+    text = re.sub(r'[_\s]+', '-', text)        # 空格/下划线 → -
+    text = re.sub(r'[^a-z0-9-]', '', text)     # 去除其他特殊字符（含问号、$、,）
+    text = re.sub(r'-+', '-', text)            # 合并连续连字符
     text = text.strip('-')
-
     return text
 
 
@@ -293,16 +267,13 @@ def fetch_polymarket_data(config):
                 else:
                     match_title = question
 
-                # Polymarket 正确链接格式: https://polymarket.com/event/{event_slug}-{event_id}
+                # Polymarket 正确链接格式: https://polymarket.com/event/{event_slug}
                 # 必须用 events[0] 的 slug（事件级），NOT market 自身的 slug（子问题级）
-                # 例：event slug = "2026-fifa-world-cup-winner", id = 595
-                #     → https://polymarket.com/event/2026-fifa-world-cup-winner-595
+                # 例：event slug = "2026-fifa-world-cup-winner"
+                #     → https://polymarket.com/event/2026-fifa-world-cup-winner
                 event = events[0] if events else {}
                 event_slug = event.get('slug', '')
-                event_id = event.get('id', '')
-                if event_slug and event_id:
-                    market_slug = f"{event_slug}-{event_id}"
-                elif event_slug:
+                if event_slug:
                     market_slug = event_slug
                 else:
                     # 回退：使用 market 本身的 slug 或 conditionId
@@ -588,12 +559,20 @@ def fetch_predict_data(config):
                     continue
 
                 question_text = (m.get('question') or m.get('title', ''))
-                # Predict.fun 正确链接格式: https://predict.fun/market/{slug}
-                # 优先使用 API 返回的原生 slug 字段（父市场级别），
-                # 回退到对问题标题进行 slugify（会产生子问题级别的错误 slug）
-                market_slug = (m.get('slug') or m.get('marketSlug') or
-                               m.get('market_slug') or m.get('groupSlug') or
-                               slugify(question_text))
+                # Predict.fun 链接格式: https://predict.fun/market/{slug}
+                # slug 与标题高度对应（全小写+连字符，不去停用词），
+                # 例："2026 NBA Champion" → "2026-nba-champion"
+                #     "Opensea FDV above ___ one day after launch?" → "opensea-fdv-above-one-day-after-launch"
+                # 优先用 API 原生 slug，然后尝试 title，最后才用 question
+                native_slug = (m.get('slug') or m.get('marketSlug') or
+                               m.get('market_slug') or m.get('groupSlug'))
+                if native_slug:
+                    market_slug = native_slug
+                else:
+                    # title 通常是父市场标题（如 "2026 NBA Champion"），
+                    # question 是具体结果问法（如 "Will the Lakers win?"）
+                    slug_source = m.get('title') or question_text
+                    market_slug = slugify(slug_source)
                 parsed.append({
                     'id': market_id,
                     'title': f"<a href='https://predict.fun/market/{market_slug}' target='_blank' style='color:#9c27b0;font-weight:600'>{question_text[:80]}</a>",
@@ -950,11 +929,7 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
         event_id = event.get('id', '')
         event_slug = event.get('slug', str(event_id))
         event_title = event.get('title', event_slug)
-        # 使用 {event_slug}-{event_id} 格式
-        if event_slug and event_id:
-            event_url = f"https://polymarket.com/event/{event_slug}-{event_id}"
-        else:
-            event_url = f"https://polymarket.com/event/{event_slug}"
+        event_url = f"https://polymarket.com/event/{event_slug}"
 
         now_utc = datetime.now(timezone.utc)
         outcomes = []
