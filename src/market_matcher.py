@@ -140,7 +140,7 @@ class KeywordExtractor:
     }
 
     # 数值类 pattern 名称（提取到 numbers，不进入 entities）
-    _NUMERIC_PATTERNS = {'year', 'price', 'percent'}
+    _NUMERIC_PATTERNS = {'year', 'price', 'percent', 'bps'}
 
     # 实体 pattern：键名 = 规范实体名，值 = 匹配正则
     # 同一实体的不同写法（缩写/全称/变体）统一映射到同一键名，
@@ -150,6 +150,7 @@ class KeywordExtractor:
         'year':    r'\b(20[12][0-9]|20[3-9][0-9])\b',
         'price':   r'\$[\d,]+(?:\.\d+)?[kKmMbBtT]?|\d+[kKmMbBtT]?\s*(?:dollars?|USD|million|billion)',
         'percent': r'\d+(?:\.\d+)?%',
+        'bps':     r'\b(\d+(?:\+\+)?)\s*(?:bps|basis points?)\b',
 
         # ── 人物 ──────────────────────────────────────────────────
         'trump':     r'\bTrump\b',
@@ -336,6 +337,14 @@ class KeywordExtractor:
         percents = re.findall(cls.PATTERNS['percent'], text, re.IGNORECASE)
         keywords['numbers'].extend([f"percent_{p}" for p in percents])
 
+        # 提取 bps（基点）值：如 "25 bps decrease", "50+ bps"
+        # bps 值用于精确匹配，防止 "25 bps" 和 "50+ bps" 被误匹配
+        bps_pattern = r'\b(\d+(?:\+)?)\s*(?:bps|basis points?)\b'
+        bps_matches = re.findall(bps_pattern, text, re.IGNORECASE)
+        if bps_matches:
+            # 对于 "50+" 这类格式，保留 "+" 以区别于 "50"
+            keywords['numbers'].extend([f"bps_{b}" for b in bps_matches])
+
         # ── 实体提取：规范名（pattern key）作为 canonical entity ──
         # 不同平台的 "BTC" vs "Bitcoin"、"US" vs "United States"
         # 都映射到同一个规范名，确保跨平台匹配。
@@ -410,6 +419,20 @@ class KeywordExtractor:
         prices1 = {n for n in numbers1 if n.startswith('price_')}
         prices2 = {n for n in numbers2 if n.startswith('price_')}
         if prices1 and prices2 and not (prices1 & prices2):
+            return 0.0
+
+        # === 硬约束 1.5：bps（基点）值不同则直接判 0 ===
+        # "25 bps decrease" 和 "50+ bps decrease" 是不同的预测结果，不应匹配
+        bps1 = {n for n in numbers1 if n.startswith('bps_')}
+        bps2 = {n for n in numbers2 if n.startswith('bps_')}
+        if bps1 and bps2 and not (bps1 & bps2):
+            return 0.0
+
+        # === 硬约束 1.6：百分比数值不同则直接判 0 ===
+        # "3% rate cut" 和 "5% rate cut" 是不同的预测结果，不应匹配
+        percents1 = {n for n in numbers1 if n.startswith('percent_')}
+        percents2 = {n for n in numbers2 if n.startswith('percent_')}
+        if percents1 and percents2 and not (percents1 & percents2):
             return 0.0
 
         # === 硬约束 4：月份/年份时间粒度不匹配 ===
