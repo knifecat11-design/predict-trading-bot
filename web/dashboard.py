@@ -329,7 +329,16 @@ def fetch_polymarket_data(config):
 
 
 def fetch_opinion_data(config):
-    """Fetch Opinion.trade markets - use best_ask (卖一价) for accurate pricing"""
+    """Fetch Opinion.trade markets — use best_ask for BOTH Yes and No tokens.
+
+    Previously only the Yes token orderbook was fetched and No was derived as
+    (1 - yes_mid).  That derivation always sums to exactly 100c, making it
+    impossible to detect real arbitrage spreads.  Now both tokens are fetched
+    concurrently and their actual ask prices are used directly.
+
+    Fallback: if the No orderbook call fails, No price is derived from the
+    Yes mid-price as a last resort (better than dropping the market entirely).
+    """
     api_key = config.get('opinion', {}).get('api_key', '')
     if not api_key:
         logger.warning("Opinion: no API key")
@@ -344,95 +353,95 @@ def fetch_opinion_data(config):
         if not raw_markets:
             return 'error', []
 
-        logger.info(f"Opinion: {len(raw_markets)} raw markets, fetching orderbook ask prices...")
+        logger.info(f"Opinion: {len(raw_markets)} raw markets, fetching Yes+No orderbook asks...")
 
-        # Filter markets with both yes and no tokens
+        # Filter markets that have both token IDs
         valid_markets = []
         for m in raw_markets:
             if m.get('yesTokenId') and m.get('noTokenId'):
                 valid_markets.append(m)
         logger.info(f"Opinion: {len(valid_markets)} markets have yes+no tokens")
 
-        # Concurrent orderbook fetching — use MID PRICE (matches Opinion.trade website)
-        # We fetch only the Yes token's orderbook and derive both prices:
-        #   yes_price = (yes_bid + yes_ask) / 2  (mid price, matches website display)
-        #   no_price  = 1 - yes_price            (derived, close to website No price)
-        #
-        # Why mid price instead of ask/bid:
-        #   - Opinion.trade website shows mid = (bid+ask)/2 for each token
-        #   - Using yes_ask directly shows higher prices than website
-        #   - Using 1-yes_bid gives extreme No prices (99.9c) when bids are thin
-        #   - Mid price gives reasonable values that match what users see on website
-        token_prices = {}  # token_id -> (mid_price, yes_ask, yes_bid)
+        # Fetch BOTH Yes and No token orderbooks concurrently.
+        # token_prices: token_id -> (ask, bid)
+        token_prices = {}
         _op_call_count = [0]
         _op_lock = threading.Lock()
 
         def fetch_token_orderbook(token_id):
-            """Fetch orderbook for a token and return mid price, ask, bid"""
+            """Fetch orderbook for one token; return (token_id, ask, bid)."""
             with _op_lock:
                 _op_call_count[0] += 1
-                # Rate limit: ~12 req/s (stay under 15 req/s limit)
+                # Rate limit: stay under 15 req/s
                 if _op_call_count[0] % 12 == 0:
                     time.sleep(1.0)
             ob = client.get_order_book(token_id)
             if ob is not None and ob.yes_ask > 0:
-                bid = ob.yes_bid if ob.yes_bid > 0 else 0
                 ask = ob.yes_ask
-                # Mid price: matches what Opinion.trade website displays
-                mid = (bid + ask) / 2 if bid > 0 else ask
-                return token_id, mid, ask, bid
-            return token_id, None, None, None
+                bid = ob.yes_bid if ob.yes_bid > 0 else 0.0
+                return token_id, ask, bid
+            return token_id, None, None
 
-        # Only fetch Yes token orderbooks (No price is derived, not fetched separately)
+        # Collect both Yes and No token IDs
         tokens_to_fetch = []
-        for idx, m in enumerate(valid_markets):
-            yes_tok = m['yesTokenId']
-            tokens_to_fetch.append(yes_tok)
+        for m in valid_markets:
+            tokens_to_fetch.append(m['yesTokenId'])
+            tokens_to_fetch.append(m['noTokenId'])
 
-        logger.info(f"Opinion: fetching {len(tokens_to_fetch)} Yes-token orderbooks concurrently")
+        logger.info(f"Opinion: fetching {len(tokens_to_fetch)} token orderbooks (Yes+No) concurrently")
 
         with ThreadPoolExecutor(max_workers=PRICE_FETCH_WORKERS, thread_name_prefix='op-ob') as ex:
             futures = {ex.submit(fetch_token_orderbook, t): t for t in tokens_to_fetch}
             for future in as_completed(futures, timeout=120):
                 try:
-                    token_id, mid, ask, bid = future.result(timeout=15)
-                    if mid is not None:
-                        token_prices[token_id] = (mid, ask, bid)
+                    token_id, ask, bid = future.result(timeout=15)
+                    if ask is not None:
+                        token_prices[token_id] = (ask, bid)
                 except Exception:
                     pass
 
-        logger.info(f"Opinion: got {len(token_prices)} Yes orderbooks (mid price)")
+        yes_hits = sum(1 for m in valid_markets if m['yesTokenId'] in token_prices)
+        no_hits  = sum(1 for m in valid_markets if m['noTokenId']  in token_prices)
+        logger.info(f"Opinion: {yes_hits} Yes asks, {no_hits} No asks fetched")
 
-        # Build parsed list
+        # Build parsed list using actual ask prices
         parsed = []
-        for idx, m in enumerate(valid_markets):
+        for m in valid_markets:
             try:
-                market_id = str(m.get('marketId', ''))
-                title = m.get('marketTitle', '')
-                yes_token = m['yesTokenId']
+                market_id  = str(m.get('marketId', ''))
+                title      = m.get('marketTitle', '')
+                yes_token  = m['yesTokenId']
+                no_token   = m['noTokenId']
 
-                prices = token_prices.get(yes_token)
-                if prices is None:
-                    continue
+                yes_data = token_prices.get(yes_token)
+                if yes_data is None:
+                    continue  # Can't price Yes → skip market
 
-                yes_mid, yes_ask, yes_bid = prices
-                # Derive No from Yes mid price: no ≈ 1 - yes_mid
-                # This matches Opinion.trade website display (both show mid prices)
-                no_mid = round(1.0 - yes_mid, 4)
+                yes_ask, yes_bid = yes_data
 
-                if yes_mid <= 0 or yes_mid >= 1 or no_mid <= 0 or no_mid >= 1:
+                no_data = token_prices.get(no_token)
+                if no_data is not None:
+                    no_ask = no_data[0]  # ✅ actual No ask
+                else:
+                    # Fallback: derive No from Yes mid when No orderbook unavailable
+                    yes_mid = (yes_bid + yes_ask) / 2 if yes_bid > 0 else yes_ask
+                    no_ask  = round(1.0 - yes_mid, 4)
+
+                # Sanity bounds
+                if yes_ask <= 0 or yes_ask >= 1 or no_ask <= 0 or no_ask >= 1:
                     continue
 
                 parsed.append({
-                    'id': market_id,
-                    'title': f"<a href='https://app.opinion.trade/detail?topicId={market_id}' target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
-                    'url': f"https://app.opinion.trade/detail?topicId={market_id}",
-                    'yes': round(yes_mid, 4),
-                    'no': round(no_mid, 4),
-                    'volume': float(m.get('volume24h', m.get('volume', 0)) or 0),
+                    'id':        market_id,
+                    'title':     f"<a href='https://app.opinion.trade/detail?topicId={market_id}' "
+                                 f"target='_blank' style='color:#d29922;font-weight:600'>{title[:80]}</a>",
+                    'url':       f"https://app.opinion.trade/detail?topicId={market_id}",
+                    'yes':       round(yes_ask, 4),
+                    'no':        round(no_ask,  4),
+                    'volume':    float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
-                    'platform': 'opinion',
-                    'end_date': m.get('cutoff_at', ''),
+                    'platform':  'opinion',
+                    'end_date':  m.get('cutoff_at', ''),
                 })
             except (ValueError, TypeError, KeyError):
                 continue
@@ -443,7 +452,7 @@ def fetch_opinion_data(config):
             if len(parsed) >= OPINION_PARSED_LIMIT:
                 break
 
-        logger.info(f"Opinion: {len(parsed)} markets (all using best_ask pricing)")
+        logger.info(f"Opinion: {len(parsed)} markets (Yes ask + No ask pricing)")
         return 'active', parsed
     except ImportError as e:
         logger.error(f"Opinion import error: {e}")
