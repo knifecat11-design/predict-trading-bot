@@ -132,6 +132,13 @@ class KeywordExtractor:
         'end', 'before', 'after', 'during', 'occur', 'happen'
     }
 
+    # 月份名称（用于时间粒度约束）— 注意：'may' 已在 STOP_WORDS 中，不重复添加
+    MONTH_NAMES = {
+        'january', 'february', 'march', 'april', 'june',
+        'july', 'august', 'september', 'october', 'november', 'december',
+        'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    }
+
     # 常见实体模式
     PATTERNS = {
         'year': r'\b(20[12][0-9]|20[3-9][0-9])\b',
@@ -243,10 +250,26 @@ class KeywordExtractor:
         if prices1 and prices2 and not (prices1 & prices2):
             return 0.0
 
-        # === 硬约束 2：核心词汇必须有交集 ===
-        # 防止 "Trump cabinet member" 与 "Trump deport people" 被匹配
+        # === 硬约束 4：月份/年份时间粒度不匹配 ===
+        # "Trump out by March 31?" 是短期截止（无年份），
+        # "Trump out before 2027?" 是全年窗口（有年份，无具体月份）。
+        # 两者时间窗口差异巨大，不应匹配。
         words1 = set(keywords1['words'])
         words2 = set(keywords2['words'])
+        months1 = words1 & cls.MONTH_NAMES
+        months2 = words2 & cls.MONTH_NAMES
+        # 一边有月份且无年份，另一边有年份且无月份 → 时间范围不同 → 判 0
+        if months1 and not months2 and years2 and not years1:
+            return 0.0
+        if months2 and not months1 and years1 and not years2:
+            return 0.0
+        # 两边都有月份但不重叠 → 截止日期不同 → 判 0
+        # e.g. "expire in March?" vs "expire in June?"
+        if months1 and months2 and not (months1 & months2):
+            return 0.0
+
+        # === 硬约束 2：核心词汇必须有交集 ===
+        # 防止 "Trump cabinet member" 与 "Trump deport people" 被匹配
         entities1 = set(keywords1['entities'])
         entities2 = set(keywords2['entities'])
 
