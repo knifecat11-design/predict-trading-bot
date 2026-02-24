@@ -489,9 +489,17 @@
                 const isCrossCombo = a.arb_type === 'cross_combo';
 
                 // Build outcome pills — for cross-combo show which platform each comes from
+                const platColors = {
+                    'polymarket': '#03a9f4',
+                    'opinion': '#d29922',
+                    'predict': '#9c27b0',
+                    'kalshi': '#3fb950',
+                };
                 const pillsHtml = (a.outcomes || []).map(o => {
+                    const platKey = (o.platform || '').toLowerCase();
+                    const platColor = platColors[platKey] || '#8b949e';
                     const platTag = isCrossCombo && o.platform
-                        ? `<span style="font-size:9px;opacity:0.75;margin-left:2px">[${o.platform.slice(0,3)}]</span>`
+                        ? `<span style="font-size:11px;font-weight:700;color:${platColor};margin-left:3px">[${o.platform.slice(0,3)}]</span>`
                         : '';
                     return `<span class="outcome-pill">` +
                         `<a href="${o.url}" target="_blank" style="text-decoration:none">` +
