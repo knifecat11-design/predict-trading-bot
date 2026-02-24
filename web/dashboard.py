@@ -162,9 +162,9 @@ def slugify(text):
     """
     import re
     text = text.lower()
-    text = re.sub(r'[_\s]+', '-', text)        # 空格/下划线 → -
-    text = re.sub(r'[^a-z0-9-]', '', text)     # 去除其他特殊字符（含问号、$、,）
-    text = re.sub(r'-+', '-', text)            # 合并连续连字符
+    text = re.sub(r'[_\s]+', '-', text)
+    text = re.sub(r'[^a-z0-9-]', '', text)
+    text = re.sub(r'-+', '-', text)
     text = text.strip('-')
     return text
 
@@ -677,10 +677,10 @@ def fetch_predict_data(config):
 
                 question_text = (m.get('question') or m.get('title', ''))
                 # Predict.fun 链接格式: https://predict.fun/market/{父市场slug}
-                # 注意：m['slug'] 是子结果的 slug（如 "england"），不能用
-                # 父市场 slug（如 "2026-fifa-world-cup-winner"）在以下字段中查找
+                # 注意：m['slug'] 是子结果 slug（如 "england"），不能用
+                # 优先从 API 字段里找父市场 slug，否则从问题文本推导
                 parent_slug = (
-                    m.get('groupSlug') or        # 最可能的字段名
+                    m.get('groupSlug') or
                     m.get('parentSlug') or
                     m.get('eventSlug') or
                     m.get('marketSlug') or
