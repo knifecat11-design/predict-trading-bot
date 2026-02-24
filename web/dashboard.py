@@ -50,7 +50,7 @@ MAX_ARBITRAGE_DISPLAY = 30        # Max arbitrage opportunities to keep
 ARBITRAGE_EXPIRY_MINUTES = 10     # Remove stale arbitrage after N minutes
 OPINION_DETAILED_FETCH = 100      # Individual No price fetches (concurrent)
 POLYMARKET_FETCH_LIMIT = 5000     # Polymarket markets to fetch (total active ~28k)
-OPINION_MARKET_LIMIT = 1000       # Total opinion markets to fetch per sort strategy
+OPINION_MARKET_LIMIT = 1000       # Total opinion markets to fetch (high cap, API returns ~150)
 OPINION_PARSED_LIMIT = 800        # Max parsed opinion markets
 PREDICT_EXTREME_FILTER = 0.03     # Filter markets with Yes < 3% or > 97%
 PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching (default)
@@ -60,9 +60,6 @@ PREDICT_FETCH_MAX_PAGES = 20      # Max cursor pagination pages for Predict (was
 MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
 KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
 PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
-# Multi-sort strategies for comprehensive market discovery
-OPINION_SORT_STRATEGIES = [5, 3, 1]   # 5=24h vol, 3=total vol, 1=newest
-PREDICT_SORT_STRATEGIES = ['VOLUME_24H_DESC', 'CHANCE_24H_CHANGE_DESC', 'CREATED_AT_DESC']
 # Multi-outcome arb: minimum total cost (sum of all Yes-ask prices) to be considered valid.
 # A genuine MECE event (election, sports champion) has outcomes summing close to $1.
 # Non-exhaustive markets (e.g. FDV buckets missing a "<$1B" tier) sum to 10–30c and
@@ -455,31 +452,13 @@ def fetch_opinion_data(config):
         from src.opinion_api import OpinionAPIClient
         client = OpinionAPIClient(config)
 
-        # Multi-sort strategy: fetch with different sortBy to maximize market coverage
-        # Different sorts surface different markets — combine and deduplicate
-        all_raw = []
-        seen_ids = set()
-
-        for sort_by in OPINION_SORT_STRATEGIES:
-            client.clear_cache()  # bypass cache to get fresh results per sort
-            raw_batch = client.get_markets(status='activated', sort_by=sort_by, limit=OPINION_MARKET_LIMIT)
-            new_count = 0
-            for m in raw_batch:
-                mid = str(m.get('marketId', ''))
-                if mid and mid not in seen_ids:
-                    seen_ids.add(mid)
-                    all_raw.append(m)
-                    new_count += 1
-            logger.info(f"Opinion [sort={sort_by}]: {len(raw_batch)} raw, +{new_count} new, total unique={len(all_raw)}")
-            if not raw_batch:
-                break  # API may not support this sort value, stop trying more
-
-        raw_markets = all_raw
+        # Single sort by 24h volume — Opinion has ~150 total markets, one fetch covers all
+        raw_markets = client.get_markets(status='activated', sort_by=5, limit=OPINION_MARKET_LIMIT)
 
         if not raw_markets:
             return 'error', []
 
-        logger.info(f"Opinion: {len(raw_markets)} unique raw markets (multi-sort), fetching Yes+No orderbook asks...")
+        logger.info(f"Opinion: {len(raw_markets)} raw markets, fetching Yes+No orderbook asks...")
 
         # Filter markets that have both token IDs
         valid_markets = []
@@ -499,8 +478,8 @@ def fetch_opinion_data(config):
             with _op_lock:
                 _op_call_count[0] += 1
                 # Rate limit: stay under 15 req/s (API limit)
-                # Sleep 1s every 14 calls ≈ 14 req/s, safe margin under 15
-                if _op_call_count[0] % 14 == 0:
+                # Sleep 1s every 12 calls — conservative to avoid 429 during burst
+                if _op_call_count[0] % 12 == 0:
                     time.sleep(1.0)
             ob = client.get_order_book(token_id)
             if ob is not None and ob.yes_ask > 0:
@@ -626,48 +605,45 @@ def fetch_predict_data(config):
         client = PredictAPIClient(config)
 
         # === Phase 1: Fetch ALL open markets via cursor pagination ===
-        # Multi-sort strategy: different sort orders surface different markets
         # Predict v1 API uses 'cursor' response field, 'after' query parameter
+        # Increased max pages (20) to ensure full market coverage
         session = req.Session()
         session.headers.update({'x-api-key': api_key, 'Content-Type': 'application/json'})
 
         all_raw = []
         seen_ids = set()
+        cursor = None
 
-        for sort_key in PREDICT_SORT_STRATEGIES:
-            cursor = None
-            sort_new = 0
-            for page in range(PREDICT_FETCH_MAX_PAGES):
-                params = {'first': 100, 'status': 'OPEN', 'sort': sort_key}
-                if cursor:
-                    params['after'] = cursor
-                resp = session.get(f"{base_url}/v1/markets", params=params, timeout=15)
-                if resp.status_code != 200:
-                    logger.warning(f"Predict [{sort_key}] page {page}: HTTP {resp.status_code}")
-                    break
-                data = resp.json()
-                batch = data.get('data', []) if isinstance(data, dict) else data
-                if not batch:
-                    break
-                new_count = 0
-                for m in batch:
-                    mid = m.get('id', m.get('market_id', ''))
-                    if mid and mid not in seen_ids:
-                        seen_ids.add(mid)
-                        all_raw.append(m)
-                        new_count += 1
-                sort_new += new_count
-                # v1 API returns cursor in 'cursor' field
-                cursor = data.get('cursor') if isinstance(data, dict) else None
-                if not cursor or len(batch) < 100:
-                    break
-            logger.info(f"Predict [{sort_key}]: +{sort_new} new markets, total unique={len(all_raw)}")
+        for page in range(PREDICT_FETCH_MAX_PAGES):
+            params = {'first': 100, 'status': 'OPEN', 'sort': 'VOLUME_24H_DESC'}
+            if cursor:
+                params['after'] = cursor
+            resp = session.get(f"{base_url}/v1/markets", params=params, timeout=15)
+            if resp.status_code != 200:
+                logger.warning(f"Predict page {page}: HTTP {resp.status_code}")
+                break
+            data = resp.json()
+            batch = data.get('data', []) if isinstance(data, dict) else data
+            if not batch:
+                break
+            new_count = 0
+            for m in batch:
+                mid = m.get('id', m.get('market_id', ''))
+                if mid and mid not in seen_ids:
+                    seen_ids.add(mid)
+                    all_raw.append(m)
+                    new_count += 1
+            # v1 API returns cursor in 'cursor' field
+            cursor = data.get('cursor') if isinstance(data, dict) else None
+            logger.info(f"Predict [page {page}]: {len(batch)} fetched, {new_count} new, total={len(all_raw)}")
+            if not cursor or len(batch) < 100:
+                break
 
         if not all_raw:
             logger.warning("Predict: 0 raw markets returned from API")
             return 'error', []
 
-        logger.info(f"Predict: {len(all_raw)} total open markets (multi-sort pagination)")
+        logger.info(f"Predict: {len(all_raw)} total open markets (full pagination)")
 
         # === Phase 2: Extract inline orderbooks + concurrent fetch for missing ===
         orderbook_results = {}
