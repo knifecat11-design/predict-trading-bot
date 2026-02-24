@@ -606,9 +606,12 @@
                     const typeIcon = a.arb_type === 'same_platform' ? '&#9679; ' : '';
                     const history = priceHistory[a.market_key] || [];
                     const spark = sparklineSvg(history, 50, 16);
+                    const crossMatchHtml = (a.arb_type === 'cross_platform' && a.market_b_html)
+                        ? `<div style="font-size:13px;margin-top:4px;line-height:1.4">${a.market_b_html}</div>`
+                        : '';
                     return `
                     <tr${a.arb_type === 'same_platform' ? ' style="background:#1a1a0e"' : ''}>
-                        <td>${typeIcon}${a.market}</td>
+                        <td>${typeIcon}${a.market}${crossMatchHtml}</td>
                         <td>${platformTag(a.platform_a)} ${platformTag(a.platform_b)}</td>
                         <td class="direction">${a.direction}</td>
                         <td>Y:${a.a_yes}c N:${a.a_no}c</td>
