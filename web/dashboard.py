@@ -62,7 +62,6 @@ PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # Non-exhaustive markets (e.g. FDV buckets missing a "<$1B" tier) sum to 10–30c and
 # must be excluded — if no outcome covers the actual result, all positions expire worthless.
 MULTI_OUTCOME_MIN_TOTAL_COST = 0.50   # Require sum ≥ 50c to pass MECE sanity check
-MULTI_OUTCOME_MIN_PRICE = 0.01        # Skip outcomes priced below 1c (expired/unresolvable dust)
 
 # Platform fee rates (used for net profit calculation)
 PLATFORM_FEES = {
@@ -1097,9 +1096,9 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
                 except Exception:
                     yes_price = None
 
-            # 过滤价格极低的结果（< 1c）：通常是即将结算为 No 的市场
-            # 这些市场已无实际交易价值，计入总成本会产生虚假套利信号
-            if yes_price is None or yes_price < MULTI_OUTCOME_MIN_PRICE or yes_price >= 1:
+            # 跳过无效价格（已结算为0或未定价）；低概率但仍交易中的子市场（如0.3c）必须保留，
+            # 否则遗漏它们会使剩余选项合计 < $1，产生虚假套利信号
+            if yes_price is None or yes_price <= 0 or yes_price >= 1:
                 continue
 
             question = m.get('question', '')
@@ -1422,7 +1421,7 @@ def group_polymarket_events_for_combo(poly_events):
                 except Exception:
                     pass
 
-            if yes_price is None or yes_price < MULTI_OUTCOME_MIN_PRICE or yes_price >= 1:
+            if yes_price is None or yes_price <= 0 or yes_price >= 1:
                 continue
 
             question = m.get('question', '')
