@@ -152,6 +152,8 @@
         .tag.opinion { background: #3b2f1a; color: #d29922; }
         .tag.predict { background: #1a3b2f; color: #3fb950; }
         .tag.kalshi { background: #0e2a0e; color: #3fb950; }
+        .tag.cross { background: #3a2a10; color: #ff9800; }
+        .cross-combo-row td:first-child { border-left: 2px solid #ff980033; }
         .direction { font-size: 12px; color: #8b949e; }
 
         /* Price history sparkline */
@@ -329,6 +331,7 @@
             <span>Same-Plat: <span class="val" id="stat-same">0</span></span>
             <span>Cross-Plat: <span class="val" id="stat-cross">0</span></span>
             <span>Multi-result: <span class="val" id="stat-multi" style="color:#58a6ff">0</span></span>
+            <span>Cross-Combo: <span class="val" id="stat-cross-combo" style="color:#ff9800">0</span></span>
             <span style="color:#3fb950">Net+: <span class="val" id="stat-profitable" style="color:#3fb950">0</span></span>
             <span>|</span>
             <span>WS: <span class="val" id="stat-ws-updates">0</span> <span id="ws-feed-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#484f58;vertical-align:middle"></span></span>
@@ -360,7 +363,7 @@
         <!-- Multi-result Arbitrage -->
         <div class="section-title">
             Multi-result Arbitrage
-            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— buy all outcomes on same platform when sum &lt; $1 (Polymarket events)</span>
+            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— buy all outcomes when total cost &lt; $1 · same-platform (Polymarket) &amp; cross-platform combos (Kalshi+Predict+Opinion)</span>
             <span id="multi-arb-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
         </div>
         <table class="multi-arb-table">
@@ -436,7 +439,8 @@
             const n = name.toLowerCase();
             const cls = n.includes('poly') ? 'poly' :
                         n.includes('opinion') ? 'opinion' :
-                        n.includes('kalshi') ? 'kalshi' : 'predict';
+                        n.includes('kalshi') ? 'kalshi' :
+                        n.includes('cross') ? 'cross' : 'predict';
             return `<span class="tag ${cls}">${name}</span>`;
         }
 
@@ -460,8 +464,17 @@
             const countEl = document.getElementById('multi-arb-count');
             const arbs = data.multi_outcome_arb || [];
 
+            const sameCount = arbs.filter(a => a.arb_type === 'multi_outcome').length;
+            const comboCount = arbs.filter(a => a.arb_type === 'cross_combo').length;
             if (countEl) {
-                countEl.textContent = arbs.length > 0 ? arbs.length + ' found' : '';
+                if (arbs.length > 0) {
+                    const parts = [];
+                    if (sameCount > 0) parts.push(sameCount + ' same-platform');
+                    if (comboCount > 0) parts.push(comboCount + ' cross-combo');
+                    countEl.textContent = parts.join(' · ') + ' found';
+                } else {
+                    countEl.textContent = '';
+                }
             }
 
             if (arbs.length === 0) {
@@ -473,20 +486,29 @@
                 const net = typeof a.net_profit === 'number' ? a.net_profit : a.arbitrage;
                 const netStyle = net > 0 ? 'color:#3fb950;font-weight:600' : 'color:#f85149;font-weight:600';
                 const netStr = (net > 0 ? '+' : '') + net.toFixed(1) + '%';
+                const isCrossCombo = a.arb_type === 'cross_combo';
 
-                // Build outcome pills — link each outcome name to its market page
-                const pillsHtml = (a.outcomes || []).map(o =>
-                    `<span class="outcome-pill">` +
-                    `<a href="${o.url}" target="_blank" style="text-decoration:none">` +
-                    `<span class="outcome-name">${o.name}</span>` +
-                    `<span class="outcome-price">${(o.price * 100).toFixed(1)}c</span>` +
-                    `</a></span>`
-                ).join('');
+                // Build outcome pills — for cross-combo show which platform each comes from
+                const pillsHtml = (a.outcomes || []).map(o => {
+                    const platTag = isCrossCombo && o.platform
+                        ? `<span style="font-size:9px;opacity:0.75;margin-left:2px">[${o.platform.slice(0,3)}]</span>`
+                        : '';
+                    return `<span class="outcome-pill">` +
+                        `<a href="${o.url}" target="_blank" style="text-decoration:none">` +
+                        `<span class="outcome-name">${o.name}${platTag}</span>` +
+                        `<span class="outcome-price">${(o.price * 100).toFixed(1)}c</span>` +
+                        `</a></span>`;
+                }).join('');
+
+                // For cross-combo, show abbreviated platform combo in the Platform column
+                const platformDisplay = isCrossCombo
+                    ? platformTag('Cross')
+                    : platformTag(a.platform);
 
                 return `
-                <tr class="multi-arb-row">
+                <tr class="multi-arb-row${isCrossCombo ? ' cross-combo-row' : ''}">
                     <td><a href="${a.event_url}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title}</a></td>
-                    <td>${platformTag(a.platform)}</td>
+                    <td>${platformDisplay}</td>
                     <td><div class="outcome-pills">${pillsHtml}</div></td>
                     <td style="font-weight:600;color:#d29922">${a.total_cost}c</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
@@ -554,6 +576,7 @@
                 document.getElementById('stat-same').textContent = stats.same_platform_arb || 0;
                 document.getElementById('stat-cross').textContent = stats.cross_platform_arb || 0;
                 document.getElementById('stat-multi').textContent = stats.multi_outcome_arb || 0;
+                document.getElementById('stat-cross-combo').textContent = stats.cross_combo_arb || 0;
                 document.getElementById('stat-profitable').textContent = stats.profitable_after_fees || 0;
                 document.getElementById('stat-ws-updates').textContent = stats.ws_updates || 0;
             }
