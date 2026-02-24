@@ -95,6 +95,10 @@ _poly_raw_markets = []
 # Cache for Polymarket events (multi-outcome arbitrage detection)
 # Each entry: {id, slug, title, markets: [{conditionId, question, bestAsk, ...}, ...]}
 _poly_events_cache = []
+# Caches for cross-platform multi-outcome combo detection
+_kalshi_raw_cache = []    # Raw Kalshi market dicts (before price filtering)
+_predict_raw_cache = []   # Raw Predict.fun market dicts (before extreme-price filtering)
+_predict_ob_cache = {}    # Predict.fun orderbooks {market_id: {'yes_ask': float, 'no_ask': float}}
 _lock = threading.Lock()
 _scanning = threading.Event()  # Scan guard: prevents overlapping scans
 
@@ -562,6 +566,7 @@ def fetch_opinion_data(config):
 
 def fetch_predict_data(config):
     """Fetch ALL Predict.fun open markets via cursor pagination + concurrent orderbook"""
+    global _predict_raw_cache, _predict_ob_cache
     api_key = config.get('api', {}).get('api_key', '')
     base_url = config.get('api', {}).get('base_url', 'https://api.predict.fun')
     if not api_key:
@@ -643,6 +648,8 @@ def fetch_predict_data(config):
                     pass
 
         logger.info(f"Predict: got {len(orderbook_results)} orderbooks")
+        _predict_raw_cache = all_raw          # store for cross-platform combo analysis
+        _predict_ob_cache = orderbook_results
 
         # 调试：打印第一个市场的完整字段和值，找出正确的父市场 slug 字段名
         if all_raw:
@@ -726,11 +733,13 @@ def fetch_predict_data(config):
 
 def fetch_kalshi_data(config):
     """Fetch Kalshi markets — prices included in /markets response (no orderbook calls)"""
+    global _kalshi_raw_cache
     try:
         from src.kalshi_api import KalshiClient
         client = KalshiClient(config)
         raw_markets = client.get_markets(status='open', limit=KALSHI_FETCH_LIMIT)
         logger.info(f"Kalshi: fetched {len(raw_markets)} raw markets")
+        _kalshi_raw_cache = raw_markets  # store for cross-platform multi-outcome analysis
 
         parsed = []
         for m in raw_markets:
@@ -1151,6 +1160,515 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
     return opportunities
 
 
+# ============================================================
+# Cross-platform multi-outcome combo arbitrage
+# ============================================================
+
+def _extract_outcome_label(title):
+    """从市场标题中提取结果标签（子市场名称）。
+
+    Examples:
+      "Brazil to win the 2026 FIFA World Cup"   → "Brazil"
+      "Will England win the 2026 FIFA World Cup?" → "England"
+      "Lakers to win the NBA Championship"        → "Lakers"
+      "Biden wins the 2024 Presidential Election" → "Biden"
+    """
+    import re
+    text = title.strip()
+    # "Will [OUTCOME] win/beat/defeat/finish..."
+    m = re.match(r'^will\s+(?:the\s+)?(.+?)\s+(?:win|beat|defeat|finish|become|be\s+(?:the|elected))',
+                 text, re.IGNORECASE)
+    if m:
+        outcome = m.group(1).strip()
+        if 1 <= len(outcome.split()) <= 4:
+            return outcome
+    # "[OUTCOME] to win/be/become/reach/finish..."
+    m = re.match(r'^(.+?)\s+to\s+(?:win|be|become|reach|finish|make)', text, re.IGNORECASE)
+    if m:
+        outcome = m.group(1).strip()
+        if 1 <= len(outcome.split()) <= 4:
+            return outcome
+    # "[OUTCOME] wins/gains/leads..."
+    m = re.match(r'^(.+?)\s+(?:wins?|gains?|leads?|takes?)\b', text, re.IGNORECASE)
+    if m:
+        outcome = m.group(1).strip()
+        if 1 <= len(outcome.split()) <= 4:
+            return outcome
+    # Fallback: first 1-3 words (outcome labels are usually short)
+    words = text.split()
+    return ' '.join(words[:min(3, len(words))])
+
+
+def _normalize_title_for_matching(text):
+    """标准化事件标题用于跨平台匹配（去除差异化词汇）。"""
+    import re
+    t = text.lower()
+    t = re.sub(r'[-_]', ' ', t)
+    t = re.sub(r'[^a-z0-9\s]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    # Remove stopwords that differ between platforms but don't affect meaning
+    stopwords = {'the', 'a', 'an', 'will', 'who', 'what', 'which', 'winner',
+                 'wins', 'win', 'to', 'be', 'in', 'of', 'for', 'or'}
+    words = [w for w in t.split() if w not in stopwords]
+    return ' '.join(words)
+
+
+def group_kalshi_events(raw_markets):
+    """将 Kalshi 市场按 event_ticker 分组，形成多结果事件列表。
+
+    每个结果事件的子市场都在同一个 event_ticker 下，例如：
+    event_ticker="PRES-2024" 包含 Trump/Harris/other 三个结果。
+
+    Returns:
+        [{'event_key', 'event_ticker', 'event_title', 'event_title_norm',
+          'event_url', 'platform', 'outcomes': [...]}]
+    """
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for m in raw_markets:
+        et = m.get('event_ticker', '')
+        if et:
+            groups[et].append(m)
+
+    now_utc = datetime.now(timezone.utc)
+    events = []
+
+    for event_ticker, markets in groups.items():
+        outcomes = []
+        for m in markets:
+            # Skip expired markets
+            close_time = m.get('close_time', '')
+            if close_time:
+                try:
+                    ct = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
+                    if ct < now_utc:
+                        continue
+                except Exception:
+                    pass
+
+            yes_ask_str = m.get('yes_ask_dollars', '0') or '0'
+            try:
+                price = float(yes_ask_str)
+            except (ValueError, TypeError):
+                continue
+            if price <= 0 or price >= 1:
+                continue
+
+            # Kalshi markets: 'title' is the full question or outcome label,
+            # 'subtitle' may be the shorter outcome label (1-4 words)
+            raw_title = m.get('title', '').strip()
+            subtitle = m.get('subtitle', '').strip()
+
+            # Prefer subtitle when it looks like a short outcome label
+            if subtitle and 1 <= len(subtitle.split()) <= 4:
+                label = subtitle
+            elif raw_title:
+                label = _extract_outcome_label(raw_title)
+            else:
+                label = m.get('ticker', event_ticker)
+
+            outcomes.append({
+                'label': label,
+                'label_norm': label.lower().strip(),
+                'price': round(price, 4),
+                'url': f"https://kalshi.com/markets/{event_ticker}",
+                'platform': 'Kalshi',
+                'platform_color': '#3fb950',
+            })
+
+        if len(outcomes) < 3:
+            continue
+
+        # Derive event title: remove outcome label from first market's title
+        first_title = markets[0].get('title', '') if markets else ''
+        first_label = outcomes[0]['label'] if outcomes else ''
+        if first_title and first_label:
+            import re as _re
+            event_title = _re.sub(
+                r'(?i)^' + _re.escape(first_label) + r'\s*(to\s+\w+\s+)?',
+                '', first_title
+            ).strip(' ,.;')
+            if len(event_title) < 5:
+                event_title = event_ticker.replace('-', ' ')
+        else:
+            event_title = event_ticker.replace('-', ' ')
+
+        events.append({
+            'event_key': f'kal-{event_ticker}',
+            'event_ticker': event_ticker,
+            'event_title': event_title,
+            'event_title_norm': _normalize_title_for_matching(event_title),
+            'event_url': f"https://kalshi.com/markets/{event_ticker}",
+            'platform': 'Kalshi',
+            'outcomes': outcomes,
+        })
+
+    logger.debug(f"Kalshi event groups: {len(events)} events with 3+ outcomes")
+    return events
+
+
+def group_predict_events(raw_markets, orderbooks):
+    """将 Predict.fun 子市场按推导的父 slug 分组，形成多结果事件列表。"""
+    from collections import defaultdict
+    groups = defaultdict(list)
+
+    for m in raw_markets:
+        market_id = m.get('id', m.get('market_id', ''))
+        ob = orderbooks.get(market_id)
+        if not ob:
+            continue
+        yes_ask = ob.get('yes_ask')
+        if yes_ask is None or yes_ask <= 0 or yes_ask >= 1:
+            continue
+
+        question_text = m.get('question') or m.get('title', '')
+        parent_slug = (
+            m.get('groupSlug') or m.get('parentSlug') or
+            m.get('eventSlug') or m.get('marketSlug') or
+            m.get('market_slug') or m.get('group_slug') or
+            m.get('parent_slug')
+        )
+        if not parent_slug:
+            parent_slug = question_to_predict_slug(question_text)
+
+        # Individual outcome slug (e.g., "england", "brazil")
+        outcome_slug = m.get('slug', '')
+
+        groups[parent_slug].append({
+            'market_id': market_id,
+            'question': question_text,
+            'outcome_slug': outcome_slug,
+            'yes_ask': yes_ask,
+            'parent_slug': parent_slug,
+        })
+
+    events = []
+    for parent_slug, sub_markets in groups.items():
+        if len(sub_markets) < 3:
+            continue
+
+        outcomes = []
+        for sm in sub_markets:
+            # Use slugified outcome as the label (e.g., "england" → "England")
+            label = sm['outcome_slug'].replace('-', ' ').strip() if sm['outcome_slug'] else ''
+            if not label or len(label) < 2:
+                label = _extract_outcome_label(sm['question'])
+
+            outcomes.append({
+                'label': label.title() if label.islower() else label,
+                'label_norm': label.lower().strip(),
+                'price': round(sm['yes_ask'], 4),
+                'url': f"https://predict.fun/market/{parent_slug}",
+                'platform': 'Predict',
+                'platform_color': '#9c27b0',
+            })
+
+        # Event title from parent_slug
+        event_title = parent_slug.replace('-', ' ').title()
+
+        events.append({
+            'event_key': f'pre-{parent_slug}',
+            'event_slug': parent_slug,
+            'event_title': event_title,
+            'event_title_norm': _normalize_title_for_matching(parent_slug),
+            'event_url': f"https://predict.fun/market/{parent_slug}",
+            'platform': 'Predict',
+            'outcomes': outcomes,
+        })
+
+    logger.debug(f"Predict event groups: {len(events)} events with 3+ outcomes")
+    return events
+
+
+def group_polymarket_events_for_combo(poly_events):
+    """将 Polymarket 事件缓存格式化为跨平台组单所需结构。"""
+    events = []
+    now_utc = datetime.now(timezone.utc)
+
+    for event in poly_events:
+        sub_markets = event.get('markets', [])
+        if len(sub_markets) < 3:
+            continue
+
+        event_id = event.get('id', '')
+        event_slug = event.get('slug', str(event_id))
+        event_title = event.get('title', event_slug)
+        event_url = f"https://polymarket.com/event/{event_slug}"
+
+        outcomes = []
+        for m in sub_markets:
+            end_date_str = m.get('endDate') or m.get('endDateIso', '')
+            if end_date_str:
+                try:
+                    end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    if end_dt < now_utc:
+                        continue
+                except Exception:
+                    pass
+
+            best_ask = m.get('bestAsk')
+            yes_price = None
+            if best_ask is not None:
+                try:
+                    yes_price = float(best_ask)
+                except (ValueError, TypeError):
+                    pass
+            if yes_price is None or yes_price <= 0:
+                outcome_str = m.get('outcomePrices', '[]')
+                try:
+                    prices = json.loads(outcome_str) if isinstance(outcome_str, str) else outcome_str
+                    if prices:
+                        yes_price = float(prices[0])
+                except Exception:
+                    pass
+
+            if yes_price is None or yes_price < MULTI_OUTCOME_MIN_PRICE or yes_price >= 1:
+                continue
+
+            question = m.get('question', '')
+            label = _extract_outcome_label(question) or question[:30]
+
+            outcomes.append({
+                'label': label,
+                'label_norm': label.lower().strip(),
+                'price': round(yes_price, 4),
+                'url': event_url,
+                'platform': 'Polymarket',
+                'platform_color': '#03a9f4',
+            })
+
+        if len(outcomes) < 3:
+            continue
+
+        events.append({
+            'event_key': f'poly-{event_id}',
+            'event_title': event_title,
+            'event_title_norm': _normalize_title_for_matching(event_title),
+            'event_url': event_url,
+            'platform': 'Polymarket',
+            'outcomes': outcomes,
+        })
+
+    return events
+
+
+def find_cross_platform_multi_outcome_arb(
+        kalshi_raw, predict_raw, predict_obs, poly_events,
+        opinion_markets, threshold=0.5):
+    """检测跨平台多结果组单套利机会。
+
+    对同一个事件（如2026世界杯冠军），在不同平台为每个结果选择最低价格：
+      - England 在 Kalshi 最便宜 → 在 Kalshi 买 England
+      - Brazil 在 Predict 最便宜 → 在 Predict 买 Brazil
+      - France 在 Polymarket 最便宜 → 在 Polymarket 买 France
+
+    如果所有结果总成本 < $1，则存在无风险套利。
+    仅当至少 2 个不同平台的结果形成组合时才计入（纯同平台机会已由
+    find_polymarket_multi_outcome_arbitrage 处理）。
+
+    Args:
+        kalshi_raw:    Kalshi 原始市场列表
+        predict_raw:   Predict.fun 原始市场列表
+        predict_obs:   Predict.fun 订单簿缓存 {market_id: ob_dict}
+        poly_events:   Polymarket 事件缓存
+        opinion_markets: Opinion 已解析市场列表（用于补充单个结果的更低价格）
+        threshold:     最低毛利率阈值（%）
+
+    Returns:
+        套利机会列表（与 find_polymarket_multi_outcome_arbitrage 格式兼容）
+    """
+    from difflib import SequenceMatcher
+
+    try:
+        kalshi_events = group_kalshi_events(kalshi_raw) if kalshi_raw else []
+    except Exception as e:
+        logger.warning(f"Cross-combo: Kalshi grouping error: {e}")
+        kalshi_events = []
+    try:
+        predict_events = group_predict_events(predict_raw, predict_obs) if predict_raw else []
+    except Exception as e:
+        logger.warning(f"Cross-combo: Predict grouping error: {e}")
+        predict_events = []
+    try:
+        poly_event_groups = group_polymarket_events_for_combo(poly_events) if poly_events else []
+    except Exception as e:
+        logger.warning(f"Cross-combo: Polymarket grouping error: {e}")
+        poly_event_groups = []
+
+    logger.info(
+        f"Cross-combo groups: Kalshi={len(kalshi_events)}, "
+        f"Predict={len(predict_events)}, Poly={len(poly_event_groups)}"
+    )
+
+    if len(kalshi_events) + len(predict_events) + len(poly_event_groups) < 2:
+        return []
+
+    # Build Opinion lookup for supplementary single-outcome matching:
+    # {normalized_title: {yes_price, url, platform}}
+    opinion_lookup = {}
+    for om in (opinion_markets or []):
+        raw_title = strip_html(om.get('title', ''))
+        norm = _normalize_title_for_matching(raw_title)
+        opinion_lookup[norm] = {
+            'yes_price': om.get('yes', 0),
+            'url': om.get('url', ''),
+            'raw_title': raw_title,
+        }
+
+    all_platform_groups = [
+        ('Kalshi', kalshi_events),
+        ('Predict', predict_events),
+        ('Polymarket', poly_event_groups),
+    ]
+
+    # Pairwise event matching across platforms, then build merged outcome map
+    processed_combos = set()
+    opportunities = []
+    now_str = datetime.now().strftime('%H:%M:%S')
+    fee_rate = 0.02  # conservative 2% per leg
+
+    for i, (plat_a, events_a) in enumerate(all_platform_groups):
+        for j, (plat_b, events_b) in enumerate(all_platform_groups):
+            if j <= i or not events_a or not events_b:
+                continue
+
+            for ea in events_a:
+                title_a = ea['event_title_norm']
+                best_score = 0.0
+                best_eb = None
+
+                for eb in events_b:
+                    score = SequenceMatcher(None, title_a, eb['event_title_norm']).ratio()
+                    if score > best_score:
+                        best_score = score
+                        best_eb = eb
+
+                if best_score < 0.45 or best_eb is None:
+                    continue
+
+                combo_key = tuple(sorted([ea['event_key'], best_eb['event_key']]))
+                if combo_key in processed_combos:
+                    continue
+                processed_combos.add(combo_key)
+
+                # Build merged outcome map:
+                # {outcome_label_norm: {platform_name: outcome_dict}}
+                outcome_map = {}
+                for o in ea['outcomes']:
+                    ln = o['label_norm']
+                    if ln not in outcome_map:
+                        outcome_map[ln] = {}
+                    outcome_map[ln][ea['platform']] = o
+
+                # Match each outcome from best_eb into the map
+                for o_b in best_eb['outcomes']:
+                    lb = o_b['label_norm']
+                    best_la = None
+                    best_la_score = 0.0
+                    for la in outcome_map:
+                        if la == lb:
+                            best_la_score = 1.0
+                            best_la = la
+                            break
+                        score = (0.85 if (la in lb or lb in la)
+                                 else SequenceMatcher(None, la, lb).ratio())
+                        if score > best_la_score:
+                            best_la_score = score
+                            best_la = la
+
+                    if best_la_score >= 0.55 and best_la is not None:
+                        if best_eb['platform'] not in outcome_map[best_la]:
+                            outcome_map[best_la][best_eb['platform']] = o_b
+                    else:
+                        # Unmatched outcome — add as new entry
+                        outcome_map[lb] = {best_eb['platform']: o_b}
+
+                # For each outcome, also check Opinion for a potentially lower price
+                for ln, plat_opts in list(outcome_map.items()):
+                    # Try to find a matching Opinion market for this outcome
+                    outcome_label = next(iter(plat_opts.values()))['label']
+                    event_title_words = set(ea['event_title_norm'].split())
+                    for op_norm, op_info in opinion_lookup.items():
+                        op_words = set(op_norm.split())
+                        # Must share event context AND contain the outcome label
+                        label_words = set(outcome_label.lower().split())
+                        if (len(event_title_words & op_words) >= 2
+                                and label_words.issubset(op_words)
+                                and op_info['yes_price'] > 0):
+                            opinion_outcome = {
+                                'label': outcome_label,
+                                'label_norm': ln,
+                                'price': op_info['yes_price'],
+                                'url': op_info['url'],
+                                'platform': 'Opinion',
+                                'platform_color': '#d29922',
+                            }
+                            if 'Opinion' not in plat_opts:
+                                plat_opts['Opinion'] = opinion_outcome
+                            break
+
+                # Build optimal portfolio: pick cheapest platform per outcome
+                portfolio = []
+                for label_norm, plat_opts in outcome_map.items():
+                    cheapest_plat, cheapest_outcome = min(
+                        plat_opts.items(), key=lambda x: x[1]['price']
+                    )
+                    portfolio.append({
+                        'name': cheapest_outcome['label'],
+                        'price': cheapest_outcome['price'],
+                        'url': cheapest_outcome['url'],
+                        'platform': cheapest_plat,
+                        'platform_color': cheapest_outcome.get('platform_color', '#888'),
+                    })
+
+                if len(portfolio) < 3:
+                    continue
+
+                total_cost = sum(o['price'] for o in portfolio)
+
+                # MECE sanity check
+                if total_cost < MULTI_OUTCOME_MIN_TOTAL_COST:
+                    continue
+                if total_cost >= 1.0:
+                    continue
+
+                gross_pct = (1.0 - total_cost) * 100
+                if gross_pct < threshold:
+                    continue
+
+                # Fee per leg: use each platform's rate
+                fee_cost = sum(
+                    o['price'] * PLATFORM_FEES.get(o['platform'].lower(), fee_rate)
+                    for o in portfolio
+                ) * 100
+                net_pct = gross_pct - fee_cost
+
+                platforms_used = sorted(set(o['platform'] for o in portfolio))
+                market_key = f"COMBO-{ea['event_key']}-{best_eb['event_key']}"
+
+                opportunities.append({
+                    'event_title': ea['event_title'],
+                    'event_url': ea['event_url'],
+                    'platform': '+'.join(platforms_used),
+                    'platform_color': '#ff9800',
+                    'platforms': platforms_used,
+                    'match_score': round(best_score, 2),
+                    'outcomes': portfolio,
+                    'outcome_count': len(portfolio),
+                    'total_cost': round(total_cost * 100, 2),
+                    'arbitrage': round(gross_pct, 2),
+                    'net_profit': round(net_pct, 2),
+                    'timestamp': now_str,
+                    'market_key': market_key,
+                    '_created_at': time.time(),
+                    'arb_type': 'cross_combo',
+                })
+
+    opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
+    logger.info(f"Cross-combo: {len(opportunities)} cross-platform multi-outcome opportunities found")
+    return opportunities
+
+
 def _emit_state(event='state_update'):
     """Push current state to all connected WebSocket clients"""
     if _ws_clients > 0:
@@ -1319,10 +1837,19 @@ def background_scanner():
 
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
-            # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes) ===
+            # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes, same platform) ===
             # Uses _poly_events_cache populated by fetch_polymarket_data via /events endpoint.
             # Falls back to empty list if events fetch failed.
             multi_outcome_arb = find_polymarket_multi_outcome_arbitrage(_poly_events_cache, threshold=0.5)
+
+            # === Cross-platform multi-outcome combo (Kalshi + Predict + Polymarket + Opinion) ===
+            # For the same event, pick cheapest platform per outcome to build a complete portfolio.
+            cross_combo_arb = find_cross_platform_multi_outcome_arb(
+                _kalshi_raw_cache, _predict_raw_cache, _predict_ob_cache,
+                _poly_events_cache, opinion_markets, threshold=0.5)
+
+            # Merge same-platform and cross-platform multi-outcome into one list
+            all_multi_arb = multi_outcome_arb + cross_combo_arb
 
             with _lock:
                 # Merge with existing, but expire stale entries
@@ -1352,9 +1879,9 @@ def background_scanner():
                 sorted_arb = sorted(new_arb_map.values(), key=lambda x: x['arbitrage'], reverse=True)
                 _state['arbitrage'] = sorted_arb[:MAX_ARBITRAGE_DISPLAY]
 
-                # Merge multi-outcome arb with existing (same expiry logic)
+                # Merge multi-outcome arb (same-platform + cross-combo) with existing
                 existing_multi = _state.get('multi_outcome_arb', [])
-                new_multi_map = {opp['market_key']: opp for opp in multi_outcome_arb if opp.get('market_key')}
+                new_multi_map = {opp['market_key']: opp for opp in all_multi_arb if opp.get('market_key')}
                 old_multi_map = {opp['market_key']: opp for opp in existing_multi if opp.get('market_key')}
                 for key, old_opp in old_multi_map.items():
                     if key not in new_multi_map:
@@ -1386,6 +1913,7 @@ def background_scanner():
                     'profitable_after_fees': profitable,
                     'total_arb': len(all_arb),
                     'multi_outcome_arb': len(multi_outcome_arb),
+                    'cross_combo_arb': len(cross_combo_arb),
                     'ws_updates': _ws_update_count,
                 }
 
