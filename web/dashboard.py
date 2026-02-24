@@ -916,7 +916,6 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             fee_cost1 = (ma['yes'] * fee_a + mb['no'] * fee_b) * 100
             opportunities.append({
                 'market': strip_html(ma['title_with_html']),
-                'market_b_html': mb['title_with_html'],
                 'platform_a': platform_link_html(platform_a_name, ma.get('url')),
                 'platform_b': platform_link_html(platform_b_name, mb.get('url')),
                 'direction': f"{platform_a_name} Buy Yes + {platform_b_name} Buy No",
@@ -938,7 +937,6 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
             fee_cost2 = (mb['yes'] * fee_b + ma['no'] * fee_a) * 100
             opportunities.append({
                 'market': strip_html(mb['title_with_html']),
-                'market_b_html': ma['title_with_html'],
                 'platform_a': platform_link_html(platform_b_name, mb.get('url')),
                 'platform_b': platform_link_html(platform_a_name, ma.get('url')),
                 'direction': f"{platform_b_name} Buy Yes + {platform_a_name} Buy No",
