@@ -1065,6 +1065,11 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
         now_utc = datetime.now(timezone.utc)
         outcomes = []
         for m in sub_markets:
+            # 过滤已结算的子市场：closed=True 表示该子市场已提前结算
+            # 即使父事件仍 active，个别子市场可能已 resolved（如 "by Dec 31, 2025"）
+            if m.get('closed') is True or m.get('active') is False:
+                continue
+
             # 过滤已过期的子市场（截止时间已过）
             # "Kraken IPO in 2025?" 类型的市场在 2026 年仍会出现在 API 中，
             # 但其截止时间已过，价格接近 0，不可再交易，应剔除。
@@ -1396,6 +1401,10 @@ def group_polymarket_events_for_combo(poly_events):
 
         outcomes = []
         for m in sub_markets:
+            # 过滤已结算的子市场
+            if m.get('closed') is True or m.get('active') is False:
+                continue
+
             end_date_str = m.get('endDate') or m.get('endDateIso', '')
             if end_date_str:
                 try:
