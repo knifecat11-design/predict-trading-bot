@@ -125,9 +125,14 @@ class OpinionAPIClient:
     def get_markets(self,
                     status: str = 'activated',
                     sort_by: int = 5,
-                    limit: int = 500) -> List[Dict]:
+                    limit: int = 1000) -> List[Dict]:
         """
         获取市场列表（分页抓取全站）
+
+        Args:
+            status: 市场状态筛选 ('activated', 'closed', 'all')
+            sort_by: 排序方式 (5=24h交易量, 3=总交易量, 1=最新)
+            limit: 返回数量上限
         """
         try:
             self._ensure_client()
