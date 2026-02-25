@@ -338,11 +338,13 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
         comb2 = mb['yes'] + ma['no']
         arb2 = (1.0 - comb2) * 100
 
-        market_key = f"{name_a}-{name_b}-{ma.get('id','')}-{mb.get('id','')}"
+        market_key_base = f"{name_a}-{name_b}-{ma.get('id','')}-{mb.get('id','')}"
 
-        for arb_pct, direction, market_title, ya, na, yb, nb in [
-            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma.get('title', ''), ma['yes'], ma['no'], mb['yes'], mb['no']),
-            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb.get('title', ''), mb['yes'], mb['no'], ma['yes'], ma['no']),
+        for arb_pct, direction, market_title, ya, na, yb, nb, key_suffix in [
+            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma.get('title', ''),
+             ma['yes'], ma['no'], mb['yes'], mb['no'], '-yes1_no2'),
+            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb.get('title', ''),
+             mb['yes'], mb['no'], ma['yes'], ma['no'], '-yes2_no1'),
         ]:
             if arb_pct >= threshold:
                 results.append({
@@ -353,7 +355,7 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
                     'a_yes': round(ya * 100, 2), 'a_no': round(na * 100, 2),
                     'b_yes': round(yb * 100, 2), 'b_no': round(nb * 100, 2),
                     'confidence': round(confidence, 2),
-                    'market_key': market_key,
+                    'market_key': market_key_base + key_suffix,
                 })
 
     results.sort(key=lambda x: x['arbitrage'], reverse=True)
@@ -399,7 +401,35 @@ def find_same_platform_arb(markets, platform_name, threshold=0.5):
 
 
 def format_arb_message(opp, scan_count):
-    """Format arbitrage as Telegram message"""
+    """Format arbitrage as Telegram message (binary or multi-outcome)"""
+    arb_type = opp.get('arb_type', '')
+
+    # Multi-outcome arbitrage (same-platform or cross-platform combo)
+    if arb_type in ('multi_outcome', 'cross_combo'):
+        outcomes = opp.get('outcomes', [])
+        # Show top outcomes (limit to 8 to avoid oversized messages)
+        outcome_lines = []
+        for o in sorted(outcomes, key=lambda x: x['price'], reverse=True)[:8]:
+            plat_tag = f" [{o['platform']}]" if arb_type == 'cross_combo' else ""
+            outcome_lines.append(f"  • {o['name']}: {o['price']*100:.1f}c{plat_tag}")
+        if len(outcomes) > 8:
+            outcome_lines.append(f"  ... +{len(outcomes)-8} more")
+        outcomes_text = "\n".join(outcome_lines)
+
+        type_label = "多结果套利" if arb_type == 'multi_outcome' else "跨平台组合套利"
+        return (
+            f"<b>🎰 {type_label} #{scan_count}</b>\n"
+            f"<b>事件:</b> {opp['event_title']}\n"
+            f"<b>平台:</b> {opp['platform']}\n"
+            f"<b>结果数:</b> {opp['outcome_count']}\n"
+            f"<b>总成本:</b> {opp['total_cost']:.1f}c\n"
+            f"<b>套利空间:</b> {opp['arbitrage']:.2f}%\n\n"
+            f"<b>各结果价格:</b>\n"
+            f"{outcomes_text}\n\n"
+            f"<b>时间:</b> {datetime.now().strftime('%H:%M:%S')}"
+        )
+
+    # Binary arbitrage (cross-platform or same-platform)
     return (
         f"<b>🎯 套利机会 #{scan_count}</b>\n"
         f"<b>市场:</b> {opp['market']}\n"
@@ -540,9 +570,39 @@ def main():
                     opp['is_real'] = is_real
                 all_opps.extend(opps)
 
+            # === Multi-outcome arbitrage (reuse dashboard functions + caches) ===
+            multi_count = 0
+            combo_count = 0
+            try:
+                import web.dashboard as _dash
+                from web.dashboard import (find_polymarket_multi_outcome_arbitrage,
+                                           find_cross_platform_multi_outcome_arb)
+
+                # Polymarket same-platform multi-outcome (3+ outcome events)
+                multi_opps = find_polymarket_multi_outcome_arbitrage(
+                    _dash._poly_events_cache, threshold=0.5)
+                for opp in multi_opps:
+                    opp['is_real'] = True
+                all_opps.extend(multi_opps)
+                multi_count = len(multi_opps)
+
+                # Cross-platform multi-outcome combo (cheapest per outcome across platforms)
+                cross_combo_opps = find_cross_platform_multi_outcome_arb(
+                    _dash._kalshi_raw_cache, _dash._predict_raw_cache,
+                    _dash._predict_ob_cache, _dash._poly_events_cache,
+                    opinion_markets, threshold=0.5)
+                for opp in cross_combo_opps:
+                    opp['is_real'] = True
+                all_opps.extend(cross_combo_opps)
+                combo_count = len(cross_combo_opps)
+            except Exception as e:
+                logging.warning(f"  Multi-outcome detection failed: {e}")
+
             same_count = sum(1 for o in all_opps if 'SAME-' in o.get('market_key', ''))
-            cross_count = len(all_opps) - same_count
-            logger.info(f"  Arbitrage found: {len(all_opps)} total ({same_count} same-platform, {cross_count} cross-platform)")
+            cross_count = len(all_opps) - same_count - multi_count - combo_count
+            logger.info(f"  Arbitrage found: {len(all_opps)} total "
+                        f"({same_count} same-platform, {cross_count} cross-platform, "
+                        f"{multi_count} multi-outcome, {combo_count} cross-combo)")
 
             # 发送 Telegram 通知（带去重逻辑）
             for opp in all_opps:
@@ -576,7 +636,8 @@ def main():
                 if should_notify:
                     msg = format_arb_message(opp, scan_count)
                     if send_telegram(msg, config):
-                        logger.info(f"  TG sent: {opp['market'][:30]} ({opp['arbitrage']}%)")
+                        label = opp.get('market') or opp.get('event_title', '')
+                        logger.info(f"  TG sent: {label[:30]} ({opp['arbitrage']}%)")
                         last_notifications[market_key] = datetime.now()
                         last_sent_opportunities[market_key] = opp.copy()  # 更新最后发送的机会
 
