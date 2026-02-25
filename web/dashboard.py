@@ -68,9 +68,9 @@ PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # must be excluded — if no outcome covers the actual result, all positions expire worthless.
 MULTI_OUTCOME_MIN_TOTAL_COST = 0.50   # Require sum ≥ 50c to pass MECE sanity check
 
-# Probable Markets price data unavailable - public API doesn't provide order book prices
-# Disable Probable Markets arbitrage until official API access is obtained
-PROBABLE_ARBITRAGE_ENABLED = False
+# Probable Markets order book API: https://api.probable.markets/public/api/v1
+# Enable Probable Markets arbitrage monitoring
+PROBABLE_ARBITRAGE_ENABLED = True
 
 # Platform fee rates (used for net profit calculation)
 PLATFORM_FEES = {

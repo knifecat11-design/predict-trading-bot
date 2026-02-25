@@ -1,14 +1,19 @@
 """
 Probable.markets 市场监测 API
 专注于数据监测，不支持交易
-Probable Markets API: https://market-api.probable.markets/public/api/v1/
 
-重要说明：
-- 公共 API 不提供价格/订单簿数据
-- /events 和 /markets 端点只返回市场列表、流动性、交易量
-- 所有价格相关端点（/price, /orderbook, /clob/tokens）均返回 500 错误
-- 价格数据可能需要通过智能合约或私有 API 获取
-- 因此套利监控暂时不包含 Probable Markets
+API 端点：
+- 市场 API: https://market-api.probable.markets/public/api/v1/
+  - 用于浏览事件、市场列表
+- 订单簿 API: https://api.probable.markets/public/api/v1/
+  - 提供价格、订单簿数据（公开访问）
+
+功能：
+- 获取所有事件/市场列表（支持分页）
+- 获取市场价格（Yes/No）
+- 获取订单簿数据
+- 搜索市场
+- 套利监控支持
 """
 
 import time
@@ -71,6 +76,7 @@ class ProbableClient:
     """
 
     BASE_URL = "https://market-api.probable.markets/public/api/v1"
+    ORDERBOOK_BASE_URL = "https://api.probable.markets/public/api/v1"
 
     # 市场结构类型
     MARKET_STRUCTURES = ['single', 'multi']
@@ -100,6 +106,137 @@ class ProbableClient:
         self._events_cache: List[Dict] = []
         self._cache_time = 0
         self._cache_duration = self.config.get('probable', {}).get('cache_seconds', 90)
+
+        # 订单簿 API 缓存（短期缓存，价格变化快）
+        self._price_cache: Dict[str, Dict] = {}
+        self._price_cache_time = 0
+        self._price_cache_duration = 10  # 价格缓存 10 秒
+
+    def get_token_price(self, token_id: str, side: str = "BUY") -> Optional[float]:
+        """
+        获取单个 token 的价格
+
+        Args:
+            token_id: CTF token ID
+            side: "BUY" 或 "SELL"
+
+        Returns:
+            价格或 None
+        """
+        try:
+            cache_key = f"{token_id}_{side}"
+            now = time.time()
+
+            # 检查缓存
+            if (now - self._price_cache_time < self._price_cache_duration and
+                cache_key in self._price_cache):
+                return self._price_cache[cache_key]
+
+            response = self.session.get(
+                f"{self.ORDERBOOK_BASE_URL}/price",
+                params={"token_id": token_id, "side": side},
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                price = float(data.get("price", 0))
+                self._price_cache[cache_key] = price
+                self._price_cache_time = now
+                return price
+            else:
+                logger.warning(f"获取 token {token_id} 价格失败: HTTP {response.status_code}")
+                return None
+
+        except Exception as e:
+            logger.error(f"获取 token 价格异常 {token_id}: {e}")
+            return None
+
+    def get_token_prices_batch(self, token_requests: List[Dict]) -> Dict[str, Dict]:
+        """
+        批量获取多个 token 的价格
+
+        Args:
+            token_requests: [{"token_id": "xxx", "side": "BUY"}, ...]
+
+        Returns:
+            {"token_id": {"BUY": 0.65, "SELL": 0.60}, ...}
+        """
+        try:
+            if not token_requests:
+                return {}
+
+            response = self.session.post(
+                f"{self.ORDERBOOK_BASE_URL}/prices",
+                json=token_requests,
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                # 更新缓存
+                now = time.time()
+                for token_id, prices in data.items():
+                    for side, price in prices.items():
+                        cache_key = f"{token_id}_{side}"
+                        self._price_cache[cache_key] = float(price)
+                    self._price_cache_time = now
+                return data
+            else:
+                logger.warning(f"批量获取价格失败: HTTP {response.status_code}")
+                return {}
+
+        except Exception as e:
+            logger.error(f"批量获取价格异常: {e}")
+            return {}
+
+    def get_order_book_by_token_id(self, token_id: str) -> Optional[Dict]:
+        """
+        获取单个 token 的完整订单簿
+
+        Args:
+            token_id: CTF token ID
+
+        Returns:
+            订单簿数据或 None
+            {
+                "bids": [{"price": "0.65", "size": "1000"}, ...],
+                "asks": [{"price": "0.66", "size": "800"}, ...],
+                "best_bid": "0.65",  # 最高买价
+                "best_ask": "0.66",  #最低卖价
+                "best_bid_size": "1000",
+                "best_ask_size": "800"
+            }
+        """
+        try:
+            response = self.session.get(
+                f"{self.ORDERBOOK_BASE_URL}/book",
+                params={"token_id": token_id},
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                bids = data.get('bids', [])
+                asks = data.get('asks', [])
+
+                # Probable 返回的 bids 从低到高排序，asks 从高到低排序
+                # 最佳 bid 是最后一个，最佳 ask 是最后一个
+                if bids:
+                    data['best_bid'] = bids[-1]['price']
+                    data['best_bid_size'] = bids[-1]['size']
+                if asks:
+                    data['best_ask'] = asks[-1]['price']
+                    data['best_ask_size'] = asks[-1]['size']
+
+                return data
+            else:
+                logger.warning(f"获取订单簿失败 {token_id}: HTTP {response.status_code}")
+                return None
+
+        except Exception as e:
+            logger.error(f"获取订单簿异常 {token_id}: {e}")
+            return None
 
     def get_events(self,
                    active_only: bool = True,
@@ -303,9 +440,19 @@ class ProbableClient:
             tokens = market.get('tokens', [])
             if len(tokens) >= 2:
                 # tokens[0] 通常是 Yes，tokens[1] 通常是 No
-                yes_price = self._extract_price_from_token(tokens[0], market)
-                no_price = self._extract_price_from_token(tokens[1], market)
-                return (yes_price, no_price)
+                yes_token_id = tokens[0].get('token_id')
+                no_token_id = tokens[1].get('token_id')
+
+                if not yes_token_id or not no_token_id:
+                    return None
+
+                # 使用订单簿 API 获取价格
+                # 对于预测市场，我们关注 SELL 价格（买入成本）
+                yes_price = self.get_token_price(str(yes_token_id), "SELL")
+                no_price = self.get_token_price(str(no_token_id), "SELL")
+
+                if yes_price is not None and no_price is not None:
+                    return (yes_price, no_price)
 
             return None
 
@@ -336,8 +483,7 @@ class ProbableClient:
         """
         获取订单簿数据（用于套利监控）
 
-        注意：Probable Markets 订单簿 API 目前不可用（返回 500 错误）
-        此方法从市场数据推导订单簿价格
+        使用 Probable Markets 订单簿 API 获取真实数据
 
         Args:
             market_id: 市场 ID
@@ -356,30 +502,39 @@ class ProbableClient:
                 logger.warning(f"市场 {market_id} tokens 数据不完整")
                 return None
 
-            # 推导价格：由于没有真实订单簿，使用流动性推导
-            # 这里使用简化逻辑：Yes + No = 1，添加合理价差
-            liquidity = float(market.get('liquidity', 0) or 0)
+            yes_token_id = tokens[0].get('token_id')
+            no_token_id = tokens[1].get('token_id')
 
-            # 高流动性市场价差更小
-            spread = max(0.01, min(0.05, 100000 / (liquidity + 1)) * 0.5)
+            if not yes_token_id or not no_token_id:
+                return None
 
-            # 假设中间价为 0.5（实际应该从历史交易或 ticker 获取）
-            mid_price = 0.5
+            # 获取 Yes 和 No 的订单簿
+            yes_book = self.get_order_book_by_token_id(str(yes_token_id))
+            no_book = self.get_order_book_by_token_id(str(no_token_id))
 
-            yes_bid = max(0.01, mid_price - spread)
-            yes_ask = min(0.99, mid_price + spread)
-            no_bid = max(0.01, 1.0 - yes_ask)
-            no_ask = min(0.99, 1.0 - yes_bid)
+            if not yes_book or not no_book:
+                return None
+
+            # 使用预先计算的最佳价格
+            yes_bid = float(yes_book.get('best_bid', 0))
+            yes_ask = float(yes_book.get('best_ask', 0))
+            yes_bid_size = float(yes_book.get('best_bid_size', 0))
+            yes_ask_size = float(yes_book.get('best_ask_size', 0))
+
+            no_bid = float(no_book.get('best_bid', 0))
+            no_ask = float(no_book.get('best_ask', 0))
+            no_bid_size = float(no_book.get('best_bid_size', 0))
+            no_ask_size = float(no_book.get('best_ask_size', 0))
 
             return ProbableOrderBook(
                 yes_bid=round(yes_bid, 4),
                 yes_ask=round(yes_ask, 4),
                 no_bid=round(no_bid, 4),
                 no_ask=round(no_ask, 4),
-                yes_bid_size=100.0,
-                yes_ask_size=100.0,
-                no_bid_size=100.0,
-                no_ask_size=100.0
+                yes_bid_size=yes_bid_size,
+                yes_ask_size=yes_ask_size,
+                no_bid_size=no_bid_size,
+                no_ask_size=no_ask_size
             )
 
         except Exception as e:
@@ -453,11 +608,22 @@ class ProbableClient:
                 yes_price = 0.5
                 no_price = 0.5
 
-                # 简化：使用默认价格，实际应该从 ticker 或订单簿获取
+                # 使用订单簿 API 获取真实价格
                 if len(tokens) >= 2:
-                    # 这里使用假设价格，因为订单簿 API 不可用
-                    yes_price = 0.5
-                    no_price = 0.5
+                    yes_token_id = tokens[0].get('token_id')
+                    no_token_id = tokens[1].get('token_id')
+
+                    if yes_token_id and no_token_id:
+                        # 批量获取价格
+                        price_data = self.get_token_prices_batch([
+                            {"token_id": str(yes_token_id), "side": "SELL"},
+                            {"token_id": str(no_token_id), "side": "SELL"}
+                        ])
+
+                        if str(yes_token_id) in price_data:
+                            yes_price = float(price_data[str(yes_token_id)].get("SELL", 0.5))
+                        if str(no_token_id) in price_data:
+                            no_price = float(price_data[str(no_token_id)].get("SELL", 0.5))
 
                 end_date_str = market.get('endDate', '')
                 end_date = self._parse_date(end_date_str) if end_date_str else ''
