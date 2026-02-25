@@ -307,11 +307,11 @@ def question_to_predict_slug(question_text):
 def platform_link_html(platform_name, market_url=None):
     """Generate colored platform link HTML"""
     platform_colors = {
-        'Polymarket': '#03a9f4',
+        'Polymarket': '#58a6ff',
         'Opinion': '#d29922',
         'Opinion.trade': '#d29922',
-        'Predict': '#3fb950',
-        'Predict.fun': '#3fb950',
+        'Predict': '#9c27b0',
+        'Predict.fun': '#9c27b0',
         'Kalshi': '#3fb950',
         'Probable': '#ff6b6b',
         'Probable.market': '#ff6b6b',
