@@ -2179,6 +2179,28 @@ def background_scanner():
 
             all_arb.sort(key=lambda x: x['arbitrage'], reverse=True)
 
+            # === 手动屏蔽已知错误匹配 ===
+            # 过滤掉人名不匹配的套利对（如 Eric Trump 被匹配到 Donald Trump）
+            def is_bad_match(arb):
+                market = arb.get('market', '').lower()
+                # 检查是否包含不同的特朗普名字
+                has_eric = 'eric trump' in market
+                has_donald = 'donald trump' in market
+                has_trump = 'trump' in market
+                # 如果同时包含 Eric 和 Donald，说明是错误匹配
+                # 或者如果标题包含 Eric Trump 但没有 Donald，却被匹配到了 Donald Trump 市场
+                if has_eric and has_donald:
+                    return True
+                # 如果是 Eric Trump 但 direction 显示是 Polymarket vs Probable 且另一方是 Donald
+                direction = arb.get('direction', '').lower()
+                if 'eric' in market and 'trump' in market:
+                    # 检查另一方是否是 donald trump
+                    if 'donald' in direction or 'probable' in direction:
+                        return True
+                return False
+
+            all_arb = [arb for arb in all_arb if not is_bad_match(arb)]
+
             # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes, same platform) ===
             # Uses _poly_events_cache populated by fetch_polymarket_data via /events endpoint.
             # Falls back to empty list if events fetch failed.
