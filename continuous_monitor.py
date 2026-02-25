@@ -12,6 +12,13 @@ import threading
 import traceback
 from datetime import datetime, timedelta
 
+PLATFORM_FEES = {
+    'polymarket': 0.02,    # 2% taker fee
+    'opinion': 0.02,       # 2% estimated
+    'predict': 0.02,       # feeRateBps: 200 = 2%
+    'kalshi': 0.02,        # ~2% effective
+}
+
 # UTF-8 encoding
 if sys.platform == 'win32':
     import io
@@ -299,22 +306,32 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
         comb2 = mb['yes'] + ma['no']
         arb2 = (1.0 - comb2) * 100
 
-        market_key = f"{name_a}-{name_b}-{ma.get('id','')}-{mb.get('id','')}"
+        market_key_base = f"{name_a}-{name_b}-{ma.get('id','')}-{mb.get('id','')}"
 
-        for arb_pct, direction, market_title, ya, na, yb, nb in [
-            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma.get('title', ''), ma['yes'], ma['no'], mb['yes'], mb['no']),
-            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb.get('title', ''), mb['yes'], mb['no'], ma['yes'], ma['no']),
+        # Platform fees (~2% each)
+        fee_a = PLATFORM_FEES.get(name_a.lower(), 0.02)
+        fee_b = PLATFORM_FEES.get(name_b.lower(), 0.02)
+
+        for arb_pct, direction, market_title, ya, na, yb, nb, fee_cost, key_suffix in [
+            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma.get('title', ''),
+             ma['yes'], ma['no'], mb['yes'], mb['no'],
+             (ma['yes'] * fee_a + mb['no'] * fee_b) * 100, '-yes1_no2'),
+            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb.get('title', ''),
+             mb['yes'], mb['no'], ma['yes'], ma['no'],
+             (mb['yes'] * fee_b + ma['no'] * fee_a) * 100, '-yes2_no1'),
         ]:
             if arb_pct >= threshold:
+                net_profit = round(arb_pct - fee_cost, 2)
                 results.append({
                     'market': market_title,
                     'platforms': f"{name_a} <-> {name_b}",
                     'direction': direction,
                     'arbitrage': round(arb_pct, 2),
+                    'net_profit': net_profit,
                     'a_yes': round(ya * 100, 2), 'a_no': round(na * 100, 2),
                     'b_yes': round(yb * 100, 2), 'b_no': round(nb * 100, 2),
                     'confidence': round(confidence, 2),
-                    'market_key': market_key,
+                    'market_key': market_key_base + key_suffix,
                 })
 
     results.sort(key=lambda x: x['arbitrage'], reverse=True)
@@ -324,6 +341,7 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
 def find_same_platform_arb(markets, platform_name, threshold=0.5):
     """Detect same-platform arbitrage: Yes_ask + No_ask < $1.00"""
     results = []
+    fee_rate = PLATFORM_FEES.get(platform_name.lower(), 0.02)
     for m in markets:
         try:
             yes_ask = m.get('yes', 0)
@@ -339,12 +357,16 @@ def find_same_platform_arb(markets, platform_name, threshold=0.5):
             if gross_pct < threshold:
                 continue
 
+            fee_cost = (yes_ask * fee_rate + no_ask * fee_rate) * 100
+            net_profit = round(gross_pct - fee_cost, 2)
+
             market_key = f"SAME-{platform_name}-{m.get('id', m.get('title', '')[:30])}"
             results.append({
                 'market': m.get('title', ''),
                 'platforms': f"{platform_name} (same platform)",
                 'direction': f"{platform_name} Buy Yes + Buy No",
                 'arbitrage': round(gross_pct, 2),
+                'net_profit': net_profit,
                 'a_yes': round(yes_ask * 100, 2), 'a_no': round(no_ask * 100, 2),
                 'b_yes': round(yes_ask * 100, 2), 'b_no': round(no_ask * 100, 2),
                 'confidence': 1.0,
@@ -361,12 +383,15 @@ def find_same_platform_arb(markets, platform_name, threshold=0.5):
 
 def format_arb_message(opp, scan_count):
     """Format arbitrage as Telegram message"""
+    net_profit = opp.get('net_profit')
+    net_line = f"<b>净利润:</b> {net_profit:.2f}%\n" if net_profit is not None else ""
     return (
         f"<b>🎯 套利机会 #{scan_count}</b>\n"
         f"<b>市场:</b> {opp['market']}\n"
         f"<b>平台:</b> {opp['platforms']}\n"
         f"<b>方向:</b> {opp['direction']}\n"
-        f"<b>套利空间:</b> {opp['arbitrage']:.2f}%\n\n"
+        f"<b>套利空间:</b> {opp['arbitrage']:.2f}%\n"
+        f"{net_line}\n"
         f"<b>Platform A:</b> Yes {opp['a_yes']}c  No {opp['a_no']}c\n"
         f"<b>Platform B:</b> Yes {opp['b_yes']}c  No {opp['b_no']}c\n"
         f"<b>置信度:</b> {opp['confidence']:.0%}\n"
