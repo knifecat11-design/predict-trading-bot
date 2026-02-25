@@ -1,6 +1,6 @@
 """
 Cross-platform prediction market arbitrage monitor
-Platforms: Polymarket, Opinion.trade, Predict.fun
+Platforms: Polymarket, Opinion.trade, Predict.fun, Probable.markets, Kalshi
 """
 
 import os
@@ -50,6 +50,10 @@ def load_config():
                 'opinion_poly': {
                     'min_arbitrage_threshold': float(os.getenv('OPINION_POLY_THRESHOLD', 2.0)),
                     'min_confidence': 0.2,
+                },
+                'probable': {
+                    'enabled': os.getenv('PROBABLE_ENABLED', 'true').lower() == 'true',
+                    'base_url': 'https://market-api.probable.markets/public/api/v1',
                 },
                 'notification': {
                     'telegram': {
@@ -115,6 +119,7 @@ def check_platform_api(config):
         'opinion': bool(config.get('opinion', {}).get('api_key', '')),
         'predict': False,
         'kalshi': True,  # Public API, always available
+        'probable': config.get('probable', {}).get('enabled', True),  # Public API
     }
 
     # Check Predict.fun API (v1 API: x-api-key header, /v1/ prefix)
@@ -141,6 +146,29 @@ def check_platform_api(config):
             logging.warning(f"Predict API check failed: {e}")
     else:
         logging.warning("Predict API: no API key configured")
+
+    # Check Probable Markets API
+    if status['probable']:
+        try:
+            import requests
+            base_url = config.get('probable', {}).get('base_url', 'https://market-api.probable.markets/public/api/v1')
+            logging.info(f"Probable API check: {base_url}/events")
+            resp = requests.get(
+                f"{base_url}/events",
+                params={'limit': 1},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                logging.info("Probable API check: OK (200)")
+            else:
+                logging.warning(f"Probable API check: HTTP {resp.status_code} - disabling")
+                status['probable'] = False
+        except requests.RequestException as e:
+            logging.warning(f"Probable API check failed (network): {e}")
+            status['probable'] = False
+        except Exception as e:
+            logging.warning(f"Probable API check failed: {e}")
+            status['probable'] = False
 
     return status
 
@@ -244,6 +272,7 @@ def fetch_kalshi_markets(config):
             title_html = m.get('title', '')
             title_plain = re.sub(r'<[^>]+>', '', title_html)
             parsed.append({
+                'id': m.get('id', ''),
                 'title': title_plain[:80],
                 'match_title': m.get('match_title', title_plain),
                 'yes': m['yes'], 'no': m['no'],
@@ -253,6 +282,17 @@ def fetch_kalshi_markets(config):
         return parsed
     except Exception as e:
         logging.error(f"Kalshi fetch: {e}")
+        return []
+
+
+def fetch_probable_markets(config):
+    """Fetch Probable Markets — using probable_api client"""
+    try:
+        from src.probable_api import ProbableClient
+        client = ProbableClient(config)
+        return client.get_markets_for_arbitrage(limit=200)
+    except Exception as e:
+        logging.error(f"Probable fetch: {e}")
         return []
 
 
@@ -376,8 +416,8 @@ def main():
     print()
     print("=" * 70)
     print("  Cross-Platform Arbitrage Monitor")
-    print("  Polymarket | Opinion.trade | Predict.fun")
-    print("  Version: v2.1 (2026-02-10) - Improved matching & dedup")
+    print("  Polymarket | Opinion.trade | Predict.fun | Probable | Kalshi")
+    print("  Version: v2.2 (2026-02-25) - Added Probable.markets")
     print("=" * 70)
     print()
 
@@ -399,6 +439,7 @@ def main():
     logger.info(f"  Opinion:    {'Active' if api_status['opinion'] else 'No API Key'}")
     logger.info(f"  Predict:    {'Active' if api_status['predict'] else 'No API Key'}")
     logger.info(f"  Kalshi:     {'Active' if api_status['kalshi'] else 'Inactive'}")
+    logger.info(f"  Probable:   {'Active' if api_status['probable'] else 'Inactive'}")
     logger.info(f"Threshold: {threshold}%  Interval: {scan_interval}s  Cooldown: {cooldown_minutes}m")
     logger.info("")
 
@@ -442,8 +483,9 @@ def main():
             opinion_markets = fetch_opinion_markets(config) if api_status['opinion'] else []
             predict_markets = fetch_predict_markets(config) if api_status['predict'] else []
             kalshi_markets = fetch_kalshi_markets(config) if api_status['kalshi'] else []
+            probable_markets = fetch_probable_markets(config) if api_status['probable'] else []
 
-            logger.info(f"  Polymarket: {len(poly_markets)}  Opinion: {len(opinion_markets)}  Predict: {len(predict_markets)}  Kalshi: {len(kalshi_markets)}")
+            logger.info(f"  Polymarket: {len(poly_markets)}  Opinion: {len(opinion_markets)}  Predict: {len(predict_markets)}  Kalshi: {len(kalshi_markets)}  Probable: {len(probable_markets)}")
 
             # Scan all pairs (only between active platforms with real data)
             all_opps = []
@@ -455,13 +497,23 @@ def main():
                 pairs.append((poly_markets, predict_markets, 'Polymarket', 'Predict', api_status['predict']))
             if poly_markets and kalshi_markets:
                 pairs.append((poly_markets, kalshi_markets, 'Polymarket', 'Kalshi', True))
+            if poly_markets and probable_markets:
+                pairs.append((poly_markets, probable_markets, 'Polymarket', 'Probable', api_status['probable']))
             if opinion_markets and predict_markets:
                 pairs.append((opinion_markets, predict_markets, 'Opinion', 'Predict',
                               api_status['opinion'] and api_status['predict']))
             if opinion_markets and kalshi_markets:
                 pairs.append((opinion_markets, kalshi_markets, 'Opinion', 'Kalshi', api_status['opinion']))
+            if opinion_markets and probable_markets:
+                pairs.append((opinion_markets, probable_markets, 'Opinion', 'Probable',
+                              api_status['opinion'] and api_status['probable']))
             if predict_markets and kalshi_markets:
                 pairs.append((predict_markets, kalshi_markets, 'Predict', 'Kalshi', api_status['predict']))
+            if predict_markets and probable_markets:
+                pairs.append((predict_markets, probable_markets, 'Predict', 'Probable',
+                              api_status['predict'] and api_status['probable']))
+            if kalshi_markets and probable_markets:
+                pairs.append((kalshi_markets, probable_markets, 'Kalshi', 'Probable', api_status['probable']))
 
             for ma, mb, na, nb, is_real in pairs:
                 opps = find_arbitrage(ma, mb, na, nb, threshold, min_confidence)

@@ -1,8 +1,8 @@
 """
 Cross-platform prediction market arbitrage dashboard
-Platforms: Polymarket, Opinion.trade, Predict.fun, Kalshi
+Platforms: Polymarket, Opinion.trade, Predict.fun, Probable.markets, Kalshi
 
-v3.2: + Kalshi platform, price history tracking, inverted-index matching
+v3.3: + Probable.markets platform, cross-platform arbitrage
 """
 
 import os
@@ -70,6 +70,7 @@ PLATFORM_FEES = {
     'opinion': 0.02,       # 2% estimated
     'predict': 0.02,       # feeRateBps: 200 = 2%
     'kalshi': 0.02,        # ~2% effective (Kalshi: 7% of profit ≈ 2% of trade value)
+    'probable': 0.00,      # 0% (Probable Markets claims zero fees)
 }
 
 # Global state
@@ -79,6 +80,7 @@ _state = {
         'opinion': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
         'predict': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
         'kalshi': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
+        'probable': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
     },
     'arbitrage': [],
     'multi_outcome_arb': [],   # Multi-result arbitrage: sum of Yes prices < $1 on same platform
