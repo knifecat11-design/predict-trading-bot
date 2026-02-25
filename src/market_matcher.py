@@ -554,6 +554,24 @@ class KeywordExtractor:
             # 这样原本 0.6 的分数会降到 0.42，低于 0.5 阈值而被拒绝
             score *= 0.65
 
+        # === 关键修复 2：单一实体共享时的人名匹配阈值 ===
+        # 防止 "Eric Trump" 被匹配到 "Donald Trump" 的问题
+        # 当两个市场只共享一个实体（如 trump）但核心词汇完全不同时，
+        # 要求更高的字符串相似度才能通过匹配。
+        # 这避免了不同人名（如 Eric vs Donald）仅因姓氏相同而被错误匹配。
+        if has_shared_entity and len(entities1 & entities2) == 1:
+            # 检查是否没有词汇重叠（说明是不同的人/事）
+            core_words1_no_entities = core_words1
+            core_words2_no_entities = core_words2
+            if len(core_words1_no_entities) >= 1 and len(core_words2_no_entities) >= 1:
+                # 两边都有核心词但无交集 → 很可能是不同的人或事
+                if not (core_words1_no_entities & core_words2_no_entities):
+                    # 此时要求字符串相似度至少 0.65 才能通过
+                    # "Eric Trump" vs "Donald Trump" 字符串相似度约 0.5，会被拒绝
+                    # "Donald Trump" vs "Trump president" 字符串相似度约 0.7，可以通过
+                    if str_similarity < 0.65:
+                        return 0.0
+
         return min(1.0, score)
 
 
