@@ -937,15 +937,15 @@ def fetch_probable_data(config):
 
                     if yes_token_id and no_token_id:
                         price_data = client.get_token_prices_batch([
-                            {'token_id': str(yes_token_id), 'side': 'SELL'},
-                            {'token_id': str(no_token_id), 'side': 'SELL'}
+                            {'token_id': str(yes_token_id), 'side': 'BUY'},
+                            {'token_id': str(no_token_id), 'side': 'BUY'}
                         ])
                         yes_str_id = str(yes_token_id)
                         no_str_id = str(no_token_id)
                         if yes_str_id in price_data:
-                            yes_price = float(price_data[yes_str_id].get('SELL', 0.5))
+                            yes_price = float(price_data[yes_str_id].get('BUY', 0.5))
                         if no_str_id in price_data:
-                            no_price = float(price_data[no_str_id].get('SELL', 0.5))
+                            no_price = float(price_data[no_str_id].get('BUY', 0.5))
 
                     # Filter extreme prices
                     if yes_price < PREDICT_EXTREME_FILTER or yes_price > (1 - PREDICT_EXTREME_FILTER):

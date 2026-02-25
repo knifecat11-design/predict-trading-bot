@@ -447,9 +447,9 @@ class ProbableClient:
                     return None
 
                 # 使用订单簿 API 获取价格
-                # 对于预测市场，我们关注 SELL 价格（买入成本）
-                yes_price = self.get_token_price(str(yes_token_id), "SELL")
-                no_price = self.get_token_price(str(no_token_id), "SELL")
+                # 对于套利（买入双方），我们需要 ASK 价格，即 side=BUY
+                yes_price = self.get_token_price(str(yes_token_id), "BUY")
+                no_price = self.get_token_price(str(no_token_id), "BUY")
 
                 if yes_price is not None and no_price is not None:
                     return (yes_price, no_price)
@@ -614,16 +614,16 @@ class ProbableClient:
                     no_token_id = tokens[1].get('token_id')
 
                     if yes_token_id and no_token_id:
-                        # 批量获取价格
+                        # 批量获取价格 - 使用 BUY 获取 ASK 价格（买入成本）
                         price_data = self.get_token_prices_batch([
-                            {"token_id": str(yes_token_id), "side": "SELL"},
-                            {"token_id": str(no_token_id), "side": "SELL"}
+                            {"token_id": str(yes_token_id), "side": "BUY"},
+                            {"token_id": str(no_token_id), "side": "BUY"}
                         ])
 
                         if str(yes_token_id) in price_data:
-                            yes_price = float(price_data[str(yes_token_id)].get("SELL", 0.5))
+                            yes_price = float(price_data[str(yes_token_id)].get("BUY", 0.5))
                         if str(no_token_id) in price_data:
-                            no_price = float(price_data[str(no_token_id)].get("SELL", 0.5))
+                            no_price = float(price_data[str(no_token_id)].get("BUY", 0.5))
 
                 end_date_str = market.get('endDate', '')
                 end_date = self._parse_date(end_date_str) if end_date_str else ''
