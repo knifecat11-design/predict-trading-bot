@@ -80,6 +80,7 @@ def send_telegram(message, config):
         token = config.get('notification', {}).get('telegram', {}).get('bot_token')
         chat_id = config.get('notification', {}).get('telegram', {}).get('chat_id')
         if not token or not chat_id:
+            logging.warning(f"Telegram credentials missing (token: {'set' if token else 'EMPTY'}, chat_id: {'set' if chat_id else 'EMPTY'})")
             return False
 
         import requests
@@ -149,21 +150,6 @@ def check_platform_api(config):
 # Cross-platform arbitrage scanning
 # ============================================================
 
-def extract_keywords(title):
-    """提取关键词（改进版）"""
-    import re
-    # 扩展停用词列表，提高匹配质量
-    stop_words = {
-        'will', 'won', 'the', 'a', 'an', 'be', 'by', 'in', 'on', 'at', 'to', 'for',
-        'of', 'is', 'it', 'or', 'and', 'not', 'but', 'can', 'has', 'had', 'have',
-        'from', 'with', 'this', 'that', 'are', 'was', 'were', 'been', 'being',
-        'get', 'got', 'out', 'over', 'than', 'then', 'when', 'what', 'which'
-    }
-    words = re.findall(r'\b\w+\b', title.lower())
-    # 只保留长度 > 3 的词（提高质量）
-    return {w for w in words if len(w) > 3 and w not in stop_words}
-
-
 def fetch_polymarket_markets(config):
     """Fetch Polymarket markets — reuse dashboard logic for best_ask pricing"""
     try:
@@ -176,6 +162,7 @@ def fetch_polymarket_markets(config):
             title_html = m.get('title', '')
             title_plain = re.sub(r'<[^>]+>', '', title_html)
             parsed.append({
+                'id': m.get('id', ''),
                 'title': title_plain[:80],
                 'match_title': m.get('match_title', title_plain),
                 'yes': m['yes'], 'no': m['no'],
@@ -200,7 +187,9 @@ def fetch_opinion_markets(config):
             title_html = m.get('title', '')
             title_plain = re.sub(r'<[^>]+>', '', title_html)
             parsed.append({
+                'id': m.get('id', ''),
                 'title': title_plain[:80],
+                'match_title': m.get('match_title', title_plain),
                 'yes': m['yes'], 'no': m['no'],
                 'volume': m.get('volume', 0),
                 'end_date': m.get('end_date', ''),
@@ -222,7 +211,9 @@ def fetch_predict_markets(config):
             title_html = m.get('title', '')
             title_plain = re.sub(r'<[^>]+>', '', title_html)
             parsed.append({
+                'id': m.get('id', ''),
                 'title': title_plain[:80],
+                'match_title': m.get('match_title', title_plain),
                 'yes': m['yes'], 'no': m['no'],
                 'volume': m.get('volume', 0),
                 'end_date': m.get('end_date', ''),
@@ -244,6 +235,7 @@ def fetch_kalshi_markets(config):
             title_html = m.get('title', '')
             title_plain = re.sub(r'<[^>]+>', '', title_html)
             parsed.append({
+                'id': m.get('id', ''),
                 'title': title_plain[:80],
                 'match_title': m.get('match_title', title_plain),
                 'yes': m['yes'], 'no': m['no'],
@@ -256,76 +248,50 @@ def fetch_kalshi_markets(config):
         return []
 
 
-def parse_end_date(date_str):
-    """解析结束日期字符串（改进版：添加具体异常处理）"""
-    if not date_str:
-        return None
-    try:
-        # 尝试 ISO 格式
-        if isinstance(date_str, str):
-            # 处理 Unix 时间戳（秒）
-            if date_str.isdigit():
-                return datetime.fromtimestamp(int(date_str))
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        elif isinstance(date_str, (int, float)):
-            return datetime.fromtimestamp(date_str)
-    except (ValueError, OSError) as e:
-        logging.debug(f"解析结束日期失败: {date_str}, 错误: {e}")
-        return None
-    except Exception as e:
-        logging.warning(f"解析结束日期时出现意外错误: {date_str}, 错误: {e}")
-        return None
-
 
 def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2):
-    """Find cross-platform arbitrage opportunities (one-to-one matching)
+    """Find cross-platform arbitrage using MarketMatcher (same algorithm as dashboard)
 
-    Uses greedy best-match-first to prevent the same market from matching
-    multiple targets (which causes false arbitrage from mismatched markets).
-    Uses match_title (with event context) when available.
+    Uses the sophisticated MarketMatcher from src/market_matcher.py with:
+    - Weighted scoring: Entity (40%) + Number/date (30%) + Vocabulary (20%) + String (10%)
+    - Manual mapping support
+    - Hard constraints on year/price matching
     """
-    # Phase 1: Find all potential matches with similarity scores
-    all_matches = []
-    for i, ma in enumerate(markets_a):
-        ka = extract_keywords(ma.get('match_title', ma['title']))
-        if not ka:
-            continue
-        for j, mb in enumerate(markets_b):
-            kb = extract_keywords(mb.get('match_title', mb['title']))
-            if not kb:
-                continue
+    try:
+        from src.market_matcher import MarketMatcher
+    except ImportError:
+        logging.error("Cannot import MarketMatcher — cross-platform matching disabled")
+        return []
 
-            inter = ka & kb
-            union = ka | kb
-            sim = len(inter) / len(union) if union else 0
-            if sim < 0.35:
-                continue
+    # Prepare markets with match_title for the matcher
+    markets_a_prepared = []
+    for m in markets_a:
+        m_copy = m.copy()
+        m_copy['match_title'] = m.get('match_title', m.get('title', ''))
+        markets_a_prepared.append(m_copy)
 
-            # End date check
-            end_a = parse_end_date(ma.get('end_date', ''))
-            end_b = parse_end_date(mb.get('end_date', ''))
-            if end_a and end_b:
-                time_diff = abs((end_a - end_b).days)
-                if time_diff > 5:
-                    continue
+    markets_b_prepared = []
+    for m in markets_b:
+        m_copy = m.copy()
+        m_copy['match_title'] = m.get('match_title', m.get('title', ''))
+        markets_b_prepared.append(m_copy)
 
-            all_matches.append((i, j, sim, inter))
+    matcher = MarketMatcher({})
+    matched_pairs = matcher.match_markets_cross_platform(
+        markets_a_prepared, markets_b_prepared,
+        title_field_a='match_title', title_field_b='match_title',
+        id_field_a='id', id_field_b='id',
+        platform_a=name_a.lower(), platform_b=name_b.lower(),
+        min_similarity=0.60,
+    )
 
-    # Phase 2: One-to-one matching (greedy, highest similarity first)
-    # Prevents market A matching multiple B targets → false arbitrage
-    all_matches.sort(key=lambda x: x[2], reverse=True)
-    matched_a = set()
-    matched_b = set()
+    logging.info(f"  [{name_a} vs {name_b}] MarketMatcher found {len(matched_pairs)} pairs")
 
     results = []
-    for i, j, sim, inter in all_matches:
-        if i in matched_a or j in matched_b:
+    for ma, mb, confidence in matched_pairs:
+        # Price sanity: genuine matched markets must roughly agree on probability
+        if abs(ma['yes'] - mb['yes']) > 0.40:
             continue
-        matched_a.add(i)
-        matched_b.add(j)
-
-        ma, mb = markets_a[i], markets_b[j]
-        market_key = f"{name_a}-{name_b}-{','.join(sorted(inter))}"
 
         comb1 = ma['yes'] + mb['no']
         arb1 = (1.0 - comb1) * 100
@@ -333,9 +299,11 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
         comb2 = mb['yes'] + ma['no']
         arb2 = (1.0 - comb2) * 100
 
+        market_key = f"{name_a}-{name_b}-{ma.get('id','')}-{mb.get('id','')}"
+
         for arb_pct, direction, market_title, ya, na, yb, nb in [
-            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma['title'], ma['yes'], ma['no'], mb['yes'], mb['no']),
-            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb['title'], mb['yes'], mb['no'], ma['yes'], ma['no']),
+            (arb1, f"{name_a} Buy Yes + {name_b} Buy No", ma.get('title', ''), ma['yes'], ma['no'], mb['yes'], mb['no']),
+            (arb2, f"{name_b} Buy Yes + {name_a} Buy No", mb.get('title', ''), mb['yes'], mb['no'], ma['yes'], ma['no']),
         ]:
             if arb_pct >= threshold:
                 results.append({
@@ -345,11 +313,49 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
                     'arbitrage': round(arb_pct, 2),
                     'a_yes': round(ya * 100, 2), 'a_no': round(na * 100, 2),
                     'b_yes': round(yb * 100, 2), 'b_no': round(nb * 100, 2),
-                    'confidence': round(sim, 2),
+                    'confidence': round(confidence, 2),
                     'market_key': market_key,
                 })
 
     results.sort(key=lambda x: x['arbitrage'], reverse=True)
+    return results
+
+
+def find_same_platform_arb(markets, platform_name, threshold=0.5):
+    """Detect same-platform arbitrage: Yes_ask + No_ask < $1.00"""
+    results = []
+    for m in markets:
+        try:
+            yes_ask = m.get('yes', 0)
+            no_ask = m.get('no', 0)
+            if not yes_ask or not no_ask or yes_ask <= 0 or no_ask <= 0:
+                continue
+
+            total_cost = yes_ask + no_ask
+            if total_cost >= 1.0:
+                continue
+
+            gross_pct = (1.0 - total_cost) * 100
+            if gross_pct < threshold:
+                continue
+
+            market_key = f"SAME-{platform_name}-{m.get('id', m.get('title', '')[:30])}"
+            results.append({
+                'market': m.get('title', ''),
+                'platforms': f"{platform_name} (same platform)",
+                'direction': f"{platform_name} Buy Yes + Buy No",
+                'arbitrage': round(gross_pct, 2),
+                'a_yes': round(yes_ask * 100, 2), 'a_no': round(no_ask * 100, 2),
+                'b_yes': round(yes_ask * 100, 2), 'b_no': round(no_ask * 100, 2),
+                'confidence': 1.0,
+                'market_key': market_key,
+                'is_real': True,
+            })
+        except Exception:
+            continue
+
+    if results:
+        logging.info(f"  [{platform_name} SAME] Found {len(results)} same-platform arbitrage")
     return results
 
 
@@ -445,9 +451,22 @@ def main():
 
             logger.info(f"  Polymarket: {len(poly_markets)}  Opinion: {len(opinion_markets)}  Predict: {len(predict_markets)}  Kalshi: {len(kalshi_markets)}")
 
-            # Scan all pairs (only between active platforms with real data)
+            # === Same-platform arbitrage (Yes+No < $1.00) ===
             all_opps = []
+            platform_market_pairs = [
+                ('Polymarket', poly_markets, True),
+                ('Opinion', opinion_markets, api_status['opinion']),
+                ('Predict', predict_markets, api_status['predict']),
+                ('Kalshi', kalshi_markets, True),
+            ]
+            for pname, pmarkets, is_real in platform_market_pairs:
+                if pmarkets:
+                    same_opps = find_same_platform_arb(pmarkets, pname, threshold=0.5)
+                    for opp in same_opps:
+                        opp['is_real'] = is_real
+                    all_opps.extend(same_opps)
 
+            # === Cross-platform arbitrage (all pairs) ===
             pairs = []
             if poly_markets and opinion_markets:
                 pairs.append((poly_markets, opinion_markets, 'Polymarket', 'Opinion', True))
@@ -465,12 +484,13 @@ def main():
 
             for ma, mb, na, nb, is_real in pairs:
                 opps = find_arbitrage(ma, mb, na, nb, threshold, min_confidence)
-                if opps:
-                    logger.info(f"  {na} <-> {nb}: {len(opps)} opportunities")
-
                 for opp in opps:
                     opp['is_real'] = is_real
-                    all_opps.append(opp)
+                all_opps.extend(opps)
+
+            same_count = sum(1 for o in all_opps if 'SAME-' in o.get('market_key', ''))
+            cross_count = len(all_opps) - same_count
+            logger.info(f"  Arbitrage found: {len(all_opps)} total ({same_count} same-platform, {cross_count} cross-platform)")
 
             # 发送 Telegram 通知（带去重逻辑）
             for opp in all_opps:
