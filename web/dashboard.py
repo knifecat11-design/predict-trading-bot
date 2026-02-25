@@ -1649,11 +1649,11 @@ def group_polymarket_events_for_combo(poly_events):
     return events
 
 
-def group_probable_events(raw_events):
-    """将 Probable Markets 事件按市场分组，形成多结果事件列表。
+def group_probable_events(probable_markets):
+    """将 Probable Markets 市场按事件分组，形成多结果事件列表。
 
-    Probable Markets 的数据结构：每个事件包含多个 markets，每个 market 有 2 个结果（Yes/No）。
-    大部分是二元市场，但有些可能有多个相关市场形成多结果事件。
+    Args:
+        probable_markets: 已解析的市场列表（来自 fetch_probable_data，包含 yes/no 价格）
 
     Returns:
         [{'event_key', 'event_title', 'event_title_norm', 'event_url',
@@ -1661,79 +1661,56 @@ def group_probable_events(raw_events):
     """
     from collections import defaultdict
 
-    # 先按事件标题分组（因为 Probable 可能把同一事件的不同结果分开存储）
+    # 按事件标题分组（从 URL 中提取事件标识）
     event_groups = defaultdict(list)
-    now_utc = datetime.now(timezone.utc)
 
-    for event in raw_events:
-        event_title = event.get('title', '')
-        if not event_title:
+    for market in probable_markets:
+        # 从 URL 提取事件标识
+        url = market.get('url', '')
+        yes_price = market.get('yes', 0)
+        no_price = market.get('no', 0)
+
+        # 过滤无效价格
+        if yes_price <= 0 or yes_price >= 1:
             continue
 
-        event_slug = event.get('slug', '')
-        event_url = f"https://probable.markets/event/{event_slug}" if event_slug else "https://probable.markets"
+        # 从标题中提取结果标签
+        title = strip_html(market.get('title', ''))
+        label = _extract_outcome_label(title) or title[:40]
 
-        # 获取该事件的所有市场
-        for market in event.get('markets', []):
-            # 过滤已关闭/过期的市场
-            if market.get('closed') is True or market.get('active') is False:
-                continue
+        # 使用 URL 的事件部分作为事件分组键
+        # URL 格式: https://probable.markets/event/event-slug?market=xxx
+        event_slug = url.split('/event/')[-1].split('?')[0] if '/event/' in url else 'unknown'
+        event_url = url.split('?')[0] if '?' in url else url
 
-            end_date_str = market.get('endDate', '')
-            if end_date_str:
-                try:
-                    end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
-                    if end_dt < now_utc:
-                        continue
-                except Exception:
-                    pass
+        event_groups[event_slug].append({
+            'label': label,
+            'label_norm': label.lower().strip(),
+            'price': round(yes_price, 4),
+            'url': url,
+            'platform': 'Probable',
+        })
 
-            # 从 tokens 获取价格
-            tokens = market.get('tokens', [])
-            if len(tokens) < 2:
-                continue
-
-            # Probable Markets 的 tokens 结构：[{'token_id': '...', 'outcome': 'Yes'}, {...}]
-            # 由于订单簿 API 不可用，使用估算价格
-            yes_price = 0.5
-            no_price = 0.5
-
-            # 过滤无效价格
-            if yes_price <= 0 or yes_price >= 1:
-                continue
-
-            # 获取结果标签（从 question 中提取）
-            question = market.get('question', '')
-            label = _extract_outcome_label(question) or question[:40]
-
-            outcomes.append({
-                'label': label,
-                'label_norm': label.lower().strip(),
-                'price': round(yes_price, 4),
-                'url': event_url,
-                'platform': 'Probable',
-                'platform_color': '#6366f1',
-            })
-
-    # 将 outcomes 按事件分组
+    # 构建结果
     result = []
-    for event_title, outcomes_list in event_groups.items():
+    for event_slug, outcomes_list in event_groups.items():
         if len(outcomes_list) < 3:
             continue
 
-        # 标准化事件标题用于匹配
-        event_title_norm = _normalize_title_for_matching(event_title)
+        # 使用第一个结果的标题作为事件标题
+        first_title = outcomes_list[0].get('label', '')
+        event_title = f"Probable: {event_slug}"
 
         result.append({
-            'event_key': f'prob-{hash(event_title)}',
+            'event_key': f'prob-{event_slug}',
             'event_title': event_title,
-            'event_title_norm': event_title_norm,
+            'event_title_norm': _normalize_title_for_matching(event_title),
             'event_url': event_url,
             'platform': 'Probable',
             'outcomes': outcomes_list,
         })
 
-    logger.debug(f"Probable event groups: {len(result)} events with 3+ outcomes")
+    logger.info(f"Probable event groups: {len(result)} events with 3+ outcomes")
     return result
 
 
@@ -1781,7 +1758,7 @@ def find_cross_platform_multi_outcome_arb(
         logger.warning(f"Cross-combo: Polymarket grouping error: {e}")
         poly_event_groups = []
     try:
-        probable_events = group_probable_events(_probable_raw_cache) if _probable_raw_cache else []
+        probable_events = group_probable_events(probable_markets) if probable_markets else []
     except Exception as e:
         logger.warning(f"Cross-combo: Probable grouping error: {e}")
         probable_events = []
