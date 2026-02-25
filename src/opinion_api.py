@@ -423,58 +423,51 @@ class OpinionAPIClient:
         )
 
     def _get_orderbook_http(self, token_id: str) -> Optional[OpinionOrderBook]:
-        """使用 HTTP 获取订单簿（带 429 重试，不返回假数据）"""
+        """使用 HTTP 获取订单簿（不返回假数据）"""
         params = {'token_id': token_id}
 
-        for attempt in range(2):  # 最多 2 次尝试
-            try:
-                response = self.session.get(
-                    f"{self.base_url}/token/orderbook",
-                    params=params,
-                    timeout=10
-                )
-            except Exception:
-                return None
-
-            if response.status_code == 429:
-                # 速率限制：短暂等待后重试
-                time.sleep(1.5)
-                continue
-
-            if response.status_code != 200:
-                return None
-
-            data = response.json()
-            # Opinion API 所有响应都包装在 result 字段中
-            result = data.get('result', {})
-            if not isinstance(result, dict):
-                result = {}
-            bids = result.get('bids', [])
-            asks = result.get('asks', [])
-
-            # 如果订单簿为空，返回 None 而不是假数据
-            if not bids or not asks:
-                logger.debug(f"Token {token_id} 订单簿为空")
-                return None
-
-            # 使用 min/max 获取真正的最优报价，避免依赖 API 排序顺序
-            # Opinion API 的 asks 按降序排列（最差报价在前），不能直接取 [0]
-            # best_bid = 最高买价, best_ask = 最低卖价
-            best_bid_entry = max(bids, key=lambda b: float(b['price']))
-            best_ask_entry = min(asks, key=lambda a: float(a['price']))
-
-            yes_bid = float(best_bid_entry['price'])
-            yes_ask = float(best_ask_entry['price'])
-            bid_size = float(best_bid_entry['size'])
-            ask_size = float(best_ask_entry['size'])
-
-            return OpinionOrderBook(
-                yes_bid=yes_bid,
-                yes_ask=yes_ask,
-                yes_bid_size=bid_size,
-                yes_ask_size=ask_size
+        try:
+            response = self.session.get(
+                f"{self.base_url}/token/orderbook",
+                params=params,
+                timeout=10
             )
-        return None
+        except Exception:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        # Opinion API 所有响应都包装在 result 字段中
+        result = data.get('result', {})
+        if not isinstance(result, dict):
+            result = {}
+        bids = result.get('bids', [])
+        asks = result.get('asks', [])
+
+        # 如果订单簿为空，返回 None 而不是假数据
+        if not bids or not asks:
+            logger.debug(f"Token {token_id} 订单簿为空")
+            return None
+
+        # 使用 min/max 获取真正的最优报价，避免依赖 API 排序顺序
+        # Opinion API 的 asks 按降序排列（最差报价在前），不能直接取 [0]
+        # best_bid = 最高买价, best_ask = 最低卖价
+        best_bid_entry = max(bids, key=lambda b: float(b['price']))
+        best_ask_entry = min(asks, key=lambda a: float(a['price']))
+
+        yes_bid = float(best_bid_entry['price'])
+        yes_ask = float(best_ask_entry['price'])
+        bid_size = float(best_bid_entry['size'])
+        ask_size = float(best_ask_entry['size'])
+
+        return OpinionOrderBook(
+            yes_bid=yes_bid,
+            yes_ask=yes_ask,
+            yes_bid_size=bid_size,
+            yes_ask_size=ask_size
+        )
 
     def get_market_info(self, market_id: str) -> Optional[OpinionMarket]:
         """获取市场详细信息（改进版：独立获取 No 价格）"""
