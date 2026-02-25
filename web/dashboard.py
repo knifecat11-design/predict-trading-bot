@@ -2,7 +2,7 @@
 Cross-platform prediction market arbitrage dashboard
 Platforms: Polymarket, Opinion.trade, Predict.fun, Probable.markets, Kalshi
 
-v3.3: + Probable.markets platform
+v3.4: + Improved market matching for person names (Eric vs Donald Trump)
 """
 
 import os
