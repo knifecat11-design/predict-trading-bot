@@ -42,6 +42,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
                     logger=False, engineio_logger=False)
 _ws_clients = 0  # Track connected WebSocket clients
 
+_TZ_CST = timezone(timedelta(hours=8))   # UTC+8 显示时间
+
 # ============================================================
 # Configuration constants - tune these to control resource usage
 # ============================================================
@@ -799,7 +801,7 @@ def fetch_kalshi_data(config):
 
 def update_price_history(arbitrage_list):
     """Track price history for arbitrage opportunities (last N data points per market)"""
-    now_str = datetime.now().strftime('%H:%M:%S')
+    now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
     history = _state.get('price_history', {})
 
     # Record current prices for active opportunities
@@ -906,7 +908,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         arb2 = (1.0 - combined2) * 100
 
         market_key_base = f"{platform_a_name}-{platform_b_name}-{ma.get('id','')}-{mb.get('id','')}"
-        now_str = datetime.now().strftime('%H:%M:%S')
+        now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
 
         fee_a = PLATFORM_FEES.get(platform_a_name.lower(), 0.02)
         fee_b = PLATFORM_FEES.get(platform_b_name.lower(), 0.02)
@@ -971,7 +973,7 @@ def find_same_platform_arbitrage(markets, platform_name, threshold=0.5):
     """
     opportunities = []
     fee_rate = PLATFORM_FEES.get(platform_name.lower(), 0.02)
-    now_str = datetime.now().strftime('%H:%M:%S')
+    now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
 
     for m in markets:
         try:
@@ -1045,7 +1047,7 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
 
     opportunities = []
     fee_rate = PLATFORM_FEES.get('polymarket', 0.02)
-    now_str = datetime.now().strftime('%H:%M:%S')
+    now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
     events_checked = 0
     events_with_3plus = 0
 
@@ -1532,7 +1534,7 @@ def find_cross_platform_multi_outcome_arb(
     # Pairwise event matching across platforms, then build merged outcome map
     processed_combos = set()
     opportunities = []
-    now_str = datetime.now().strftime('%H:%M:%S')
+    now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
     fee_rate = 0.02  # conservative 2% per leg
 
     for i, (plat_a, events_a) in enumerate(all_platform_groups):
@@ -1696,7 +1698,7 @@ def _emit_platform_update(platform, status, count):
                 'platform': platform,
                 'status': status,
                 'count': count,
-                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
             }, namespace='/')
         except Exception as e:
             logger.debug(f"WebSocket platform emit error: {e}")
@@ -1723,7 +1725,7 @@ def _on_ws_price_update(platform: str, market_id: str, yes_ask: float, no_ask: f
                 'market_id': market_id,
                 'yes_ask': round(yes_ask, 4),
                 'no_ask': round(no_ask, 4),
-                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
             }, namespace='/')
         except Exception:
             pass
@@ -1879,8 +1881,8 @@ def background_scanner():
                     if key in old_arb_map:
                         old_opp = old_arb_map[key]
                         price_change = abs(new_opp['arbitrage'] - old_opp['arbitrage'])
-                        if price_change < 0.5:
-                            old_opp['timestamp'] = datetime.now().strftime('%H:%M:%S')
+                        if price_change < 0.1:
+                            old_opp['timestamp'] = datetime.now(_TZ_CST).strftime('%H:%M:%S')
                             new_arb_map[key] = old_opp
 
                 # Sort and limit
@@ -1899,7 +1901,7 @@ def background_scanner():
                 _state['multi_outcome_arb'] = sorted_multi[:MAX_ARBITRAGE_DISPLAY]
 
                 _state['scan_count'] += 1
-                _state['last_scan'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                _state['last_scan'] = datetime.now(_TZ_CST).strftime('%Y-%m-%d %H:%M:%S')
                 _state['threshold'] = threshold
                 _state['error'] = None
 
