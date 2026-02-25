@@ -1694,7 +1694,7 @@ def group_probable_events(raw_events):
                 'label_norm': label.lower().strip(),
                 'price': round(yes_price, 4),
                 'url': event_url,
-                'platform': 'Pro',
+                'platform': 'Probable',
                 'platform_color': '#6366f1',
             })
 
@@ -1712,7 +1712,7 @@ def group_probable_events(raw_events):
             'event_title': event_title,
             'event_title_norm': event_title_norm,
             'event_url': event_url,
-            'platform': 'Pro',
+            'platform': 'Probable',
             'outcomes': outcomes_list,
         })
 
@@ -1905,11 +1905,11 @@ def find_cross_platform_multi_outcome_arb(
                                 'label_norm': ln,
                                 'price': prob_info['yes_price'],
                                 'url': prob_info['url'],
-                                'platform': 'Pro',
+                                'platform': 'Probable',
                                 'platform_color': '#6366f1',
                             }
-                            if 'Pro' not in plat_opts:
-                                plat_opts['Pro'] = probable_outcome
+                            if 'Probable' not in plat_opts:
+                                plat_opts['Probable'] = probable_outcome
                             break
 
                 # Build optimal portfolio: pick cheapest platform per outcome
@@ -2128,7 +2128,7 @@ def background_scanner():
             if not PROBABLE_ARBITRAGE_ENABLED:
                 logger.info("[Probable] 套利计算已禁用 - 公共API不提供价格数据")
             else:
-                platform_market_pairs.append(('Pro', probable_markets))
+                platform_market_pairs.append(('Probable', probable_markets))
 
             for pname, pmarkets in platform_market_pairs:
                 if pmarkets:
@@ -2148,10 +2148,10 @@ def background_scanner():
             # Probable Markets arbitrage disabled - price data unavailable via public API
             if PROBABLE_ARBITRAGE_ENABLED:
                 cross_platform_combos.extend([
-                    (poly_markets, probable_markets, 'Polymarket', 'Pro'),
-                    (opinion_markets, probable_markets, 'Opinion', 'Pro'),
-                    (predict_markets, probable_markets, 'Predict', 'Pro'),
-                    (kalshi_markets, probable_markets, 'Kalshi', 'Pro'),
+                    (poly_markets, probable_markets, 'Polymarket', 'Probable'),
+                    (opinion_markets, probable_markets, 'Opinion', 'Probable'),
+                    (predict_markets, probable_markets, 'Predict', 'Probable'),
+                    (kalshi_markets, probable_markets, 'Kalshi', 'Probable'),
                 ])
             for markets_a, markets_b, name_a, name_b in cross_platform_combos:
                 if markets_a and markets_b:
@@ -2252,7 +2252,7 @@ def background_scanner():
                 f"Scan #{_state['scan_count']} ({scan_duration:.1f}s): "
                 f"Poly={len(poly_markets)} Opinion={len(opinion_markets)} "
                 f"Predict={len(predict_markets)} Kalshi={len(kalshi_markets)} "
-                f"Pro={len(probable_markets)} "
+                f"Probable={len(probable_markets)} "
                 f"Arb={len(all_arb)}(same={same_count},cross={cross_count},net+={profitable}) "
                 f"WS={_ws_clients}"
             )
