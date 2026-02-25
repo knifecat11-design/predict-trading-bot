@@ -216,7 +216,7 @@ class OpinionAPIClient:
         return all_markets[:limit]
 
     def _get_markets_http(self, status: str, limit: int, page_size: int, max_pages: int, sort_by: int = 5) -> List[Dict]:
-        """使用 HTTP 获取市场列表"""
+        """使用 HTTP 获取市场列表（带速率控制）"""
         all_markets = []
 
         for page in range(max_pages):
@@ -254,8 +254,27 @@ class OpinionAPIClient:
                     logger.error("Opinion API 认证失败，请检查 API Key")
                     break
                 elif response.status_code == 429:
-                    logger.warning("Opinion API 速率限制")
-                    break
+                    # 速率限制：等待后重试当前页，而不是直接放弃
+                    logger.warning(f"Opinion API 速率限制 (page {page})，等待 3s 重试...")
+                    time.sleep(3.0)
+                    response = self.session.get(
+                        f"{self.base_url}/market",
+                        params=params,
+                        timeout=15
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        result = data.get('result', {})
+                        batch = result.get('list', []) if isinstance(result, dict) else []
+                        if batch:
+                            all_markets.extend(batch)
+                            if len(batch) < page_size:
+                                break
+                        else:
+                            break
+                    else:
+                        logger.error(f"Opinion API 重试仍失败: HTTP {response.status_code}")
+                        break
                 else:
                     logger.error(f"Opinion API HTTP {response.status_code}")
                     break
@@ -263,10 +282,14 @@ class OpinionAPIClient:
                 logger.error(f"HTTP 请求失败: {e}")
                 break
 
+            # 分页速率控制：每页间隔 100ms，确保不超过 15 req/s
+            if page > 0:
+                time.sleep(0.1)
+
         if all_markets:
             self._markets_cache = all_markets
             self._cache_time = time.time()
-            logger.info(f"Opinion (HTTP): 获取到 {len(all_markets)} 个市场")
+            logger.info(f"Opinion (HTTP): 获取到 {len(all_markets)} 个市场 ({page + 1} 页)")
 
         return all_markets[:limit]
 
@@ -400,15 +423,27 @@ class OpinionAPIClient:
         )
 
     def _get_orderbook_http(self, token_id: str) -> Optional[OpinionOrderBook]:
-        """使用 HTTP 获取订单簿（改进版：不返回假数据）"""
+        """使用 HTTP 获取订单簿（带 429 重试，不返回假数据）"""
         params = {'token_id': token_id}
-        response = self.session.get(
-            f"{self.base_url}/token/orderbook",
-            params=params,
-            timeout=10
-        )
 
-        if response.status_code == 200:
+        for attempt in range(2):  # 最多 2 次尝试
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/token/orderbook",
+                    params=params,
+                    timeout=10
+                )
+            except Exception:
+                return None
+
+            if response.status_code == 429:
+                # 速率限制：短暂等待后重试
+                time.sleep(1.5)
+                continue
+
+            if response.status_code != 200:
+                return None
+
             data = response.json()
             # Opinion API 所有响应都包装在 result 字段中
             result = data.get('result', {})
