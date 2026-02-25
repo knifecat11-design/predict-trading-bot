@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OutcomeRef:
     """跨平台 outcome 引用"""
-    platform: str          # 'polymarket', 'opinion', 'predict'
+    platform: str          # 'polymarket', 'opinion', 'predict', 'probable'
     market_id: str         # 该平台上的市场 ID
     outcome: str           # 'Yes' 或 'No' 或具体 outcome 名
 
@@ -49,6 +49,10 @@ class MarketMatch:
     predict_title: Optional[str] = None
     opinion_id: Optional[str] = None
     opinion_title: Optional[str] = None
+    probable_id: Optional[str] = None
+    probable_title: Optional[str] = None
+    kalshi_id: Optional[str] = None
+    kalshi_title: Optional[str] = None
     confidence: float = 0.0  # 匹配置信度 0-1
 
 

@@ -36,16 +36,24 @@ polymarket:
   base_url: "https://gamma-api.polymarket.com"
   enabled: true                 # 是否启用Polymarket数据
 
-# Probable.markets 配置（已弃用 - 403 错误，不再使用）
-# probable:
-#   base_url: "https://api.probable.markets"
-#   api_key: "YOUR_PROBABLE_API_KEY"
-#   secret: "YOUR_PROBABLE_SECRET"
-#   passphrase: "YOUR_PROBABLE_PASSPHRASE"
-#   wallet_address: "YOUR_WALLET_ADDRESS"
-#   chain_id: 1
-#   market_id: "default-market"
-#   enabled: false
+# Probable.markets 配置
+probable:
+  base_url: "https://market-api.probable.markets/public/api/v1"
+  enabled: true                 # 是否启用Probable Markets数据
+  cache_seconds: 90             # 缓存时间（秒）
+  # 注意：Probable Markets API 是公开的，不需要认证
+  # 订单簿 API 目前不可用（返回 500 错误），价格从市场数据推导
+
+# Opinion.trade 配置
+opinion:
+  base_url: "https://proxy.opinion.trade:8443/openapi"
+  api_key: "YOUR_OPINION_API_KEY"
+  enabled: false                # 是否启用 Opinion.trade
+
+# Kalshi 配置
+kalshi:
+  base_url: "https://kalshi.com"
+  enabled: true                 # Kalshi API 是公开的
 
 # 套利监控配置
 arbitrage:
@@ -53,6 +61,12 @@ arbitrage:
   min_arbitrage_threshold: 2.0  # 最小套利空间阈值（%），Yes+No < 100-2% 时通知
   scan_interval: 10             # 扫描间隔（秒）
   cooldown_minutes: 5           # 同一市场通知冷却时间（分钟）
+  # 跨平台套利配对
+  pairs:
+    - polymarket-probable       # Polymarket vs Probable Markets
+    - polymarket-predict        # Polymarket vs Predict.fun
+    - polymarket-opinion        # Polymarket vs Opinion.trade
+    - polymarket-kalshi         # Polymarket vs Kalshi
 
 # WebSocket 实时监控配置
 websocket:
@@ -69,11 +83,12 @@ market_match:
   max_matches: 10                # 每个市场最大匹配候选数量
   cache_minutes: 30             # 匹配结果缓存时间（分钟）
   # 手动市场映射（可选，用于覆盖自动匹配）
-  # 格式：polymarket_id: {predict_id: "...", probable_id: "..."}
+  # 格式：polymarket_id: {predict_id: "...", probable_id: "...", opinion_id: "..."}
   manual_mappings:
     # "0x1234567890abcdef":
     #   predict_id: "market-abc-123"
     #   probable_id: "market-xyz-789"
+    #   opinion_id: "market-opinion-456"
 
 # 通知配置
 notification:
