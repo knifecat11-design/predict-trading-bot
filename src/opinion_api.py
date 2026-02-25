@@ -64,7 +64,7 @@ class OpinionAPIClient:
         # 缓存
         self._markets_cache: List[Dict] = []
         self._cache_time = 0
-        self._cache_duration = opinion_config.get('cache_seconds', 30)
+        self._cache_duration = opinion_config.get('cache_seconds', 90)
 
         # 初始化客户端
         self._client = None
@@ -109,7 +109,8 @@ class OpinionAPIClient:
         # Opinion API 使用小写 'apikey' 头（不是 Authorization 或 X-API-Key）
         self.session.headers.update({
             'apikey': self.api_key,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
         })
         self._use_sdk = False
         logger.info(f"Opinion API: {self.base_url} (HTTP 只读模式)")

@@ -53,7 +53,8 @@ class PredictAPIClient:
         if self.api_key:
             self.session.headers.update({
                 'x-api-key': self.api_key,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Accept-Encoding': 'gzip, deflate',
             })
             logger.info(f"Predict.fun API: {self.base_url}/v1 (已配置认证)")
         else:
@@ -62,7 +63,7 @@ class PredictAPIClient:
         # 缓存
         self._cache: List[Dict] = []
         self._cache_time = 0
-        self._cache_duration = config.get('api', {}).get('cache_seconds', 30)
+        self._cache_duration = config.get('api', {}).get('cache_seconds', 90)
 
     def get_markets(self, status: str = 'open', sort: str = 'popular', limit: int = 100) -> List[Dict]:
         """获取市场列表 (v1 API)"""

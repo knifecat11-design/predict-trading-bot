@@ -32,12 +32,13 @@ class KalshiClient:
         self.session = requests.Session()
         self.session.headers.update({
             'Accept': 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
             'User-Agent': 'PredictBot/1.0',
         })
 
         self._markets_cache: List[Dict] = []
         self._cache_time = 0
-        self._cache_duration = kalshi_cfg.get('cache_seconds', 30)
+        self._cache_duration = kalshi_cfg.get('cache_seconds', 90)
 
     def get_markets(self, status: str = 'open', limit: int = 5000,
                     max_pages: int = 10) -> List[Dict]:
