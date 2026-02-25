@@ -453,15 +453,13 @@
         }
 
         function platformTag(name) {
-            // Extract plain text from HTML link if present
-            const plainName = name.replace(/<[^>]*>/g, '').trim();
-            const n = plainName.toLowerCase();
+            const n = name.toLowerCase();
             const cls = n.includes('poly') ? 'poly' :
                         n.includes('opinion') ? 'opinion' :
                         n.includes('kalshi') ? 'kalshi' :
                         n.includes('probable') ? 'probable' :
                         n.includes('cross') ? 'cross' : 'predict';
-            return `<span class="tag ${cls}">${plainName}</span>`;
+            return `<span class="tag ${cls}">${name}</span>`;
         }
 
         function sparklineSvg(points, width, height) {

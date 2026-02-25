@@ -305,15 +305,7 @@ def question_to_predict_slug(question_text):
 
 
 def platform_link_html(platform_name, market_url=None):
-    """Generate colored platform link HTML"""
-    platform_colors = {
-        'Polymarket': '#03a9f4',
-        'Opinion': '#d29922',
-        'Opinion.trade': '#d29922',
-        'Predict': '#9c27b0',
-        'Predict.fun': '#9c27b0',
-        'Kalshi': '#3fb950',
-    }
+    """Generate platform link HTML - color controlled by CSS"""
     platform_urls = {
         'Polymarket': 'https://polymarket.com',
         'Opinion': 'https://opinion.trade',
@@ -321,10 +313,12 @@ def platform_link_html(platform_name, market_url=None):
         'Predict': 'https://predict.fun',
         'Predict.fun': 'https://predict.fun',
         'Kalshi': 'https://kalshi.com',
+        'Probable': 'https://probable.markets',
+        'Probable.market': 'https://probable.markets',
     }
-    color = platform_colors.get(platform_name, '#888')
     url = market_url if market_url else platform_urls.get(platform_name, '#')
-    return f"<a href='{url}' target='_blank' style='color:{color};font-weight:600;text-decoration:none'>{platform_name}</a>"
+    # 移除内联样式颜色，让前端 CSS 类 .tag.xxx 控制颜色
+    return f"<a href='{url}' target='_blank' style='font-weight:600;text-decoration:none'>{platform_name}</a>"
 
 
 def fetch_polymarket_data(config):
