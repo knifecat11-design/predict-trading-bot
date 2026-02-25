@@ -71,6 +71,7 @@ class PolymarketClient:
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept-Encoding': 'gzip, deflate',
             'Origin': 'https://polymarket.com',
             'Referer': 'https://polymarket.com/'
         })
@@ -78,7 +79,7 @@ class PolymarketClient:
         # 缓存
         self._markets_cache: List[Dict] = []
         self._cache_time = 0
-        self._cache_duration = self.config.get('polymarket', {}).get('cache_seconds', 30)
+        self._cache_duration = self.config.get('polymarket', {}).get('cache_seconds', 90)
 
     def get_markets(self,
                     tag: str = None,

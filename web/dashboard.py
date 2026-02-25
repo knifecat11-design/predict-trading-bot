@@ -53,11 +53,11 @@ POLYMARKET_FETCH_LIMIT = 5000     # Polymarket markets to fetch (total active ~2
 OPINION_MARKET_LIMIT = 1000       # Total opinion markets to fetch (high cap, API returns ~150)
 OPINION_PARSED_LIMIT = 800        # Max parsed opinion markets
 PREDICT_EXTREME_FILTER = 0.02     # Filter markets with Yes < 2% or > 98%
-PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching (default)
-OPINION_FETCH_WORKERS = 12        # Concurrent threads for Opinion orderbook fetching
-PREDICT_ORDERBOOK_WORKERS = 15    # Concurrent threads for Predict orderbook fetching
+PRICE_FETCH_WORKERS = 6           # Concurrent threads for price/orderbook fetching (default)
+OPINION_FETCH_WORKERS = 6         # Concurrent threads for Opinion orderbook fetching
+PREDICT_ORDERBOOK_WORKERS = 8     # Concurrent threads for Predict orderbook fetching
 PREDICT_FETCH_MAX_PAGES = 20      # Max cursor pagination pages for Predict (was 10)
-MIN_SCAN_INTERVAL = 45            # Minimum seconds between scans (prevents overload)
+MIN_SCAN_INTERVAL = 60            # Minimum seconds between scans (prevents overload)
 KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
 PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # Multi-outcome arb: minimum total cost (sum of all Yes-ask prices) to be considered valid.
@@ -1843,7 +1843,19 @@ def background_scanner():
         logger.warning(f"WebSocket feeds failed to start (falling back to polling only): {e}")
         _realtime_feed = None
 
+    IDLE_SCAN_MULTIPLIER = 4  # Scan 4x slower when no clients connected
+    _idle_logged = False
+
     while True:
+        # Idle mode: scan much less frequently when nobody is viewing the dashboard
+        if _ws_clients == 0:
+            if not _idle_logged:
+                logger.info("No WebSocket clients — entering idle mode (reduced scan frequency)")
+                _idle_logged = True
+            time.sleep(scan_interval * IDLE_SCAN_MULTIPLIER)
+        else:
+            _idle_logged = False
+
         # Scan guard: skip if previous scan is still running
         if _scanning.is_set():
             logger.warning("Previous scan still running, skipping this cycle")
