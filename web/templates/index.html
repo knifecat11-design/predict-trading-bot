@@ -152,6 +152,7 @@
         .tag.opinion { background: #3b2f1a; color: #d29922; }
         .tag.predict { background: #1a3b2f; color: #3fb950; }
         .tag.kalshi { background: #0e2a0e; color: #3fb950; }
+        .tag.probable { background: #2a1a1a; color: #ff6b6b; }
         .tag.cross { background: #3a2a10; color: #ff9800; }
         .cross-combo-row td:first-child { border-left: 2px solid #ff980033; }
         .direction { font-size: 12px; color: #8b949e; }
@@ -163,7 +164,7 @@
         /* Market list */
         .market-lists {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 16px;
         }
         .market-list {
@@ -317,6 +318,16 @@
                     <div>Status: <span class="num" id="status-kalshi">...</span></div>
                 </div>
             </div>
+            <div class="platform-card" id="card-probable">
+                <div class="name">
+                    <span class="status-dot unknown" id="dot-probable"></span>
+                    Probable
+                </div>
+                <div class="platform-stats">
+                    <div>Markets: <span class="num" id="count-probable">-</span></div>
+                    <div>Status: <span class="num" id="status-probable">...</span></div>
+                </div>
+            </div>
         </div>
 
         <!-- Scan Statistics -->
@@ -327,6 +338,7 @@
             <span style="color:#d29922">OP <span class="val" id="stat-op">-</span></span>
             <span style="color:#9c27b0">Pre <span class="val" id="stat-pre">-</span></span>
             <span style="color:#3fb950">Kal <span class="val" id="stat-kal">-</span></span>
+            <span style="color:#ff6b6b">Prob <span class="val" id="stat-prob">-</span></span>
             <span>|</span>
             <span>Same-Plat: <span class="val" id="stat-same">0</span></span>
             <span>Cross-Plat: <span class="val" id="stat-cross">0</span></span>
@@ -402,6 +414,10 @@
                 <div class="market-list-header">Kalshi</div>
                 <div id="list-kalshi"><div class="empty-state">Loading...</div></div>
             </div>
+            <div class="market-list">
+                <div class="market-list-header">Probable.markets</div>
+                <div id="list-probable"><div class="empty-state">Loading...</div></div>
+            </div>
         </div>
     </div>
 
@@ -440,6 +456,7 @@
             const cls = n.includes('poly') ? 'poly' :
                         n.includes('opinion') ? 'opinion' :
                         n.includes('kalshi') ? 'kalshi' :
+                        n.includes('probable') ? 'probable' :
                         n.includes('cross') ? 'cross' : 'predict';
             return `<span class="tag ${cls}">${name}</span>`;
         }
@@ -561,7 +578,7 @@
             document.getElementById('last-scan').textContent = data.last_scan || '-';
 
             // Platforms
-            ['polymarket', 'opinion', 'predict', 'kalshi'].forEach(p => {
+            ['polymarket', 'opinion', 'predict', 'kalshi', 'probable'].forEach(p => {
                 const info = data.platforms[p] || {};
                 const dot = document.getElementById(`dot-${p}`);
                 dot.className = `status-dot ${info.status || 'unknown'}`;
@@ -581,6 +598,7 @@
                 document.getElementById('stat-op').textContent = stats.opinion_count || 0;
                 document.getElementById('stat-pre').textContent = stats.predict_count || 0;
                 document.getElementById('stat-kal').textContent = stats.kalshi_count || 0;
+                document.getElementById('stat-prob').textContent = stats.probable_count || 0;
                 document.getElementById('stat-same').textContent = stats.same_platform_arb || 0;
                 document.getElementById('stat-cross').textContent = stats.cross_platform_arb || 0;
                 document.getElementById('stat-multi').textContent = stats.multi_outcome_arb || 0;
