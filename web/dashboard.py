@@ -55,9 +55,9 @@ POLYMARKET_FETCH_LIMIT = 5000     # Polymarket markets to fetch (total active ~2
 OPINION_MARKET_LIMIT = 1000       # Total opinion markets to fetch (high cap, API returns ~150)
 OPINION_PARSED_LIMIT = 800        # Max parsed opinion markets
 PREDICT_EXTREME_FILTER = 0.02     # Filter markets with Yes < 2% or > 98%
-PRICE_FETCH_WORKERS = 6           # Concurrent threads for price/orderbook fetching (default)
-OPINION_FETCH_WORKERS = 6         # Concurrent threads for Opinion orderbook fetching
-PREDICT_ORDERBOOK_WORKERS = 8     # Concurrent threads for Predict orderbook fetching
+PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching (default)
+OPINION_FETCH_WORKERS = 12        # Concurrent threads for Opinion orderbook fetching
+PREDICT_ORDERBOOK_WORKERS = 15    # Concurrent threads for Predict orderbook fetching
 PREDICT_FETCH_MAX_PAGES = 20      # Max cursor pagination pages for Predict (was 10)
 MIN_SCAN_INTERVAL = 60            # Minimum seconds between scans (prevents overload)
 KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
@@ -1846,18 +1846,8 @@ def background_scanner():
         _realtime_feed = None
 
     IDLE_SCAN_MULTIPLIER = 4  # Scan 4x slower when no clients connected
-    _idle_logged = False
 
     while True:
-        # Idle mode: scan much less frequently when nobody is viewing the dashboard
-        if _ws_clients == 0:
-            if not _idle_logged:
-                logger.info("No WebSocket clients — entering idle mode (reduced scan frequency)")
-                _idle_logged = True
-            time.sleep(scan_interval * IDLE_SCAN_MULTIPLIER)
-        else:
-            _idle_logged = False
-
         # Scan guard: skip if previous scan is still running
         if _scanning.is_set():
             logger.warning("Previous scan still running, skipping this cycle")
@@ -2076,7 +2066,16 @@ def background_scanner():
         finally:
             _scanning.clear()
 
-        time.sleep(scan_interval)
+        # Idle mode: sleep longer when no WebSocket clients, but check frequently
+        # so we wake up quickly when someone connects
+        if _ws_clients == 0:
+            wait_total = scan_interval * IDLE_SCAN_MULTIPLIER
+            waited = 0
+            while waited < wait_total and _ws_clients == 0:
+                time.sleep(5)
+                waited += 5
+        else:
+            time.sleep(scan_interval)
 
 
 # ============================================================
