@@ -322,7 +322,7 @@
             <div class="platform-card" id="card-probable">
                 <div class="name">
                     <span class="status-dot unknown" id="dot-probable"></span>
-                    <span style="color: #ff6b6b;">Probable.market</span>
+                    Probable.market
                 </div>
                 <div class="platform-stats">
                     <div>Markets: <span class="num" id="count-probable">-</span></div>
@@ -416,7 +416,7 @@
                 <div id="list-kalshi"><div class="empty-state">Loading...</div></div>
             </div>
             <div class="market-list">
-                <div class="market-list-header" style="color: #ff6b6b;">Probable.market</div>
+                <div class="market-list-header">Probable.market</div>
                 <div id="list-probable"><div class="empty-state">Loading...</div></div>
             </div>
         </div>
@@ -512,6 +512,7 @@
                     'opinion': '#d29922',
                     'predict': '#9c27b0',
                     'kalshi': '#3fb950',
+                    'probable': '#ff6b6b',
                 };
                 const pillsHtml = (a.outcomes || []).map(o => {
                     const platKey = (o.platform || '').toLowerCase();
