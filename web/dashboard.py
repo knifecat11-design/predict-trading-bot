@@ -52,7 +52,7 @@ OPINION_DETAILED_FETCH = 100      # Individual No price fetches (concurrent)
 POLYMARKET_FETCH_LIMIT = 5000     # Polymarket markets to fetch (total active ~28k)
 OPINION_MARKET_LIMIT = 1000       # Total opinion markets to fetch (high cap, API returns ~150)
 OPINION_PARSED_LIMIT = 800        # Max parsed opinion markets
-PREDICT_EXTREME_FILTER = 0.03     # Filter markets with Yes < 3% or > 97%
+PREDICT_EXTREME_FILTER = 0.02     # Filter markets with Yes < 2% or > 98%
 PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching (default)
 OPINION_FETCH_WORKERS = 12        # Concurrent threads for Opinion orderbook fetching
 PREDICT_ORDERBOOK_WORKERS = 15    # Concurrent threads for Predict orderbook fetching
@@ -467,6 +467,9 @@ def fetch_opinion_data(config):
                 valid_markets.append(m)
         logger.info(f"Opinion: {len(valid_markets)} markets have yes+no tokens")
 
+        # 等待 API 速率限制窗口重置（分页刚消耗了大量请求额度）
+        time.sleep(2.0)
+
         # Fetch BOTH Yes and No token orderbooks concurrently.
         # token_prices: token_id -> (ask, bid)
         token_prices = {}
@@ -474,12 +477,14 @@ def fetch_opinion_data(config):
         _op_lock = threading.Lock()
 
         def fetch_token_orderbook(token_id):
-            """Fetch orderbook for one token; return (token_id, ask, bid)."""
+            """Fetch orderbook for one token; return (token_id, ask, bid).
+            Rate limit at application level (API: 15 req/s).
+            _get_orderbook_http itself also handles 429 with retry.
+            """
             with _op_lock:
                 _op_call_count[0] += 1
-                # Rate limit: stay under 15 req/s (API limit)
-                # Sleep 1s every 12 calls — conservative to avoid 429 during burst
-                if _op_call_count[0] % 12 == 0:
+                # 每 10 个请求暂停 1s → 稳定 10 req/s，给 API 留充足余量
+                if _op_call_count[0] % 10 == 0:
                     time.sleep(1.0)
             ob = client.get_order_book(token_id)
             if ob is not None and ob.yes_ask > 0:
@@ -494,14 +499,14 @@ def fetch_opinion_data(config):
             tokens_to_fetch.append(m['yesTokenId'])
             tokens_to_fetch.append(m['noTokenId'])
 
-        logger.info(f"Opinion: fetching {len(tokens_to_fetch)} token orderbooks (Yes+No) concurrently "
-                    f"with {OPINION_FETCH_WORKERS} workers")
+        logger.info(f"Opinion: fetching {len(tokens_to_fetch)} token orderbooks (Yes+No) "
+                    f"with {OPINION_FETCH_WORKERS} workers, rate ~10 req/s")
 
         with ThreadPoolExecutor(max_workers=OPINION_FETCH_WORKERS, thread_name_prefix='op-ob') as ex:
             futures = {ex.submit(fetch_token_orderbook, t): t for t in tokens_to_fetch}
-            for future in as_completed(futures, timeout=180):
+            for future in as_completed(futures, timeout=300):
                 try:
-                    token_id, ask, bid = future.result(timeout=15)
+                    token_id, ask, bid = future.result(timeout=20)
                     if ask is not None:
                         token_prices[token_id] = (ask, bid)
                 except Exception:
@@ -509,26 +514,43 @@ def fetch_opinion_data(config):
 
         yes_hits = sum(1 for m in valid_markets if m['yesTokenId'] in token_prices)
         no_hits  = sum(1 for m in valid_markets if m['noTokenId']  in token_prices)
-        logger.info(f"Opinion: {yes_hits} Yes asks, {no_hits} No asks fetched (first pass)")
+        logger.info(f"Opinion: {yes_hits} Yes asks, {no_hits} No asks (first pass)")
 
-        # Retry pass: re-fetch failed token orderbooks for better coverage
+        # Retry pass: re-fetch failed tokens — wait for rate limit window to reset
         failed_tokens = [t for t in tokens_to_fetch if t not in token_prices]
         if failed_tokens:
-            logger.info(f"Opinion: retrying {len(failed_tokens)} failed token orderbooks...")
-            _op_call_count[0] = 0  # reset rate limit counter for retry pass
+            logger.info(f"Opinion: {len(failed_tokens)} failed, waiting 3s before retry...")
+            time.sleep(3.0)
+            _op_call_count[0] = 0  # reset rate limit counter
             with ThreadPoolExecutor(max_workers=OPINION_FETCH_WORKERS, thread_name_prefix='op-retry') as ex:
                 futures = {ex.submit(fetch_token_orderbook, t): t for t in failed_tokens}
-                for future in as_completed(futures, timeout=90):
+                for future in as_completed(futures, timeout=120):
                     try:
-                        token_id, ask, bid = future.result(timeout=15)
+                        token_id, ask, bid = future.result(timeout=20)
                         if ask is not None:
                             token_prices[token_id] = (ask, bid)
                     except Exception:
                         pass
 
+            # Second retry for remaining failures
+            still_failed = [t for t in failed_tokens if t not in token_prices]
+            if still_failed:
+                logger.info(f"Opinion: {len(still_failed)} still failed, second retry in 5s...")
+                time.sleep(5.0)
+                _op_call_count[0] = 0
+                with ThreadPoolExecutor(max_workers=8, thread_name_prefix='op-retry2') as ex:
+                    futures = {ex.submit(fetch_token_orderbook, t): t for t in still_failed}
+                    for future in as_completed(futures, timeout=120):
+                        try:
+                            token_id, ask, bid = future.result(timeout=20)
+                            if ask is not None:
+                                token_prices[token_id] = (ask, bid)
+                        except Exception:
+                            pass
+
             yes_hits = sum(1 for m in valid_markets if m['yesTokenId'] in token_prices)
             no_hits  = sum(1 for m in valid_markets if m['noTokenId']  in token_prices)
-            logger.info(f"Opinion: {yes_hits} Yes asks, {no_hits} No asks after retry")
+            logger.info(f"Opinion: {yes_hits} Yes asks, {no_hits} No asks (after retries)")
 
         # Build parsed list using actual ask prices
         parsed = []
@@ -718,16 +740,17 @@ def fetch_predict_data(config):
 
         logger.info(f"Predict: got {len(orderbook_results)} orderbooks (first pass)")
 
-        # Retry pass for failed orderbook fetches
+        # Retry pass for failed orderbook fetches (with delay)
         failed_ids = [mid for mid in markets_needing_fetch
                       if mid not in orderbook_results]
         if failed_ids:
-            logger.info(f"Predict: retrying {len(failed_ids)} failed orderbooks...")
+            logger.info(f"Predict: {len(failed_ids)} failed, waiting 2s before retry...")
+            time.sleep(2.0)
             with ThreadPoolExecutor(max_workers=PREDICT_ORDERBOOK_WORKERS,
                                     thread_name_prefix='pred-retry') as ex:
                 futures = {ex.submit(fetch_orderbook, mid): mid
                            for mid in failed_ids}
-                for future in as_completed(futures, timeout=90):
+                for future in as_completed(futures, timeout=120):
                     try:
                         mid, ob = future.result(timeout=15)
                         if ob is not None:
