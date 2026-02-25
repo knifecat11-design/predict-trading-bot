@@ -953,11 +953,11 @@ def fetch_probable_data(config):
 
                     # Build URL
                     event_slug = event.get('slug', '')
-                    url = f"https://probable.markets/events/{event_slug}" if event_slug else "https://probable.markets"
+                    url = f"https://probable.markets/event/{event_slug}" if event_slug else "https://probable.markets"
 
                     parsed.append({
                         'id': market_id,
-                        'title': f"<a href='{url}' target='_blank' style='color:#6366f1;text-decoration:none'>{question[:80]}</a>",
+                        'title': f"<a href='{url}' target='_blank' style='color:#f85149;text-decoration:none'>{question[:80]}</a>",
                         'url': url,
                         'match_title': question,
                         'yes': round(yes_price, 4),
@@ -1667,7 +1667,7 @@ def group_probable_events(raw_events):
             continue
 
         event_slug = event.get('slug', '')
-        event_url = f"https://probable.markets/events/{event_slug}" if event_slug else "https://probable.markets"
+        event_url = f"https://probable.markets/event/{event_slug}" if event_slug else "https://probable.markets"
 
         # 获取该事件的所有市场
         for market in event.get('markets', []):
