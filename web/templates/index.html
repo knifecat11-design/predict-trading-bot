@@ -322,11 +322,13 @@
                 <div class="name">
                     <span class="status-dot unknown" id="dot-probable"></span>
                     Probable
+                    <span style="font-size:10px;color:#f85149;margin-left:4px">价格不可用</span>
                 </div>
                 <div class="platform-stats">
                     <div>Markets: <span class="num" id="count-probable">-</span></div>
                     <div>Status: <span class="num" id="status-probable">...</span></div>
                 </div>
+                <div style="font-size:10px;color:#8b949e;margin-top:4px;padding:0 8px">公共API暂不支持价格数据</div>
             </div>
         </div>
 
@@ -375,7 +377,7 @@
         <!-- Multi-result Arbitrage -->
         <div class="section-title">
             Multi-result Arbitrage
-            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— buy all outcomes when total cost &lt; $1 · same-platform (Polymarket) &amp; cross-platform combos (Kalshi+Predict+Opinion)</span>
+            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— buy all outcomes when total cost &lt; $1 · same-platform (Polymarket) &amp; cross-platform combos (Kalshi+Predict+Opinion) · <span style="color:#f85149">Probable暂不支持</span></span>
             <span id="multi-arb-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
         </div>
         <table class="multi-arb-table">
@@ -549,16 +551,21 @@
                 el.innerHTML = '<div class="empty-state">No data</div>';
                 return;
             }
-            el.innerHTML = markets.slice(0, 10).map(m => `
+            // Check if this is Probable Markets (prices unavailable via public API)
+            const isProbable = containerId === 'list-probable';
+            el.innerHTML = markets.slice(0, 10).map(m => {
+                const priceDisplay = isProbable
+                    ? '<span>Yes: <span style="color:#8b949e">N/A</span></span><span>No: <span style="color:#8b949e">N/A</span></span>'
+                    : `<span>Yes: <span class="yes">${(m.yes * 100).toFixed(1)}c</span></span><span>No: <span class="no">${(m.no * 100).toFixed(1)}c</span></span>`;
+                return `
                 <div class="market-item">
                     <div class="title">${m.title}</div>
                     <div class="prices">
-                        <span>Yes: <span class="yes">${(m.yes * 100).toFixed(1)}c</span></span>
-                        <span>No: <span class="no">${(m.no * 100).toFixed(1)}c</span></span>
+                        ${priceDisplay}
                         <span>Vol: $${Math.round(m.volume).toLocaleString()}</span>
                     </div>
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
         }
 
         function flashCard(platform) {

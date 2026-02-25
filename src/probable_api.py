@@ -2,6 +2,13 @@
 Probable.markets 市场监测 API
 专注于数据监测，不支持交易
 Probable Markets API: https://market-api.probable.markets/public/api/v1/
+
+重要说明：
+- 公共 API 不提供价格/订单簿数据
+- /events 和 /markets 端点只返回市场列表、流动性、交易量
+- 所有价格相关端点（/price, /orderbook, /clob/tokens）均返回 500 错误
+- 价格数据可能需要通过智能合约或私有 API 获取
+- 因此套利监控暂时不包含 Probable Markets
 """
 
 import time

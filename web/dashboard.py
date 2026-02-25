@@ -68,6 +68,10 @@ PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # must be excluded — if no outcome covers the actual result, all positions expire worthless.
 MULTI_OUTCOME_MIN_TOTAL_COST = 0.50   # Require sum ≥ 50c to pass MECE sanity check
 
+# Probable Markets price data unavailable - public API doesn't provide order book prices
+# Disable Probable Markets arbitrage until official API access is obtained
+PROBABLE_ARBITRAGE_ENABLED = False
+
 # Platform fee rates (used for net profit calculation)
 PLATFORM_FEES = {
     'polymarket': 0.02,    # 2% taker fee
@@ -2118,8 +2122,13 @@ def background_scanner():
             platform_market_pairs = [
                 ('Polymarket', poly_markets), ('Opinion', opinion_markets),
                 ('Predict', predict_markets), ('Kalshi', kalshi_markets),
-                ('Probable', probable_markets),
             ]
+            # Probable Markets arbitrage disabled - price data unavailable via public API
+            if not PROBABLE_ARBITRAGE_ENABLED:
+                logger.info("[Probable] 套利计算已禁用 - 公共API不提供价格数据")
+            else:
+                platform_market_pairs.append(('Probable', probable_markets))
+
             for pname, pmarkets in platform_market_pairs:
                 if pmarkets:
                     same_arb = find_same_platform_arbitrage(pmarkets, pname, threshold=0.5)
@@ -2131,14 +2140,18 @@ def background_scanner():
                 (poly_markets, opinion_markets, 'Polymarket', 'Opinion'),
                 (poly_markets, predict_markets, 'Polymarket', 'Predict'),
                 (poly_markets, kalshi_markets, 'Polymarket', 'Kalshi'),
-                (poly_markets, probable_markets, 'Polymarket', 'Probable'),
                 (opinion_markets, predict_markets, 'Opinion', 'Predict'),
                 (opinion_markets, kalshi_markets, 'Opinion', 'Kalshi'),
-                (opinion_markets, probable_markets, 'Opinion', 'Probable'),
                 (predict_markets, kalshi_markets, 'Predict', 'Kalshi'),
-                (predict_markets, probable_markets, 'Predict', 'Probable'),
-                (kalshi_markets, probable_markets, 'Kalshi', 'Probable'),
             ]
+            # Probable Markets arbitrage disabled - price data unavailable via public API
+            if PROBABLE_ARBITRAGE_ENABLED:
+                cross_platform_combos.extend([
+                    (poly_markets, probable_markets, 'Polymarket', 'Probable'),
+                    (opinion_markets, probable_markets, 'Opinion', 'Probable'),
+                    (predict_markets, probable_markets, 'Predict', 'Probable'),
+                    (kalshi_markets, probable_markets, 'Kalshi', 'Probable'),
+                ])
             for markets_a, markets_b, name_a, name_b in cross_platform_combos:
                 if markets_a and markets_b:
                     arb = find_cross_platform_arbitrage(
@@ -2155,9 +2168,11 @@ def background_scanner():
 
             # === Cross-platform multi-outcome combo (Kalshi + Predict + Polymarket + Opinion + Probable) ===
             # For the same event, pick cheapest platform per outcome to build a complete portfolio.
+            # Probable Markets arbitrage disabled - price data unavailable via public API
+            probable_for_arb = probable_markets if PROBABLE_ARBITRAGE_ENABLED else []
             cross_combo_arb = find_cross_platform_multi_outcome_arb(
                 _kalshi_raw_cache, _predict_raw_cache, _predict_ob_cache,
-                _poly_events_cache, opinion_markets, probable_markets, threshold=0.5)
+                _poly_events_cache, opinion_markets, probable_for_arb, threshold=0.5)
 
             # Merge same-platform and cross-platform multi-outcome into one list
             all_multi_arb = multi_outcome_arb + cross_combo_arb
