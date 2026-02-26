@@ -1316,8 +1316,8 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
         if total_cost < MULTI_OUTCOME_MIN_TOTAL_COST:
             continue
 
-        if total_cost >= 1.0:
-            continue  # 无套利
+        if total_cost >= 0.98:
+            continue  # 扣除手续费后无利润（98c + 2% fee ≈ 100c）
 
         gross_pct = (1.0 - total_cost) * 100
         if gross_pct < threshold:
@@ -1928,8 +1928,8 @@ def find_cross_platform_multi_outcome_arb(
                 # MECE sanity check
                 if total_cost < MULTI_OUTCOME_MIN_TOTAL_COST:
                     continue
-                if total_cost >= 1.0:
-                    continue
+                if total_cost >= 0.98:
+                    continue  # 扣除手续费后无利润（98c + 2% fee ≈ 100c）
 
                 gross_pct = (1.0 - total_cost) * 100
                 if gross_pct < threshold:
