@@ -503,7 +503,7 @@
                 // shares: 可购买的股数（两个平台 ask_size 之和，或单方，或 N/A）
                 const shares = a.shares;
                 const sharesStr = shares !== null && shares !== undefined
-                    ? shares.toLocaleString()
+                    ? shares.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                     : 'N/A';
                 const sharesStyle = 'color:#d29922;font-weight:600';  // 黄色显示 shares
                 const isCrossCombo = a.arb_type === 'cross_combo';

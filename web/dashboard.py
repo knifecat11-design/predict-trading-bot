@@ -58,9 +58,10 @@ PREDICT_EXTREME_FILTER = 0.02     # Filter markets with Yes < 2% or > 98%
 PRICE_FETCH_WORKERS = 10          # Concurrent threads for price/orderbook fetching (default)
 OPINION_FETCH_WORKERS = 12        # Concurrent threads for Opinion orderbook fetching
 PREDICT_ORDERBOOK_WORKERS = 15    # Concurrent threads for Predict orderbook fetching
-PREDICT_FETCH_MAX_PAGES = 20      # Max cursor pagination pages for Predict (was 10)
+PREDICT_FETCH_MAX_PAGES = 50      # Max cursor pagination pages for Predict (20→50, up to 5000 markets)
 MIN_SCAN_INTERVAL = 60            # Minimum seconds between scans (prevents overload)
 KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
+PROBABLE_FETCH_LIMIT = 5000       # Probable events to fetch (was 1000)
 PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # Multi-outcome arb: minimum total cost (sum of all Yes-ask prices) to be considered valid.
 # A genuine MECE event (election, sports champion) has outcomes summing close to $1.
@@ -921,7 +922,7 @@ def fetch_probable_data(config):
         client = ProbableClient(config)
 
         # Get all events with pagination, then extract markets
-        events = client.get_events(active_only=True, limit=1000)
+        events = client.get_events(active_only=True, limit=PROBABLE_FETCH_LIMIT)
         logger.info(f"Probable: fetched {len(events)} events")
 
         # Cache raw events for cross-platform multi-outcome analysis
@@ -984,7 +985,7 @@ def fetch_probable_data(config):
                 return token_id, None
 
         if yes_token_ids:
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            with ThreadPoolExecutor(max_workers=20) as executor:
                 futures = {executor.submit(fetch_orderbook, tid): tid for tid in yes_token_ids}
                 for future in as_completed(futures):
                     token_id, book = future.result()
