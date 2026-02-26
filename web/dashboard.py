@@ -923,7 +923,8 @@ def fetch_probable_data(config):
         # Cache raw events for cross-platform multi-outcome analysis
         _probable_raw_cache = events
 
-        parsed = []
+        # First pass: collect markets and their token IDs
+        markets_to_fetch = []
         for event in events:
             for market in event.get('markets', []):
                 try:
@@ -938,48 +939,88 @@ def fetch_probable_data(config):
                     if len(tokens) < 2:
                         continue
 
-                    # Use orderbook API to get real prices
                     yes_token_id = tokens[0].get('token_id')
                     no_token_id = tokens[1].get('token_id')
 
-                    yes_price = 0.5
-                    no_price = 0.5
-
-                    if yes_token_id and no_token_id:
-                        price_data = client.get_token_prices_batch([
-                            {'token_id': str(yes_token_id), 'side': 'BUY'},
-                            {'token_id': str(no_token_id), 'side': 'BUY'}
-                        ])
-                        yes_str_id = str(yes_token_id)
-                        no_str_id = str(no_token_id)
-                        if yes_str_id in price_data:
-                            yes_price = float(price_data[yes_str_id].get('BUY', 0.5))
-                        if no_str_id in price_data:
-                            no_price = float(price_data[no_str_id].get('BUY', 0.5))
-
-                    # Filter extreme prices
-                    if yes_price < PREDICT_EXTREME_FILTER or yes_price > (1 - PREDICT_EXTREME_FILTER):
+                    if not yes_token_id or not no_token_id:
                         continue
 
-                    # Build URL
                     event_slug = event.get('slug', '')
                     url = f"https://probable.markets/event/{event_slug}" if event_slug else "https://probable.markets"
 
-                    parsed.append({
-                        'id': market_id,
-                        'title': f"<a href='{url}' target='_blank' style='color:#f85149;text-decoration:none'>{question[:80]}</a>",
-                        'url': url,
-                        'match_title': question,
-                        'yes': round(yes_price, 4),
-                        'no': round(no_price, 4),
-                        'ask_size': 0,  # Probable ask_size 需单独调用 orderbook API 获取
-                        'volume': volume_24h,
+                    markets_to_fetch.append({
+                        'market_id': market_id,
+                        'question': question,
                         'liquidity': liquidity,
-                        'platform': 'probable',
+                        'volume_24h': volume_24h,
                         'end_date': end_date,
+                        'yes_token_id': str(yes_token_id),
+                        'no_token_id': str(no_token_id),
+                        'url': url,
+                        'event_slug': event_slug,
                     })
                 except (ValueError, TypeError, KeyError):
                     continue
+
+        # Batch fetch prices
+        token_pairs = [{'token_id': m['yes_token_id'], 'side': 'BUY'} for m in markets_to_fetch] + \
+                      [{'token_id': m['no_token_id'], 'side': 'BUY'} for m in markets_to_fetch]
+        price_data = client.get_token_prices_batch(token_pairs) if token_pairs else {}
+
+        # Concurrently fetch orderbook ask sizes for yes tokens
+        yes_token_ids = list({m['yes_token_id'] for m in markets_to_fetch})
+        orderbook_data = {}
+
+        def fetch_orderbook(token_id):
+            try:
+                book = client.get_order_book_by_token_id(token_id)
+                return token_id, book
+            except Exception as e:
+                logger.debug(f"Failed to fetch orderbook for {token_id}: {e}")
+                return token_id, None
+
+        if yes_token_ids:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {executor.submit(fetch_orderbook, tid): tid for tid in yes_token_ids}
+                for future in as_completed(futures):
+                    token_id, book = future.result()
+                    if book:
+                        orderbook_data[token_id] = book
+
+        # Build parsed list
+        parsed = []
+        for m in markets_to_fetch:
+            yes_str_id = m['yes_token_id']
+            no_str_id = m['no_token_id']
+
+            yes_price = float(price_data.get(yes_str_id, {}).get('BUY', 0.5)) if yes_str_id in price_data else 0.5
+            no_price = float(price_data.get(no_str_id, {}).get('BUY', 0.5)) if no_str_id in price_data else 0.5
+
+            # Get ask_size from orderbook
+            ask_size = 0
+            if yes_str_id in orderbook_data:
+                try:
+                    ask_size = int(orderbook_data[yes_str_id].get('best_ask_size', 0) or 0)
+                except (ValueError, TypeError):
+                    ask_size = 0
+
+            # Filter extreme prices
+            if yes_price < PREDICT_EXTREME_FILTER or yes_price > (1 - PREDICT_EXTREME_FILTER):
+                continue
+
+            parsed.append({
+                'id': m['market_id'],
+                'title': f"<a href='{m['url']}' target='_blank' style='color:#f85149;text-decoration:none'>{m['question'][:80]}</a>",
+                'url': m['url'],
+                'match_title': m['question'],
+                'yes': round(yes_price, 4),
+                'no': round(no_price, 4),
+                'ask_size': ask_size,
+                'volume': m['volume_24h'],
+                'liquidity': m['liquidity'],
+                'platform': 'probable',
+                'end_date': m['end_date'],
+            })
 
         # Sort by liquidity
         parsed.sort(key=lambda x: x['liquidity'], reverse=True)
