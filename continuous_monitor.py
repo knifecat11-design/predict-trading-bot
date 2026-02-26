@@ -539,35 +539,33 @@ def main():
                     all_opps.extend(same_opps)
 
             # === Cross-platform arbitrage (all pairs) ===
+            # 注：跨平台套利的数据来源与 dashboard 相同（public API），无需 is_real 过滤
             pairs = []
             if poly_markets and opinion_markets:
-                pairs.append((poly_markets, opinion_markets, 'Polymarket', 'Opinion', True))
+                pairs.append((poly_markets, opinion_markets, 'Polymarket', 'Opinion'))
             if poly_markets and predict_markets:
-                pairs.append((poly_markets, predict_markets, 'Polymarket', 'Predict', api_status['predict']))
+                pairs.append((poly_markets, predict_markets, 'Polymarket', 'Predict'))
             if poly_markets and kalshi_markets:
-                pairs.append((poly_markets, kalshi_markets, 'Polymarket', 'Kalshi', True))
+                pairs.append((poly_markets, kalshi_markets, 'Polymarket', 'Kalshi'))
             if poly_markets and probable_markets:
-                pairs.append((poly_markets, probable_markets, 'Polymarket', 'Probable', api_status['probable']))
+                pairs.append((poly_markets, probable_markets, 'Polymarket', 'Probable'))
             if opinion_markets and predict_markets:
-                pairs.append((opinion_markets, predict_markets, 'Opinion', 'Predict',
-                              api_status['opinion'] and api_status['predict']))
+                pairs.append((opinion_markets, predict_markets, 'Opinion', 'Predict'))
             if opinion_markets and kalshi_markets:
-                pairs.append((opinion_markets, kalshi_markets, 'Opinion', 'Kalshi', api_status['opinion']))
+                pairs.append((opinion_markets, kalshi_markets, 'Opinion', 'Kalshi'))
             if opinion_markets and probable_markets:
-                pairs.append((opinion_markets, probable_markets, 'Opinion', 'Probable',
-                              api_status['opinion'] and api_status['probable']))
+                pairs.append((opinion_markets, probable_markets, 'Opinion', 'Probable'))
             if predict_markets and kalshi_markets:
-                pairs.append((predict_markets, kalshi_markets, 'Predict', 'Kalshi', api_status['predict']))
+                pairs.append((predict_markets, kalshi_markets, 'Predict', 'Kalshi'))
             if predict_markets and probable_markets:
-                pairs.append((predict_markets, probable_markets, 'Predict', 'Probable',
-                              api_status['predict'] and api_status['probable']))
+                pairs.append((predict_markets, probable_markets, 'Predict', 'Probable'))
             if kalshi_markets and probable_markets:
-                pairs.append((kalshi_markets, probable_markets, 'Kalshi', 'Probable', api_status['probable']))
+                pairs.append((kalshi_markets, probable_markets, 'Kalshi', 'Probable'))
 
-            for ma, mb, na, nb, is_real in pairs:
+            for ma, mb, na, nb in pairs:
                 opps = find_arbitrage(ma, mb, na, nb, threshold, min_confidence)
                 for opp in opps:
-                    opp['is_real'] = is_real
+                    opp['is_real'] = True  # 跨平台套利数据来自 public API，无需过滤
                 all_opps.extend(opps)
 
             # === Multi-outcome arbitrage (reuse dashboard functions + caches) ===
