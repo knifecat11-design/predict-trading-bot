@@ -362,7 +362,7 @@
                     <th>Platform B</th>
                     <th>Combined</th>
                     <th>Gross</th>
-                    <th>Net</th>
+                    <th>Shares</th>
                     <th>Trend</th>
                     <th>Conf</th>
                     <th>Time</th>
@@ -387,7 +387,7 @@
                     <th style="min-width:320px">Outcomes (buy all Yes)</th>
                     <th>Total Cost</th>
                     <th>Gross</th>
-                    <th>Net</th>
+                    <th>Shares</th>
                     <th>Time</th>
                 </tr>
             </thead>
@@ -501,9 +501,12 @@
             }
 
             tbody.innerHTML = arbs.map(a => {
-                const net = typeof a.net_profit === 'number' ? a.net_profit : a.arbitrage;
-                const netStyle = net > 0 ? 'color:#3fb950;font-weight:600' : 'color:#f85149;font-weight:600';
-                const netStr = (net > 0 ? '+' : '') + net.toFixed(1) + '%';
+                // shares: 可购买的股数（两个平台 ask_size 之和，或单方，或 N/A）
+                const shares = a.shares;
+                const sharesStr = shares !== null && shares !== undefined
+                    ? shares.toLocaleString()
+                    : 'N/A';
+                const sharesStyle = 'color:#d29922;font-weight:600';  // 黄色显示 shares
                 const isCrossCombo = a.arb_type === 'cross_combo';
 
                 // Build outcome pills — for cross-combo show which platform each comes from
@@ -539,7 +542,7 @@
                     <td><div class="outcome-pills">${pillsHtml}</div></td>
                     <td style="font-weight:600;color:#d29922">${a.total_cost}c</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                    <td><span style="${netStyle}">${netStr}</span></td>
+                    <td><span style="${sharesStyle}">${sharesStr}</span></td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;
             }).join('');
@@ -629,8 +632,12 @@
                 tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No arbitrage opportunities found</td></tr>';
             } else {
                 tbody.innerHTML = arbs.map(a => {
-                    const net = a.net_profit !== undefined ? a.net_profit : (a.arbitrage - 2);
-                    const netClass = net > 0 ? 'color:#3fb950' : 'color:#f85149';
+                    // shares: 可购买的股数
+                    const shares = a.shares;
+                    const sharesStr = shares !== null && shares !== undefined
+                        ? shares.toLocaleString()
+                        : 'N/A';
+                    const sharesStyle = 'color:#d29922;font-weight:600';
                     const typeIcon = a.arb_type === 'same_platform' ? '&#9679; ' : '';
                     const history = priceHistory[a.market_key] || [];
                     const spark = sparklineSvg(history, 50, 16);
@@ -643,7 +650,7 @@
                         <td>Y:${a.b_yes}c N:${a.b_no}c</td>
                         <td>${a.combined}c</td>
                         <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                        <td><span style="${netClass};font-weight:600">${net > 0 ? '+' : ''}${net.toFixed(1)}%</span></td>
+                        <td><span style="${sharesStyle}">${sharesStr}</span></td>
                         <td>${spark}</td>
                         <td>${(a.confidence * 100).toFixed(0)}%</td>
                         <td>${a.timestamp}</td>

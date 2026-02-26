@@ -424,6 +424,7 @@ def fetch_polymarket_data(config):
                     'url': f"https://polymarket.com/event/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
+                    'ask_size': 0,  # Polymarket API 不提供 ask_size
                     'volume': float(m.get('volume24hr', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'polymarket',
@@ -489,7 +490,7 @@ def fetch_opinion_data(config):
         _op_lock = threading.Lock()
 
         def fetch_token_orderbook(token_id):
-            """Fetch orderbook for one token; return (token_id, ask, bid)."""
+            """Fetch orderbook for one token; return (token_id, ask, bid, ask_size)."""
             with _op_lock:
                 _op_call_count[0] += 1
                 # 每 12 个请求暂停 1s → 稳定 ~12 req/s (API 限制 15)
@@ -499,8 +500,9 @@ def fetch_opinion_data(config):
             if ob is not None and ob.yes_ask > 0:
                 ask = ob.yes_ask
                 bid = ob.yes_bid if ob.yes_bid > 0 else 0.0
-                return token_id, ask, bid
-            return token_id, None, None
+                ask_size = ob.yes_ask_size if ob.yes_ask_size > 0 else 0
+                return token_id, ask, bid, ask_size
+            return token_id, None, None, 0
 
         # Collect both Yes and No token IDs
         tokens_to_fetch = []
@@ -515,9 +517,9 @@ def fetch_opinion_data(config):
             futures = {ex.submit(fetch_token_orderbook, t): t for t in tokens_to_fetch}
             for future in as_completed(futures, timeout=240):
                 try:
-                    token_id, ask, bid = future.result(timeout=15)
+                    token_id, ask, bid, ask_size = future.result(timeout=15)
                     if ask is not None:
-                        token_prices[token_id] = (ask, bid)
+                        token_prices[token_id] = (ask, bid, ask_size)
                 except Exception:
                     pass
 
@@ -535,9 +537,9 @@ def fetch_opinion_data(config):
                 futures = {ex.submit(fetch_token_orderbook, t): t for t in failed_tokens}
                 for future in as_completed(futures, timeout=120):
                     try:
-                        token_id, ask, bid = future.result(timeout=15)
+                        token_id, ask, bid, ask_size = future.result(timeout=15)
                         if ask is not None:
-                            token_prices[token_id] = (ask, bid)
+                            token_prices[token_id] = (ask, bid, ask_size)
                     except Exception:
                         pass
 
@@ -558,7 +560,7 @@ def fetch_opinion_data(config):
                 if yes_data is None:
                     continue  # Can't price Yes → skip market
 
-                yes_ask, yes_bid = yes_data
+                yes_ask, yes_bid, yes_ask_size = yes_data
 
                 no_data = token_prices.get(no_token)
                 if no_data is not None:
@@ -579,6 +581,7 @@ def fetch_opinion_data(config):
                     'url':       f"https://app.opinion.trade/detail?topicId={market_id}",
                     'yes':       round(yes_ask, 4),
                     'no':        round(no_ask,  4),
+                    'ask_size':  yes_ask_size,  # 可购买的股数
                     'volume':    float(m.get('volume24h', m.get('volume', 0)) or 0),
                     'liquidity': 0,
                     'platform':  'opinion',
@@ -774,6 +777,7 @@ def fetch_predict_data(config):
 
                 yes_price = ob.get('yes_ask')
                 no_price = ob.get('no_ask')
+                ask_size = ob.get('ask_size', 0) or 0  # 可购买的股数
                 if yes_price is None or no_price is None:
                     continue
                 if yes_price <= 0 or no_price <= 0:
@@ -812,6 +816,7 @@ def fetch_predict_data(config):
                     'url': f"https://predict.fun/market/{market_slug}",
                     'yes': round(yes_price, 4),
                     'no': round(no_price, 4),
+                    'ask_size': ask_size,  # 可购买的股数
                     'volume': float(m.get('volume', 0) or 0),
                     'liquidity': float(m.get('liquidity', 0) or 0),
                     'platform': 'predict',
@@ -883,6 +888,7 @@ def fetch_kalshi_data(config):
                     'match_title': title,
                     'yes': round(yes_ask, 4),
                     'no': round(no_ask, 4),
+                    'ask_size': 0,  # Kalshi API 不提供 ask_size，需单独调用 orderbook API
                     'volume': volume,
                     'liquidity': float(m.get('liquidity_dollars', '0') or '0'),
                     'platform': 'kalshi',
@@ -966,6 +972,7 @@ def fetch_probable_data(config):
                         'match_title': question,
                         'yes': round(yes_price, 4),
                         'no': round(no_price, 4),
+                        'ask_size': 0,  # Probable ask_size 需单独调用 orderbook API 获取
                         'volume': volume_24h,
                         'liquidity': liquidity,
                         'platform': 'probable',
@@ -1100,6 +1107,11 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
         fee_a = PLATFORM_FEES.get(platform_a_name.lower(), 0.02)
         fee_b = PLATFORM_FEES.get(platform_b_name.lower(), 0.02)
 
+        # 计算 shares：两个平台的 ask_size 之和
+        ask_size_a = ma.get('ask_size', 0) or 0
+        ask_size_b = mb.get('ask_size', 0) or 0
+        shares = ask_size_a + ask_size_b if (ask_size_a > 0 and ask_size_b > 0) else (ask_size_a if ask_size_a > 0 else ask_size_b)
+
         if arb1 >= threshold:
             fee_cost1 = (ma['yes'] * fee_a + mb['no'] * fee_b) * 100
             opportunities.append({
@@ -1113,6 +1125,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'b_no': round(mb['no'] * 100, 2),
                 'combined': round(combined1 * 100, 2),
                 'arbitrage': round(arb1, 2),
+                'shares': int(shares) if shares > 0 else None,  # 可购买的股数
                 'net_profit': round(arb1 - fee_cost1, 2),
                 'confidence': round(confidence, 2),
                 'timestamp': now_str,
@@ -1134,6 +1147,7 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
                 'b_no': round(ma['no'] * 100, 2),
                 'combined': round(combined2 * 100, 2),
                 'arbitrage': round(arb2, 2),
+                'shares': int(shares) if shares > 0 else None,  # 可购买的股数
                 'net_profit': round(arb2 - fee_cost2, 2),
                 'confidence': round(confidence, 2),
                 'timestamp': now_str,
@@ -1184,6 +1198,9 @@ def find_same_platform_arbitrage(markets, platform_name, threshold=0.5):
             title_plain = strip_html(m.get('title', ''))
             market_key = f"SAME-{platform_name}-{m.get('id', '')}"
 
+            # 同平台套利 shares = ask_size（同一市场的 Yes ask_size）
+            ask_size = m.get('ask_size', 0) or 0
+
             opportunities.append({
                 'market': title_plain,
                 'platform_a': platform_link_html(platform_name, m.get('url')),
@@ -1195,6 +1212,7 @@ def find_same_platform_arbitrage(markets, platform_name, threshold=0.5):
                 'b_no': round(no_ask * 100, 2),
                 'combined': round(total_cost * 100, 2),
                 'arbitrage': round(gross_pct, 2),
+                'shares': int(ask_size) if ask_size > 0 else None,  # 可购买的股数
                 'net_profit': round(net_pct, 2),
                 'confidence': 1.0,  # same platform = 100% confidence
                 'timestamp': now_str,
@@ -1327,6 +1345,11 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
         fee_cost = sum(o['price'] * fee_rate for o in outcomes) * 100
         net_pct = gross_pct - fee_cost
 
+        # 计算 shares：多结果套利受限于最小 ask_size（需同时购买所有结果）
+        ask_sizes = [o.get('ask_size', 0) or 0 for o in outcomes]
+        valid_sizes = [s for s in ask_sizes if s > 0]
+        shares = min(valid_sizes) if valid_sizes else 0
+
         market_key = f"MULTI-poly-{event_id}"
         opportunities.append({
             'event_title': event_title,
@@ -1337,6 +1360,7 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
             'outcome_count': len(outcomes),
             'total_cost': round(total_cost * 100, 2),
             'arbitrage': round(gross_pct, 2),
+            'shares': int(shares) if shares > 0 else None,  # 可购买的套利组合数（受限于最小 ask_size）
             'net_profit': round(net_pct, 2),
             'timestamp': now_str,
             'market_key': market_key,
@@ -1945,6 +1969,11 @@ def find_cross_platform_multi_outcome_arb(
                 platforms_used = sorted(set(o['platform'] for o in portfolio))
                 market_key = f"COMBO-{ea['event_key']}-{best_eb['event_key']}"
 
+                # 计算 shares：跨平台组合套利受限于最小 ask_size（需同时购买所有结果）
+                ask_sizes = [o.get('ask_size', 0) or 0 for o in portfolio]
+                valid_sizes = [s for s in ask_sizes if s > 0]
+                shares = min(valid_sizes) if valid_sizes else 0
+
                 opportunities.append({
                     'event_title': ea['event_title'],
                     'event_url': ea['event_url'],
@@ -1956,6 +1985,7 @@ def find_cross_platform_multi_outcome_arb(
                     'outcome_count': len(portfolio),
                     'total_cost': round(total_cost * 100, 2),
                     'arbitrage': round(gross_pct, 2),
+                    'shares': int(shares) if shares > 0 else None,  # 可购买的套利组合数（受限于最小 ask_size）
                     'net_profit': round(net_pct, 2),
                     'timestamp': now_str,
                     'market_key': market_key,
