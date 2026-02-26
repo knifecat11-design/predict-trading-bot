@@ -452,7 +452,7 @@ def main():
     print("=" * 70)
     print("  Cross-Platform Arbitrage Monitor")
     print("  Polymarket | Opinion.trade | Predict.fun | Probable | Kalshi")
-    print("  Version: v2.2 (2026-02-25) - Added Probable Markets")
+    print("  Version: v2.3 (2026-02-26) - 分级冷却播报: 首次立即, ≥1%需30分钟, 0.5-1%需1小时")
     print("=" * 70)
     print()
 
@@ -604,7 +604,11 @@ def main():
                         f"({same_count} same-platform, {cross_count} cross-platform, "
                         f"{multi_count} multi-outcome, {combo_count} cross-combo)")
 
-            # 发送 Telegram 通知（带去重逻辑）
+            # 发送 Telegram 通知（组合方案：首次立即播报 + 分级冷却）
+            # - 首次发现 → 立即播报
+            # - 大幅变化(≥1%) → 30分钟后可播报
+            # - 中等变化(0.5-1%) → 1小时后可播报
+            # - 小幅变化(<0.5%) → 不播报
             for opp in all_opps:
                 if not opp['is_real']:
                     continue
@@ -614,24 +618,34 @@ def main():
                 if not market_key:
                     continue
 
-                # 检查是否需要通知（价格变化超过 5% 或者首次发送）
                 should_notify = False
                 last_opp = last_sent_opportunities.get(market_key)
 
                 if last_opp is None:
-                    # 首次发现这个机会
+                    # 首次发现这个机会 → 立即播报
                     should_notify = True
                 else:
-                    # 检查价格变化是否超过阈值
+                    # 检查价格变化幅度和时间冷却
                     price_change = abs(opp['arbitrage'] - last_opp['arbitrage'])
-                    if price_change >= 0.5:  # 价格变化超过 0.5%（从 0.1% 提高）
-                        should_notify = True
-                        logger.debug(f"  Price changed: {last_opp['arbitrage']:.2f}% -> {opp['arbitrage']:.2f}% (Δ{price_change:.2f}%)")
 
-                # 冷却时间检查
-                if market_key in last_notifications:
-                    if datetime.now() - last_notifications[market_key] < timedelta(minutes=cooldown_minutes):
+                    if price_change < 0.5:
+                        # 小幅变化 < 0.5% → 不播报
                         continue
+                    elif price_change >= 1.0:
+                        # 大幅变化 ≥ 1% → 30分钟冷却
+                        min_wait_minutes = 30
+                    else:
+                        # 中等变化 0.5-1% → 1小时冷却
+                        min_wait_minutes = 60
+
+                    # 检查冷却时间
+                    if market_key in last_notifications:
+                        elapsed = datetime.now() - last_notifications[market_key]
+                        if elapsed >= timedelta(minutes=min_wait_minutes):
+                            should_notify = True
+                            logger.debug(f"  Price changed: {last_opp['arbitrage']:.2f}% -> {opp['arbitrage']:.2f}% (Δ{price_change:.2f}%, elapsed: {elapsed.seconds//60}m)")
+                    else:
+                        should_notify = True
 
                 if should_notify:
                     msg = format_arb_message(opp, scan_count)
