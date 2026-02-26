@@ -692,10 +692,13 @@ def fetch_predict_data(config):
 
                         if isinstance(first_ask, dict):
                             yes_ask = float(first_ask.get('price', first_ask.get('p', 0)))
+                            ask_size = float(first_ask.get('quantity', first_ask.get('amount', first_ask.get('q', first_ask.get('size', 0)))))
                         elif isinstance(first_ask, (list, tuple)):
                             yes_ask = float(first_ask[0])
+                            ask_size = float(first_ask[1]) if len(first_ask) > 1 else 0
                         else:
                             yes_ask = float(first_ask)
+                            ask_size = 0
 
                         if yes_bid > 0 and yes_ask > 0:
                             orderbook_results[mid] = {
@@ -703,6 +706,7 @@ def fetch_predict_data(config):
                                 'yes_ask': yes_ask,
                                 'no_bid': round(1.0 - yes_ask, 4),
                                 'no_ask': round(1.0 - yes_bid, 4),
+                                'ask_size': ask_size,
                             }
                             continue
                     except (ValueError, TypeError, IndexError, KeyError):

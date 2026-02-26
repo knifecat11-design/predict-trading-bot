@@ -240,7 +240,7 @@ class PredictAPIClient:
         v1 API 只返回 Yes outcome 订单簿，No 价格通过 1 - yes_price 推导
 
         Returns:
-            {'yes_bid': float, 'yes_ask': float, 'no_bid': float, 'no_ask': float}
+            {'yes_bid': float, 'yes_ask': float, 'no_bid': float, 'no_ask': float, 'ask_size': float}
             或 None
         """
         yes_ob = self._get_orderbook(market_id)
@@ -255,6 +255,7 @@ class PredictAPIClient:
             'yes_ask': yes_ob['yes_ask'],
             'no_bid': round(1.0 - yes_ob['yes_ask'], 4),
             'no_ask': round(1.0 - yes_ob['yes_bid'], 4),
+            'ask_size': yes_ob.get('ask_size', 0),
         }
 
     def _default_data(self, market_id: str) -> MarketData:

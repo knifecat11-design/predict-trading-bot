@@ -363,13 +363,12 @@
                     <th>Combined</th>
                     <th>Gross</th>
                     <th>Shares</th>
-                    <th>Trend</th>
                     <th>Conf</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="arb-body">
-                <tr><td colspan="11" class="empty-state pulse">Scanning markets...</td></tr>
+                <tr><td colspan="10" class="empty-state pulse">Scanning markets...</td></tr>
             </tbody>
         </table>
 
@@ -627,9 +626,8 @@
             // Arbitrage
             const tbody = document.getElementById('arb-body');
             const arbs = data.arbitrage || [];
-            const priceHistory = data.price_history || {};
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No arbitrage opportunities found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No arbitrage opportunities found</td></tr>';
             } else {
                 tbody.innerHTML = arbs.map(a => {
                     // shares: 可购买的股数
@@ -639,8 +637,6 @@
                         : 'N/A';
                     const sharesStyle = 'color:#d29922;font-weight:600';
                     const typeIcon = a.arb_type === 'same_platform' ? '&#9679; ' : '';
-                    const history = priceHistory[a.market_key] || [];
-                    const spark = sparklineSvg(history, 50, 16);
                     return `
                     <tr${a.arb_type === 'same_platform' ? ' style="background:#1a1a0e"' : ''}>
                         <td>${typeIcon}${a.market}</td>
@@ -651,7 +647,6 @@
                         <td>${a.combined}c</td>
                         <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
                         <td><span style="${sharesStyle}">${sharesStr}</span></td>
-                        <td>${spark}</td>
                         <td>${(a.confidence * 100).toFixed(0)}%</td>
                         <td>${a.timestamp}</td>
                     </tr>`;
