@@ -615,6 +615,70 @@ class MarketMatcher:
         tokens.update(keywords.get('words', []))
         return tokens
 
+    @staticmethod
+    def _is_trump_family_mismatch(title_a: str, title_b: str) -> bool:
+        """
+        检查两个标题是否涉及不同的 Trump 家族成员（防止错误匹配）
+
+        Trump 家族成员列表（每个人都是独立的个体，不应互相匹配）：
+        - Donald Trump / Donald J. Trump
+        - Ivanka Trump
+        - Eric Trump
+        - Donald Trump Jr. / Don Jr
+        - Tiffany Trump
+        - Barron Trump
+        - Melania Trump
+
+        如果标题 A 包含 "Ivanka Trump" 而标题 B 包含 "Donald Trump"，
+        这应该被视为不匹配，因为它们是不同的人。
+        """
+        # 定义 Trump 家族成员的模式（大小写不敏感）
+        trump_family_patterns = {
+            'donald trump': [
+                r'\bdonald\s+j\.\s+trump\b',
+                r'\bdonald\s+trump\b(?!\s+jr)',  # 排除 Donald Trump Jr.
+            ],
+            'ivanka trump': [
+                r'\bivanka\s+trump\b',
+            ],
+            'eric trump': [
+                r'\beric\s+trump\b',
+            ],
+            'donald trump jr': [
+                r'\bdonald\s+trump\s+jr\.?\b',
+                r'\bdon\s+jr\.?\b',
+            ],
+            'tiffany trump': [
+                r'\btiffany\s+trump\b',
+            ],
+            'barron trump': [
+                r'\bbarron\s+trump\b',
+            ],
+            'melania trump': [
+                r'\bmelania\s+trump\b',
+            ],
+        }
+
+        import re
+
+        def identify_trump_member(title: str) -> str:
+            """识别标题中的 Trump 家族成员，返回成员 key 或空字符串"""
+            title_lower = title.lower()
+            for member_key, patterns in trump_family_patterns.items():
+                for pattern in patterns:
+                    if re.search(pattern, title_lower):
+                        return member_key
+            return ''
+
+        member_a = identify_trump_member(title_a)
+        member_b = identify_trump_member(title_b)
+
+        # 如果两个标题都包含 Trump 家族成员，但成员不同，则拒绝匹配
+        if member_a and member_b and member_a != member_b:
+            return True
+
+        return False
+
     def match_markets_cross_platform(
         self,
         markets_a: List[Dict],
@@ -741,6 +805,10 @@ class MarketMatcher:
             for b_idx in candidate_indices:
                 _, mb, title_b, mb_id, kw_b, _ = b_entries[b_idx]
                 if mb_id in matched_b_ids:
+                    continue
+
+                # Trump 家族成员冲突检查（防止 Ivanka Trump 匹配到 Donald Trump）
+                if self._is_trump_family_mismatch(title_a, title_b):
                     continue
 
                 # 传入预计算的关键词，避免重复提取
