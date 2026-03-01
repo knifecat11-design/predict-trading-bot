@@ -1,27 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-Logical Spread Arbitrage Module - 逻辑价差套利检测器
+Logical Spread Arbitrage Module - 逻辑价差套利检测器 (严格版本)
 
 核心原理：
 对于具有逻辑包含关系的两个事件 A（较难/子集）和 B（较易/超集）：
 - 正常情况：P(A) < P(B)（较难的事件概率更低）
 - 套利机会：当 P(A) ≥ P(B) 时（市场倒挂或定价异常）
-  - 当 P(A) > P(B)：明确的市场倒挂，成本 < 1
-  - 当 P(A) = P(B)：定价异常，难度差异未反映，成本 = 1（关注潜在机会）
-  - 策略：买入 A 的 NO + 买入 B 的 YES
 
-支持的逻辑关系类型：
-1. PRICE_THRESHOLD: 价格阈值 (BTC>$100k ⊆ BTC>$50k)
-2. TIME_WINDOW: 时间窗口 (2025年达成 ⊆ 2026年达成)
-3. MULTI_OUTCOME: 多结果事件的分解关系
+严格匹配条件（防止错误匹配）：
+1. 同一市场：两个事件必须属于同一个"事件族"
+   - 标题的核心部分必须高度相似（去掉数值/日期后的部分）
+   - 例如："BTC > $50k in 2025" 和 "BTC > $100k in 2025" 是同一事件族
+   - "Trump win 2024" 和 "Trump win 2028" 是同一事件族
+
+2. 方向一致性：条件方向必须相同
+   - 都是 ">" 或都是 "<"
+   - 不能一个"reach $3"另一个"dip to $0.4"
+
+3. 包含关系：Hard 的条件必须严格包含在 Easy 中
+   - 对于 ">" 方向：Hard 阈值 > Easy 阈值
+   - 对于 "<" 方向：Hard 阈值 < Easy 阈值
 """
 
 import re
 import logging
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Set, Literal
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from enum import Enum
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -30,38 +37,32 @@ class LogicalType(Enum):
     """逻辑关系类型"""
     PRICE_THRESHOLD = "price_threshold"  # 价格阈值包含
     TIME_WINDOW = "time_window"          # 时间窗口包含
-    CONDITIONAL = "conditional"          # 条件层级
-    MULTI_OUTCOME = "multi_outcome"      # 多结果分解
 
 
 @dataclass
 class EventPair:
     """逻辑事件对"""
-    # 基础信息（必需字段，无默认值）
-    hard_market_id: str        # 较难事件的市场ID（条件更严格）
-    hard_title: str            # 较难事件的标题
-    easy_market_id: str        # 较易事件的市场ID（条件更宽松）
-    easy_title: str            # 较易事件的标题
+    hard_market_id: str
+    hard_title: str
+    easy_market_id: str
+    easy_title: str
 
-    # 价格信息（可选字段，有默认值）
-    hard_price: float = 0.0    # 较难事件的YES价格
-    easy_price: float = 0.0    # 较易事件的YES价格
+    hard_price: float = 0.0
+    easy_price: float = 0.0
 
-    # 逻辑关系
     logical_type: LogicalType = LogicalType.PRICE_THRESHOLD
-    relationship_desc: str = ""  # 关系描述，如 "更高价格阈值"
+    relationship_desc: str = ""
 
-    # 套利信息
-    spread: float = 0.0         # 价差 = hard_price - easy_price
-    arbitrage_cost: float = 0.0 # 套利成本
-    arbitrage_profit: float = 0.0 # 套利利润（未扣费）
-    has_arbitrage: bool = False # 是否存在套利机会
+    spread: float = 0.0
+    arbitrage_cost: float = 0.0
+    arbitrage_profit: float = 0.0
+    has_arbitrage: bool = False
 
-    # 元数据
     platform: str = "polymarket"
     detected_at: str = ""
-    hard_threshold: Optional[float] = None  # 阈值（用于价格类型）
+    hard_threshold: Optional[float] = None
     easy_threshold: Optional[float] = None
+    comparison: str = ""  # ">", "<"
 
     def __post_init__(self):
         if not self.detected_at:
@@ -69,17 +70,10 @@ class EventPair:
 
     @property
     def pair_key(self) -> str:
-        """生成唯一键用于冷却去重"""
         return f"{self.logical_type.value}:{self.hard_market_id}:{self.easy_market_id}"
 
     def calculate_spread(self) -> None:
-        """计算价差和套利收益"""
         self.spread = self.hard_price - self.easy_price
-
-        # 当 hard_price >= easy_price 时存在倒挂
-        # 原理：hard 事件难度更高，正常情况下 P(hard) < P(easy)
-        # 即使 P(hard) = P(easy) 也是不合理的定价（难度差异未反映）
-        # 策略：买入 hard 的 NO + 买入 easy 的 YES
         if self.spread >= 0:
             self.has_arbitrage = True
             self.arbitrage_cost = (1 - self.hard_price) + self.easy_price
@@ -91,384 +85,373 @@ class EventPair:
 
 
 @dataclass
-class ThresholdMatch:
-    """阈值匹配结果"""
-    entity: str           # 实体名，如 "bitcoin"
-    hard_market_id: str
-    hard_title: str
-    hard_threshold: float
-    easy_market_id: str
-    easy_title: str
-    easy_threshold: float
-    comparison: str       # ">", "<", ">=", "<="
+class MarketPattern:
+    """市场模式（提取的结构化信息）"""
+    market_id: str
+    title: str
+
+    # 提取的模式
+    base_question: str       # 去掉数值/日期后的基础问题
+    comparison: str          # ">", "<", ">=", "<="
+    threshold: Optional[float] = None
+    year: Optional[int] = None
+
+    # 原始数据
+    yes_price: float = 0.0
 
 
 class EventPairExtractor:
-    """
-    事件对提取器
+    """事件对提取器（严格版本）"""
 
-    从市场列表中识别具有逻辑包含关系的事件对
-    """
-
-    # 实体关键词（用于分组）
-    ENTITY_KEYWORDS = {
-        'bitcoin': r'\b(?:Bitcoin|BTC)\b',
-        'ethereum': r'\b(?:Ethereum|ETH)\b',
-        'solana': r'\b(?:Solana|SOL)\b',
-        'xrp': r'\b(?:XRP|Ripple)\b',
-        'bnb': r'\b(?:BNB|Binance\s+Coin)\b',
-        'trump': r'\bTrump\b',
-        'fed': r'\b(?:Federal\s+Reserve|Fed)\b',
-        'sp500': r'\b(?:S&P\s+500|SPX|SP500)\b',
-        'nasdaq': r'\bNasdaq\b',
-    }
-
-    # 价格提取模式（支持 k/m/b/t 后缀）
-    PRICE_PATTERNS = [
-        r'\$([\d,]+(?:\.\d+)?)[kKmMbBtT]?',  # $100k, $1.5M
-    ]
+    # 价格提取模式（更严格）
+    PRICE_PATTERN = r'\$([\d,]+(?:\.\d+)?)([kmbt]?)'
 
     # 年份提取
     YEAR_PATTERN = r'\b(20[2-9][0-9])\b'
 
-    # 阈值比较词
-    THRESHOLD_OPS = {
+    # 比较词（方向性）
+    COMPARISON_PATTERNS = {
+        # ">" 方向
         'above': '>',
-        'below': '<',
         'over': '>',
-        'under': '<',
         'exceeds': '>',
-        'hits': '>=',
-        'reaches': '>=',
-        'tops': '>',
+        'reach': '>',
+        'reaches': '>',
+        'surpass': '>',
         'surpasses': '>',
-        'falls below': '<',
-        'drops below': '<',
+        'tops': '>',
+        'hits': '>',
+        'cross': '>',
+        'crosses': '>',
+        'break': '>',
+        'breaks': '>',
+        # "<" 方向
+        'below': '<',
+        'under': '<',
+        'dip': '<',
+        'fall': '<',
+        'falls': '<',
+        'drop': '<',
+        'drops': '<',
+        'decline': '<',
+        'declines': '<',
+    }
+
+    # 停止词（用于提取基础问题）
+    STOP_WORDS = {
+        'will', 'the', 'a', 'an', 'in', 'by', 'for', 'of', 'to', 'be',
+        'or', 'and', 'with', 'from', 'at', 'on', 'before', 'after',
+        'during', 'end', 'yes', 'no'
     }
 
     def __init__(self, config: Dict = None):
         self.config = config or {}
         self.logger = logger
 
-    def extract_price_threshold(self, title: str) -> Optional[float]:
-        """从标题中提取价格阈值"""
-        if not title:
-            return None
+        # 最小相似度阈值（用于判断是否同一市场）
+        self.min_base_similarity = 0.75
 
+    def extract_comparison(self, title: str) -> Optional[str]:
+        """提取比较方向"""
         title_lower = title.lower()
 
-        # 尝试各种价格模式
-        for pattern in self.PRICE_PATTERNS:
-            matches = re.findall(pattern, title, re.IGNORECASE)
-            if matches:
-                try:
-                    price_str = matches[0].replace(',', '')
-                    price = float(price_str)
+        for word, direction in self.COMPARISON_PATTERNS.items():
+            if word in title_lower:
+                return direction
 
-                    # 检查后缀 - 必须紧邻数字或在$之后
-                    # 匹配 $100k, $1.5m, $2b 等格式
-                    suffix_match = re.search(r'\$[\d,]+(?:\.\d+)?([kmbt])', title_lower)
-                    if suffix_match:
-                        suffix = suffix_match.group(1)
-                        if suffix == 'k':
-                            price *= 1000
-                        elif suffix == 'm':
-                            price *= 1000000
-                        elif suffix == 'b':
-                            price *= 1000000000
-                        elif suffix == 't':
-                            price *= 1000000000000
-                    # 如果没有后缀且数字较大（如 $100,000），直接使用
-
-                    return price
-                except (ValueError, IndexError):
-                    continue
+        # 默认：如果有数字阈值，假设是 ">" 方向
+        if self._extract_price_value(title) is not None:
+            return '>'
 
         return None
 
-    def extract_year(self, title: str) -> Optional[int]:
-        """从标题中提取年份"""
-        if not title:
-            return None
+    def _extract_price_value(self, title: str) -> Optional[float]:
+        """提取价格的数值部分（不含后缀）"""
+        match = re.search(self.PRICE_PATTERN, title, re.IGNORECASE)
+        if match:
+            try:
+                price_str = match.group(1).replace(',', '')
+                price = float(price_str)
+                return price
+            except ValueError:
+                pass
+        return None
 
+    def extract_threshold(self, title: str) -> Optional[float]:
+        """提取完整阈值（处理后缀）"""
+        match = re.search(self.PRICE_PATTERN, title, re.IGNORECASE)
+        if match:
+            try:
+                price_str = match.group(1).replace(',', '')
+                price = float(price_str)
+                suffix = match.group(2).lower()
+
+                multipliers = {'k': 1000, 'm': 1000000, 'b': 1000000000, 't': 1000000000000}
+                if suffix in multipliers:
+                    price *= multipliers[suffix]
+
+                return price
+            except ValueError:
+                pass
+        return None
+
+    def extract_year(self, title: str) -> Optional[int]:
+        """提取年份"""
         matches = re.findall(self.YEAR_PATTERN, title)
         if matches:
             try:
                 return int(matches[0])
             except ValueError:
                 pass
-
         return None
 
-    def detect_entity(self, title: str) -> Optional[str]:
-        """检测标题中的实体"""
+    def get_base_question(self, title: str) -> str:
+        """
+        提取基础问题（去掉数值、日期、比较词）
+
+        例如：
+        - "Will BTC reach $100k in 2025?" → "will btc reach in"
+        - "XRP above $3 by Dec 2026?" → "xrp above by"
+        """
+        # 移除数字和价格
+        text = re.sub(r'\$[\d,]+(?:\.\d+)?[kmbt]?', '[NUM]', title, flags=re.IGNORECASE)
+        text = re.sub(r'\b\d+\b', '[NUM]', text)
+
+        # 移除年份
+        text = re.sub(r'\b20[2-9][0-9]\b', '[YEAR]', text)
+
+        # 移除比较词
+        for word in self.COMPARISON_PATTERNS.keys():
+            text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
+
+        # 移除停用词
+        words = text.lower().split()
+        words = [w for w in words if w not in self.STOP_WORDS and len(w) > 1]
+
+        # 去重并排序
+        words = sorted(set(words))
+
+        return ' '.join(words)
+
+    def parse_market(self, market: Dict) -> Optional[MarketPattern]:
+        """解析市场为结构化模式"""
+        title = market.get('title', market.get('question', ''))
         if not title:
             return None
 
-        title_lower = title.lower()
+        comparison = self.extract_comparison(title)
+        if not comparison:
+            return None
 
-        for entity, pattern in self.ENTITY_KEYWORDS.items():
-            if re.search(pattern, title, re.IGNORECASE):
-                return entity
+        return MarketPattern(
+            market_id=market.get('id', market.get('conditionId', '')),
+            title=title,
+            base_question=self.get_base_question(title),
+            comparison=comparison,
+            threshold=self.extract_threshold(title),
+            year=self.extract_year(title),
+            yes_price=market.get('yes', 0)
+        )
 
-        return None
+    def are_same_market_family(self, pattern1: MarketPattern, pattern2: MarketPattern) -> bool:
+        """
+        判断两个市场是否属于同一个事件族
 
-    def group_by_entity(
-        self,
-        markets: List[Dict]
-    ) -> Dict[str, List[Dict]]:
-        """按实体分组市场"""
-        groups = {}
+        条件：
+        1. 基础问题相似度 >= 阈值
+        2. 比较方向相同
+        """
+        # 方向必须一致
+        if pattern1.comparison != pattern2.comparison:
+            return False
 
-        for market in markets:
-            title = market.get('title', market.get('question', ''))
-            entity = self.detect_entity(title)
+        # 基础问题相似度
+        similarity = SequenceMatcher(
+            None,
+            pattern1.base_question,
+            pattern2.base_question
+        ).ratio()
 
-            if entity:
-                if entity not in groups:
-                    groups[entity] = []
-                groups[entity].append(market)
-
-        return groups
+        return similarity >= self.min_base_similarity
 
     def find_price_threshold_pairs(
         self,
         markets: List[Dict],
         min_threshold_diff_pct: float = 10.0
-    ) -> List[ThresholdMatch]:
+    ) -> List[EventPair]:
         """
-        查找价格阈值型事件对
+        查找价格阈值型事件对（严格版本）
 
-        例如：
-        - "Bitcoin > $100k in 2025" (hard)
-        - "Bitcoin > $50k in 2025" (easy)
+        条件：
+        1. 同一事件族（基础问题相似）
+        2. 方向一致（都是 > 或都是 <）
+        3. Hard 阈值 > Easy 阈值（对于 > 方向）
         """
         pairs = []
 
-        # 按实体分组
-        entity_groups = self.group_by_entity(markets)
+        # 解析所有市场
+        patterns = []
+        for market in markets:
+            pattern = self.parse_market(market)
+            if pattern and pattern.threshold is not None:
+                patterns.append(pattern)
 
-        for entity, group in entity_groups.items():
-            # 提取每个市场的阈值
-            with_thresholds = []
-            for market in group:
-                title = market.get('title', market.get('question', ''))
-                threshold = self.extract_price_threshold(title)
-                if threshold and threshold > 0:
-                    with_thresholds.append({
-                        'market': market,
-                        'title': title,
-                        'threshold': threshold,
-                        'id': market.get('id', market.get('conditionId', ''))
-                    })
+        # 按阈值排序
+        patterns.sort(key=lambda p: p.threshold or 0)
 
-            # 按阈值排序
-            with_thresholds.sort(key=lambda x: x['threshold'])
+        # 两两比较
+        for i in range(len(patterns)):
+            for j in range(i + 1, len(patterns)):
+                p1 = patterns[i]
+                p2 = patterns[j]
 
-            # 查找阈值对
-            for i in range(len(with_thresholds)):
-                for j in range(i + 1, len(with_thresholds)):
-                    lower = with_thresholds[i]
-                    higher = with_thresholds[j]
+                # 检查是否同一事件族
+                if not self.are_same_market_family(p1, p2):
+                    continue
 
-                    # 计算阈值差异百分比
-                    diff_pct = (higher['threshold'] / lower['threshold'] - 1) * 100
+                # 确定哪个是 hard/easy
+                if p1.comparison == '>':
+                    # 对于 ">" 方向：阈值大的更难
+                    if p1.threshold < p2.threshold:
+                        hard, easy = p2, p1
+                    else:
+                        hard, easy = p1, p2
+                else:  # "<" 方向
+                    # 对于 "<" 方向：阈值小的更难
+                    if p1.threshold < p2.threshold:
+                        hard, easy = p1, p2
+                    else:
+                        hard, easy = p2, p1
 
-                    if diff_pct >= min_threshold_diff_pct:
-                        pairs.append(ThresholdMatch(
-                            entity=entity,
-                            hard_market_id=higher['id'],
-                            hard_title=higher['title'],
-                            hard_threshold=higher['threshold'],
-                            easy_market_id=lower['id'],
-                            easy_title=lower['title'],
-                            easy_threshold=lower['threshold'],
-                            comparison=">"
-                        ))
+                # 计算阈值差异
+                diff_pct = abs(hard.threshold - easy.threshold) / easy.threshold * 100
+                if diff_pct < min_threshold_diff_pct:
+                    continue
 
+                pairs.append(EventPair(
+                    hard_market_id=hard.market_id,
+                    hard_title=hard.title,
+                    easy_market_id=easy.market_id,
+                    easy_title=easy.title,
+                    logical_type=LogicalType.PRICE_THRESHOLD,
+                    relationship_desc=f"价格阈值 ({hard.comparison}): {self._format_threshold(hard.threshold)} vs {self._format_threshold(easy.threshold)}",
+                    platform="polymarket",
+                    hard_threshold=hard.threshold,
+                    easy_threshold=easy.threshold,
+                    comparison=hard.comparison
+                ))
+
+        self.logger.info(f"[LSA] 价格阈值对: {len(pairs)} 个")
         return pairs
 
     def find_time_window_pairs(
         self,
         markets: List[Dict]
-    ) -> List[ThresholdMatch]:
+    ) -> List[EventPair]:
         """
-        查找时间窗口型事件对
+        查找时间窗口型事件对（严格版本）
 
-        例如：
-        - "Trump president in 2025" (hard，时间窗口更短)
-        - "Trump president in 2026" (easy，时间窗口更长)
+        条件：
+        1. 同一事件族（基础问题相似）
+        2. 仅年份不同
+        3. 早期年份是 hard，晚期年份是 easy
         """
         pairs = []
 
-        entity_groups = self.group_by_entity(markets)
+        # 解析所有市场
+        patterns = []
+        for market in markets:
+            pattern = self.parse_market(market)
+            if pattern and pattern.year is not None:
+                patterns.append(pattern)
 
-        for entity, group in entity_groups.items():
-            # 提取年份
-            with_years = []
-            for market in group:
-                title = market.get('title', market.get('question', ''))
-                year = self.extract_year(title)
-                if year:
-                    with_years.append({
-                        'market': market,
-                        'title': title,
-                        'year': year,
-                        'id': market.get('id', market.get('conditionId', ''))
-                    })
+        # 按年份排序
+        patterns.sort(key=lambda p: p.year or 0)
 
-            # 按年份排序
-            with_years.sort(key=lambda x: x['year'])
+        # 两两比较
+        for i in range(len(patterns)):
+            for j in range(i + 1, len(patterns)):
+                p1 = patterns[i]
+                p2 = patterns[j]
 
-            # 查找相邻年份对
-            for i in range(len(with_years) - 1):
-                earlier = with_years[i]
-                later = with_years[i + 1]
+                # 检查是否同一事件族
+                if not self.are_same_market_family(p1, p2):
+                    continue
 
-                # 只选择相邻年份（避免 2025 vs 2027 这样跨度太大的）
-                if later['year'] - earlier['year'] <= 2:
-                    pairs.append(ThresholdMatch(
-                        entity=entity,
-                        hard_market_id=earlier['id'],
-                        hard_title=earlier['title'],
-                        hard_threshold=float(earlier['year']),
-                        easy_market_id=later['id'],
-                        easy_title=later['title'],
-                        easy_threshold=float(later['year']),
-                        comparison="earlier"
-                    ))
+                # 检查年份差（只匹配相邻或相近年份）
+                year_diff = (p2.year or 0) - (p1.year or 0)
+                if year_diff > 2 or year_diff < 1:
+                    continue
 
+                # 早期是 hard，晚期是 easy
+                hard, easy = p1, p2
+
+                pairs.append(EventPair(
+                    hard_market_id=hard.market_id,
+                    hard_title=hard.title,
+                    easy_market_id=easy.market_id,
+                    easy_title=easy.title,
+                    logical_type=LogicalType.TIME_WINDOW,
+                    relationship_desc=f"时间窗口: {hard.year} vs {easy.year}",
+                    platform="polymarket",
+                    hard_threshold=float(hard.year),
+                    easy_threshold=float(easy.year),
+                    comparison="earlier"
+                ))
+
+        self.logger.info(f"[LSA] 时间窗口对: {len(pairs)} 个")
         return pairs
 
-
-class SpreadCalculator:
-    """价差计算器"""
-
     @staticmethod
-    def calculate_arbitrage(
-        hard_price: float,
-        easy_price: float,
-        fee_rate: float = 0.02
-    ) -> Dict[str, float]:
-        """
-        计算套利收益
-
-        当 hard_price >= easy_price 时存在倒挂：
-        - 原理：hard 事件难度更高，正常情况下 P(hard) < P(easy)
-        - 即使 P(hard) = P(easy) 也是不合理的定价（难度差异未反映）
-        - 买入 hard 的 NO (成本: 1 - hard_price)
-        - 买入 easy 的 YES (成本: easy_price)
-        - 总成本: (1 - hard_price) + easy_price
-        - 收益: 1 - 总成本
-
-        Args:
-            hard_price: 较难事件的YES价格
-            easy_price: 较易事件的YES价格
-            fee_rate: 交易费率（默认2%）
-
-        Returns:
-            包含 spread, cost, profit, net_profit 的字典
-        """
-        spread = hard_price - easy_price
-
-        if spread >= 0:
-            # 市场倒挂，存在套利机会（包括 spread=0 的情况）
-            cost = (1 - hard_price) + easy_price
-            profit = 1 - cost
-            net_profit = profit - (fee_rate * 2)  # 双边交易费
-        else:
-            cost = 0
-            profit = 0
-            net_profit = 0
-
-        return {
-            'spread': spread,
-            'cost': cost,
-            'profit': profit,
-            'net_profit': net_profit,
-            'has_arbitrage': spread >= 0
-        }
+    def _format_threshold(value: float) -> str:
+        """格式化阈值显示"""
+        if value >= 1_000_000_000:
+            return f"${value/1_000_000_000:.1f}B"
+        elif value >= 1_000_000:
+            return f"${value/1_000_000:.1f}M"
+        elif value >= 1_000:
+            return f"${value/1_000:.1f}K"
+        elif value >= 1:
+            return f"${value:.2f}"
+        return str(value)
 
 
 class LogicalSpreadArbitrageDetector:
-    """
-    逻辑价差套利检测器
-
-    主控制器，整合事件对识别、价格监控和套利检测
-    """
+    """逻辑价差套利检测器"""
 
     def __init__(self, config: Dict = None):
         self.config = config or {}
         self.extractor = EventPairExtractor(config)
-        self.calculator = SpreadCalculator()
         self.logger = logger
 
-        # 配置参数
         lsa_config = self.config.get('logical_spread_arbitrage', {})
-        self.min_spread_threshold = lsa_config.get('min_spread_threshold', 0.5)  # 最小价差百分比
-        self.fee_rate = lsa_config.get('fee_rate', 0.02)  # 交易费率
-        self.min_threshold_diff_pct = lsa_config.get('min_threshold_diff_pct', 10.0)  # 阈值最小差异百分比
+        self.min_spread_threshold = lsa_config.get('min_spread_threshold', 0.5)
+        self.fee_rate = lsa_config.get('fee_rate', 0.02)
+        self.min_threshold_diff_pct = lsa_config.get('min_threshold_diff_pct', 10.0)
 
-        # 已识别的事件对缓存
         self._cached_pairs: List[EventPair] = []
-        self._pair_prices: Dict[str, Tuple[float, float]] = {}
 
     def detect_pairs(
         self,
         markets: List[Dict],
         platform: str = "polymarket"
     ) -> List[EventPair]:
-        """
-        检测市场中的逻辑事件对
-
-        Args:
-            markets: 市场列表
-            platform: 平台名称
-
-        Returns:
-            EventPair 列表
-        """
+        """检测市场中的逻辑事件对"""
         pairs = []
 
-        # 1. 查找价格阈值型事件对
+        # 查找价格阈值型事件对
         price_pairs = self.extractor.find_price_threshold_pairs(
             markets,
             min_threshold_diff_pct=self.min_threshold_diff_pct
         )
+        pairs.extend(price_pairs)
 
-        for match in price_pairs:
-            pair = EventPair(
-                hard_market_id=match.hard_market_id,
-                hard_title=match.hard_title,
-                easy_market_id=match.easy_market_id,
-                easy_title=match.easy_title,
-                logical_type=LogicalType.PRICE_THRESHOLD,
-                relationship_desc=f"价格阈值: {match.comparison} ${self._format_number(match.hard_threshold)} vs ${self._format_number(match.easy_threshold)}",
-                platform=platform,
-                hard_threshold=match.hard_threshold,
-                easy_threshold=match.easy_threshold
-            )
-            pairs.append(pair)
-
-        # 2. 查找时间窗口型事件对
+        # 查找时间窗口型事件对
         time_pairs = self.extractor.find_time_window_pairs(markets)
-
-        for match in time_pairs:
-            pair = EventPair(
-                hard_market_id=match.hard_market_id,
-                hard_title=match.hard_title,
-                easy_market_id=match.easy_market_id,
-                easy_title=match.easy_title,
-                logical_type=LogicalType.TIME_WINDOW,
-                relationship_desc=f"时间窗口: {int(match.hard_threshold)} vs {int(match.easy_threshold)}",
-                platform=platform,
-                hard_threshold=match.hard_threshold,
-                easy_threshold=match.easy_threshold
-            )
-            pairs.append(pair)
+        pairs.extend(time_pairs)
 
         self._cached_pairs = pairs
-        self.logger.info(f"[LogicalSpread] 检测到 {len(pairs)} 个事件对")
+        self.logger.info(f"[LogicalSpread] 检测到 {len(pairs)} 个事件对（严格模式）")
 
         return pairs
 
@@ -476,19 +459,10 @@ class LogicalSpreadArbitrageDetector:
         self,
         price_dict: Dict[str, float]
     ) -> List[EventPair]:
-        """
-        更新事件对价格并检测套利机会
-
-        Args:
-            price_dict: 市场ID -> YES价格的映射
-
-        Returns:
-            存在套利机会的 EventPair 列表
-        """
+        """更新事件对价格并检测套利机会"""
         arbitrage_pairs = []
 
         for pair in self._cached_pairs:
-            # 获取价格
             hard_price = price_dict.get(pair.hard_market_id)
             easy_price = price_dict.get(pair.easy_market_id)
 
@@ -497,19 +471,12 @@ class LogicalSpreadArbitrageDetector:
 
             pair.hard_price = hard_price
             pair.easy_price = easy_price
-
-            # 计算价差
             pair.calculate_spread()
 
-            # 检查是否满足套利阈值
             if pair.has_arbitrage:
                 spread_pct = pair.spread * 100
                 if spread_pct >= self.min_spread_threshold:
                     arbitrage_pairs.append(pair)
-                    self.logger.debug(
-                        f"[LogicalSpread] 套利: {pair.hard_title[:30]}... "
-                        f"价差={spread_pct:.2f}%"
-                    )
 
         return arbitrage_pairs
 
@@ -519,21 +486,8 @@ class LogicalSpreadArbitrageDetector:
         price_dict: Dict[str, float],
         platform: str = "polymarket"
     ) -> List[EventPair]:
-        """
-        完整扫描：检测事件对 + 更新价格 + 返回套利机会
-
-        Args:
-            markets: 市场列表
-            price_dict: 市场ID -> YES价格的映射
-            platform: 平台名称
-
-        Returns:
-            存在套利机会的 EventPair 列表
-        """
-        # 重新检测事件对（应对新市场）
+        """完整扫描"""
         self.detect_pairs(markets, platform)
-
-        # 更新价格并返回套利机会
         return self.update_prices(price_dict)
 
     def format_arbitrage_message(self, pair: EventPair) -> str:
@@ -544,11 +498,10 @@ class LogicalSpreadArbitrageDetector:
         hard_yes_pct = pair.hard_price * 100
         easy_yes_pct = pair.easy_price * 100
 
-        # 判断倒挂类型
         if spread_pct > 0:
             status_text = f"市场倒挂 (+{spread_pct:.2f}%)"
-        else:  # spread_pct == 0
-            status_text = f"定价异常 (价差为0，难度未反映)"
+        else:
+            status_text = f"定价异常 (价差为0)"
 
         return (
             f"**🔗 逻辑价差套利**\n"
@@ -576,28 +529,13 @@ class LogicalSpreadArbitrageDetector:
         )
 
     @staticmethod
-    def _format_number(num: float) -> str:
-        """格式化数字显示"""
-        if num >= 1_000_000_000:
-            return f"{num/1_000_000_000:.1f}B"
-        elif num >= 1_000_000:
-            return f"{num/1_000_000:.1f}M"
-        elif num >= 1_000:
-            return f"{num/1_000:.1f}K"
-        return f"{num:.0f}"
-
-    @staticmethod
     def _get_type_name(logical_type: LogicalType) -> str:
-        """获取逻辑类型中文名"""
         names = {
             LogicalType.PRICE_THRESHOLD: "价格阈值",
             LogicalType.TIME_WINDOW: "时间窗口",
-            LogicalType.CONDITIONAL: "条件层级",
-            LogicalType.MULTI_OUTCOME: "多结果分解",
         }
         return names.get(logical_type, "未知类型")
 
 
 def create_logical_spread_detector(config: Dict) -> LogicalSpreadArbitrageDetector:
-    """工厂函数：创建逻辑价差套利检测器"""
     return LogicalSpreadArbitrageDetector(config)
