@@ -255,6 +255,8 @@
         .outcome-pill .outcome-name { color: #8b949e; }
         .outcome-pill .outcome-price { color: #58a6ff; font-weight: 600; margin-left: 4px; }
         .outcome-pills { line-height: 1.8; }
+        .key-differences { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+        .key-diff-item { color: #d29922; font-weight: 500; background: #21262d; padding: 2px 6px; border-radius: 4px; }
 
         @media (max-width: 1024px) {
             .platforms, .market-lists { grid-template-columns: repeat(2, 1fr); }
@@ -385,12 +387,10 @@
         <table class="arb-table">
             <thead>
                 <tr>
+                    <th>Event</th>
                     <th>Type</th>
-                    <th>Hard Event</th>
-                    <th>Hard YES</th>
-                    <th>Easy Event</th>
-                    <th>Easy YES</th>
-                    <th>Spread</th>
+                    <th>Key Differences</th>
+                    <th>Prices</th>
                     <th>Cost</th>
                     <th>Gross</th>
                     <th>Net</th>
@@ -398,7 +398,7 @@
                 </tr>
             </thead>
             <tbody id="lsa-body">
-                <tr><td colspan="10" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
+                <tr><td colspan="8" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
             </tbody>
         </table>
 
@@ -520,25 +520,43 @@
             }
 
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No logical spread arbitrage found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No logical spread arbitrage found</td></tr>';
                 return;
             }
 
             tbody.innerHTML = arbs.map(a => {
-                // Format spread with sign
-                const spreadSign = a.spread >= 0 ? '+' : '';
-                // Determine status color
-                const spreadClass = a.spread > 0 ? 'color:#f85149;font-weight:600' : 'color:#d29922;font-weight:600';
-                const statusText = a.spread > 0 ? '倒挂' : '异常';
+                // 构建市场标签（类似跨平台套利的 outcome pills）
+                const hardTag = a.hard_market_tag || '';
+                const easyTag = a.easy_market_tag || '';
+
+                // 构建价格显示（两个市场并排）
+                const pricesHtml = `
+                    <span class="outcome-pill">
+                        <span class="outcome-name">${hardTag || a.hard_title.substring(0, 20)}</span>
+                        <span class="outcome-price">${a.hard_yes}c</span>
+                    </span>
+                    <span style="color:#8b949e;margin:0 4px">vs</span>
+                    <span class="outcome-pill">
+                        <span class="outcome-name">${easyTag || a.easy_title.substring(0, 20)}</span>
+                        <span class="outcome-price">${a.easy_yes}c</span>
+                    </span>
+                `;
+
+                // 构建关键词差异显示
+                const keyDiffHtml = `
+                    <div class="key-differences">
+                        <span class="key-diff-item">${hardTag || 'Hard'}</span>
+                        <span style="color:#8b949e">→</span>
+                        <span class="key-diff-item">${easyTag || 'Easy'}</span>
+                    </div>
+                `;
 
                 return `
                 <tr class="arb-row">
+                    <td><a href="#" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title || 'Event'}</a></td>
                     <td><span style="font-size:12px;color:#8b949e;background:#21262d;padding:2px 6px;border-radius:4px">${a.type || 'LSA'}</span></td>
-                    <td title="${a.hard_title}">${a.hard_title}</td>
-                    <td><span style="font-weight:600">${a.hard_yes}c</span></td>
-                    <td title="${a.easy_title}">${a.easy_title}</td>
-                    <td><span style="font-weight:600">${a.easy_yes}c</span></td>
-                    <td><span style="${spreadClass}">${spreadSign}${a.spread}%</span></td>
+                    <td>${keyDiffHtml}</td>
+                    <td><div class="outcome-pills">${pricesHtml}</div></td>
                     <td style="font-weight:600;color:#d29922">${a.cost}c</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
                     <td><span class="net-pct ${netClass(a.net_profit)}">${a.net_profit}%</span></td>

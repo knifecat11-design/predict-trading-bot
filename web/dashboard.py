@@ -1434,6 +1434,108 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
 # Logical Spread Arbitrage (同平台逻辑价差套利)
 # ============================================================
 
+def _extract_key_differences(hard_title: str, easy_title: str) -> dict:
+    """
+    提取两个市场标题中的关键差异（时间/价格关键词）
+
+    例如：
+    - "Ukraine... by June 30" vs "Ukraine... by December 31"
+      → {'hard': 'by June 30', 'easy': 'by December 31'}
+    - "BTC top $100k" vs "BTC top $50k"
+      → {'hard': '>$100K', 'easy': '>$50K'}
+    """
+    import re
+
+    # 提取价格关键词（优先级最高）
+    price_patterns = [
+        r'\$[\d,]+(?:\.\d+)?[kmbt](?:\s|$)',  # $100k, $1.5M, $1T (with suffix)
+        r'\$[\d,]+(?:\.\d+)?\s*(?:k|m|b|t)(?:\s|$)',  # alternate $100 k format
+        r'\$[\d,]+(?:\.\d+)?(?=\s|,|$)',  # $100,000 (no suffix)
+        r'(?:top|above|over|surpass|exceed|reach|hit)\s+\$[\d,]+(?:\.\d+)?[kmbt]?',  # top $100k
+        r'(?:below|under|dip|drop|fall)\s+\$[\d,]+(?:\.\d+)?[kmbt]?',  # below $50k
+        r'(?:between|from)\s+\$[\d,]+[kmbt]?\s*(?:and|to|-)\s*\$[\d,]+[kmbt]?',  # between $X and $Y
+        r'(?:less|more|than)\s+[\d,]+(?:\.\d+)?[kmbt]?',  # less than 250k
+        r'[\d,]+(?:\.\d+)?[kmbt]?\s*(?:to|-)\s*[\d,]+(?:\.\d+)?[kmbt]?',  # 250k-500k
+    ]
+
+    # 提取日期关键词
+    date_patterns = [
+        r'(?:by|before|after|until)\s+(?:[A-Za-z]+\s+)?\d{1,2}(?:st|nd|rd|th)?(?:,?\s+20\d{2})?',  # by June 30, 2026
+        r'(?:by|before|after|until|in)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,4}',  # by March 2026
+        r'(?:by|before|after|until|in)\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)[a-z]*\s+\d{1,4}',
+        r'(?:by|before|after|until|in)\s+(?:Q[1-4]|1Q|2Q|3Q|4Q)\s+\d{4}',  # by Q1 2026
+        r'in\s+20\d{2}',  # in 2025
+    ]
+
+    # 提取阈值/数量关键词
+    threshold_patterns = [
+        r'(?:deport|arrest)\s+[\d,]+(?:\.\d+)?[kmb]?',
+        r'[\d,]+(?:\.\d+)?[kmb]?\s*(?:people|seats|votes|individuals)',
+    ]
+
+    def extract_patterns(text, patterns):
+        """从文本中提取所有匹配的模式"""
+        matches = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                matches.append(match.group(0))
+        return matches
+
+    # 优先提取价格差异
+    hard_prices = extract_patterns(hard_title, price_patterns)
+    easy_prices = extract_patterns(easy_title, price_patterns)
+
+    if hard_prices and easy_prices:
+        # 取最短的价格表示（更精确）
+        hard_price = min(hard_prices, key=len)
+        easy_price = min(easy_prices, key=len)
+        return {
+            'hard': hard_price,
+            'easy': easy_price,
+            'type': 'price'
+        }
+
+    # 尝试提取日期差异
+    hard_dates = extract_patterns(hard_title, date_patterns)
+    easy_dates = extract_patterns(easy_title, date_patterns)
+
+    if hard_dates and easy_dates:
+        # 取最短的日期表示
+        hard_date = min(hard_dates, key=len)
+        easy_date = min(easy_dates, key=len)
+        return {
+            'hard': hard_date,
+            'easy': easy_date,
+            'type': 'time'
+        }
+
+    # 尝试提取阈值差异
+    hard_thresholds = extract_patterns(hard_title, threshold_patterns)
+    easy_thresholds = extract_patterns(easy_title, threshold_patterns)
+
+    if hard_thresholds and easy_thresholds:
+        return {
+            'hard': hard_thresholds[0],
+            'easy': easy_thresholds[0],
+            'type': 'threshold'
+        }
+
+    # 回退：从标题中提取简短的关键词
+    # 尝试找到不同的部分
+    hard_words = set(hard_title.lower().split())
+    easy_words = set(easy_title.lower().split())
+
+    # 找出硬文本中独有的词（作为关键词）
+    hard_unique = ' '.join([w for w in hard_title.split() if w.lower() not in easy_words])
+    easy_unique = ' '.join([w for w in easy_title.split() if w.lower() not in hard_words])
+
+    return {
+        'hard': hard_unique[:30] if hard_unique else hard_title[:30],
+        'easy': easy_unique[:30] if easy_unique else easy_title[:30],
+        'type': 'other'
+    }
+
+
 def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=0.0):
     """检测同平台逻辑价差套利机会（基于事件架构）。
 
@@ -1496,6 +1598,9 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
         }
         type_name = type_names.get(pair.logical_type.value, '未知类型')
 
+        # 提取关键词差异（用于前端显示）
+        key_differences = _extract_key_differences(pair.hard_title, pair.easy_title)
+
         opportunities.append({
             'type': type_name,
             'relationship': pair.relationship_desc,
@@ -1505,7 +1610,6 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'easy_title': pair.easy_title[:70],
             'easy_yes': round(pair.easy_price * 100, 2),
             'easy_id': pair.easy_market_id,
-            'spread': round(spread_pct, 2),
             'cost': round(pair.arbitrage_cost * 100, 2),
             'arbitrage': round(gross_pct, 2),
             'net_profit': round(gross_pct, 2),  # 不扣除手续费
@@ -1515,6 +1619,10 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             '_created_at': time.time(),
             'arb_type': 'logical_spread',
             'event_title': pair.event_title[:70] if pair.event_title else '',
+            # 新增：关键词差异和市场标签
+            'key_differences': key_differences,
+            'hard_market_tag': key_differences.get('hard', ''),
+            'easy_market_tag': key_differences.get('easy', ''),
         })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
