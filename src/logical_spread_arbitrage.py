@@ -67,7 +67,6 @@ class ComparisonKeywords:
         'drop', 'drops',
         'fall', 'falls',
         'decline', 'declines',
-        'drop', 'drops',
     }
 
     # 符号形式
@@ -90,13 +89,15 @@ class ComparisonKeywords:
             if char in cls.SYMBOLS_LESS:
                 return '<'
 
-        # 检查关键词
+        # 使用单词边界匹配关键词（避免 "drop" 匹配 "airdrop", "top" 匹配 "stop" 等）
+        words_in_title = set(re.findall(r'\b[a-z]+\b', title_lower))
+
         for word in cls.GREATER_OR_EQUAL:
-            if word in title_lower:
+            if word in words_in_title:
                 return '>'
 
         for word in cls.LESS_OR_EQUAL:
-            if word in title_lower:
+            if word in words_in_title:
                 return '<'
 
         return None
@@ -339,15 +340,13 @@ class LogicalSpreadAnalyzer:
         """
         提取比较方向（使用关键词库）
         """
-        # 优先使用关键词库
+        # 使用关键词库（基于单词边界匹配，避免子串误匹配）
         direction = ComparisonKeywords.get_direction(title)
         if direction:
             return direction
 
-        # 回退到正则模式匹配
-        if self._extract_price_value(title) is not None:
-            return '>'
-
+        # 无明确方向关键词时不猜测，返回 None
+        # 仅有 $ 价格但无 "above/top/over" 等方向词的标题不应被归类
         return None
 
     def _extract_price_value(self, title: str) -> Optional[float]:
@@ -659,7 +658,22 @@ class LogicalSpreadAnalyzer:
                 if not self._are_titles_similar(s1, s2):
                     continue
 
-                # 早期是 hard，晚期是 easy
+                # 只有累积截止型（by/before）才构成子集关系
+                # "in 2025" vs "in 2026" 是不相交事件，不能套利
+                title1_lower = s1.title.lower()
+                title2_lower = s2.title.lower()
+                has_cumulative = any(
+                    kw in title1_lower or kw in title2_lower
+                    for kw in ('by ', 'before ', 'end of ')
+                )
+                has_disjoint = any(
+                    kw in title1_lower and kw in title2_lower
+                    for kw in (' in ',)
+                )
+                if has_disjoint and not has_cumulative:
+                    continue  # "in 2025" vs "in 2026" 不具备逻辑包含关系
+
+                # 早期是 hard，晚期是 easy（by March 比 by December 更难）
                 hard, easy = s1, s2
 
                 pair = EventPair(
