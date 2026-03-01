@@ -1601,15 +1601,23 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
         # 提取关键词差异（用于前端显示）
         key_differences = _extract_key_differences(pair.hard_title, pair.easy_title)
 
+        # 构建 URL（仿照 polymarket 格式）
+        # 事件 URL: https://polymarket.com/event/{event_slug}
+        # 市场 URL: https://polymarket.com/event/{event_slug}#{market_id}
+        event_slug = pair.event_title.lower().replace(' ', '-').replace('?', '')[:50]
+        event_url = f"https://polymarket.com/event/{event_slug}"
+
         opportunities.append({
             'type': type_name,
             'relationship': pair.relationship_desc,
             'hard_title': pair.hard_title[:70],
             'hard_yes': round(pair.hard_price * 100, 2),
             'hard_id': pair.hard_market_id,
+            'hard_url': f"{event_url}#{pair.hard_market_id[:16]}",
             'easy_title': pair.easy_title[:70],
             'easy_yes': round(pair.easy_price * 100, 2),
             'easy_id': pair.easy_market_id,
+            'easy_url': f"{event_url}#{pair.easy_market_id[:16]}",
             'cost': round(pair.arbitrage_cost * 100, 2),
             'arbitrage': round(gross_pct, 2),
             'net_profit': round(gross_pct, 2),  # 不扣除手续费
@@ -1619,6 +1627,7 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             '_created_at': time.time(),
             'arb_type': 'logical_spread',
             'event_title': pair.event_title[:70] if pair.event_title else '',
+            'event_url': event_url,
             # 新增：关键词差异和市场标签
             'key_differences': key_differences,
             'hard_market_tag': key_differences.get('hard', ''),
