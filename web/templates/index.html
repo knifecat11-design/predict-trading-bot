@@ -141,6 +141,10 @@
         .arb-pct.high { color: #3fb950; }
         .arb-pct.mid { color: #d29922; }
         .arb-pct.low { color: #8b949e; }
+        .net-pct { font-weight: 700; font-size: 14px; }
+        .net-pct.high { color: #3fb950; }
+        .net-pct.mid { color: #d29922; }
+        .net-pct.low { color: #8b949e; }
         .tag {
             display: inline-block;
             padding: 2px 8px;
@@ -500,6 +504,10 @@
 
         function arbClass(pct) {
             return pct >= 5 ? 'high' : pct >= 2 ? 'mid' : 'low';
+        }
+
+        function netClass(pct) {
+            return pct > 0 ? 'high' : pct >= -1 ? 'mid' : 'low';
         }
 
         function renderLogicalSpreadArb(data) {
