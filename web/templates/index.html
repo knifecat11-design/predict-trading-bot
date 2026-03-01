@@ -394,12 +394,11 @@
                     <th>Prices</th>
                     <th>Cost</th>
                     <th>Gross</th>
-                    <th>Net</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="lsa-body">
-                <tr><td colspan="9" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
+                <tr><td colspan="8" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
             </tbody>
         </table>
 
@@ -521,28 +520,24 @@
             }
 
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No logical spread arbitrage found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No logical spread arbitrage found</td></tr>';
                 return;
             }
 
             tbody.innerHTML = arbs.map(a => {
-                // Platform 标签（仿照 cross-platform 的 platformTag）
+                // Platform 标签
                 const platformTagHtml = platformTag(a.platform || 'Polymarket');
 
-                // 构建价格显示（带链接的 outcome pills）
+                // 构建价格显示（不带链接，仅展示）
                 const pricesHtml = `
                     <span class="outcome-pill">
-                        <a href="${a.hard_url || '#'}" target="_blank" style="text-decoration:none">
-                            <span class="outcome-name">${a.hard_market_tag || 'Hard'}</span>
-                            <span class="outcome-price">${a.hard_yes}c</span>
-                        </a>
+                        <span class="outcome-name">${a.hard_market_tag || 'Hard'}</span>
+                        <span class="outcome-price">${a.hard_yes}c</span>
                     </span>
                     <span style="color:#8b949e;margin:0 4px">vs</span>
                     <span class="outcome-pill">
-                        <a href="${a.easy_url || '#'}" target="_blank" style="text-decoration:none">
-                            <span class="outcome-name">${a.easy_market_tag || 'Easy'}</span>
-                            <span class="outcome-price">${a.easy_yes}c</span>
-                        </a>
+                        <span class="outcome-name">${a.easy_market_tag || 'Easy'}</span>
+                        <span class="outcome-price">${a.easy_yes}c</span>
                     </span>
                 `;
 
@@ -555,7 +550,6 @@
                     <td><div class="outcome-pills">${pricesHtml}</div></td>
                     <td style="font-weight:600;color:#d29922">${a.cost}c</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                    <td><span class="net-pct ${netClass(a.net_profit)}">${a.net_profit}%</span></td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;
             }).join('');
