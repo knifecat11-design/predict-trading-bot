@@ -385,7 +385,7 @@
         <!-- Logical Spread Arbitrage -->
         <div class="section-title">
             Logical Spread Arbitrage
-            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— same-platform logical inclusion: P(hard) ≥ P(easy) · price thresholds &amp; time windows</span>
+            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— dual-combo structural arb: min(A_NO+B_YES, A_YES+B_NO) &lt; $1 · price thresholds &amp; time windows</span>
             <span id="lsa-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
         </div>
         <table class="arb-table">
@@ -394,10 +394,10 @@
                     <th>Market</th>
                     <th>Type</th>
                     <th>Key Diff</th>
-                    <th>Hard (bid/mid/ask)</th>
-                    <th>Easy (bid/mid/ask)</th>
-                    <th>Mid Gross</th>
-                    <th>Ask Profit</th>
+                    <th>A (bid/mid/ask)</th>
+                    <th>B (bid/mid/ask)</th>
+                    <th>Combo</th>
+                    <th>Profit</th>
                     <th>Signal</th>
                     <th>Time</th>
                 </tr>
@@ -563,21 +563,31 @@
             }
 
             tbody.innerHTML = arbs.map(a => {
-                // Ask profit: 实际可执行利润（更保守）
-                const askProfitStr = a.ask_profit !== null && a.ask_profit !== undefined
-                    ? `${a.ask_profit}%`
+                // 组合利润
+                const profitStr = a.arbitrage !== null && a.arbitrage !== undefined
+                    ? `${a.arbitrage}%`
                     : 'N/A';
-                const askProfitClass = a.ask_profit > 0 ? 'high' : a.ask_profit !== null ? 'low' : '';
+                const profitClass = a.arbitrage > 0 ? 'high' : a.arbitrage !== null ? 'low' : '';
+
+                // 组合描述（简短版）
+                const comboLabel = a.best_combo === 1
+                    ? '<span style="color:#f0883e;font-size:11px" title="' + (a.combo_desc || '') + '">C1: A<sub>NO</sub>+B<sub>YES</sub></span>'
+                    : a.best_combo === 2
+                    ? '<span style="color:#a371f7;font-size:11px" title="' + (a.combo_desc || '') + '">C2: A<sub>YES</sub>+B<sub>NO</sub></span>'
+                    : '<span style="color:#8b949e;font-size:11px">-</span>';
+
+                // 组合成本
+                const costStr = a.cost ? `<span style="font-size:11px;color:#8b949e">${a.cost}¢</span>` : '';
 
                 return `
                 <tr class="arb-row">
                     <td><a href="${a.event_url || '#'}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title || 'Event'}</a></td>
                     <td><span style="font-size:12px;color:#8b949e;background:#21262d;padding:2px 6px;border-radius:4px">${a.type || 'LSA'}</span></td>
-                    <td><div class="key-differences"><span class="key-diff-item">${a.hard_market_tag || 'Hard'}</span> <span style="color:#8b949e">→</span> <span class="key-diff-item">${a.easy_market_tag || 'Easy'}</span></div></td>
+                    <td><div class="key-differences"><span class="key-diff-item">${a.hard_market_tag || 'A'}</span> <span style="color:#8b949e">↔</span> <span class="key-diff-item">${a.easy_market_tag || 'B'}</span></div></td>
                     <td style="white-space:nowrap">${priceTriple(a.hard_bid, a.hard_yes, a.hard_ask, a.hard_liq)}</td>
                     <td style="white-space:nowrap">${priceTriple(a.easy_bid, a.easy_yes, a.easy_ask, a.easy_liq)}</td>
-                    <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                    <td><span class="arb-pct ${askProfitClass}">${askProfitStr}</span></td>
+                    <td style="white-space:nowrap">${comboLabel} ${costStr}</td>
+                    <td><span class="arb-pct ${profitClass}">${profitStr}</span></td>
                     <td>${tierBadge(a.signal_tier)}</td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;

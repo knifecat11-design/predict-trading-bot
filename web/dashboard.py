@@ -1584,14 +1584,6 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
     now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
 
     for pair in arbitrage_pairs:
-        spread_pct = pair.spread * 100
-        if spread_pct < threshold:
-            continue
-
-        # 计算收益（不考虑手续费，只计算实际买入成本）
-        gross_pct = pair.arbitrage_profit * 100
-        # 不再扣除手续费：LSA 套利只看实际买入成本
-
         # 类型名称
         type_names = {
             'price_threshold': '价格阈值',
@@ -1606,28 +1598,34 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
         event_slug = pair.event_slug or pair.event_id
         event_url = f"https://polymarket.com/event/{event_slug}"
 
-        # 盘口数据：bid / ask / spread（百分比格式，乘以100）
+        # 盘口数据：百分比格式（乘以100）
         def _fmt_price(v):
             return round(v * 100, 2) if v is not None else None
 
-        # ask_profit: 基于 bestAsk 的实际利润（更保守）
-        ask_profit_pct = round(pair.ask_profit * 100, 2) if pair.ask_profit else None
+        # 双组合利润（核心指标）
+        combo_profit_pct = round(pair.best_combo_profit * 100, 2) if pair.best_combo_profit else 0
+        combo_cost_pct = round(pair.best_combo_cost * 100, 2) if pair.best_combo_cost else 0
 
         opportunities.append({
             'type': type_name,
             'relationship': pair.relationship_desc,
             'hard_title': pair.hard_title[:70],
-            'hard_yes': round(pair.hard_price * 100, 2),      # mid-price (主显示)
+            'hard_yes': round(pair.hard_price * 100, 2),      # YES mid-price（参考）
             'hard_id': pair.hard_market_id,
             'hard_url': f"{event_url}#{pair.hard_market_id[:16]}",
             'easy_title': pair.easy_title[:70],
-            'easy_yes': round(pair.easy_price * 100, 2),      # mid-price (主显示)
+            'easy_yes': round(pair.easy_price * 100, 2),      # YES mid-price（参考）
             'easy_id': pair.easy_market_id,
             'easy_url': f"{event_url}#{pair.easy_market_id[:16]}",
-            'cost': round(pair.arbitrage_cost * 100, 2),       # mid-price 理论成本
-            'arbitrage': round(gross_pct, 2),                  # mid-price 理论利润
-            'ask_profit': ask_profit_pct,                      # bestAsk 实际利润
-            'signal_tier': pair.signal_tier,                   # 信号分层: executable/limit_candidate/monitor_only
+            # 双组合定价（核心）
+            'cost': combo_cost_pct,                            # 最优组合成本
+            'arbitrage': combo_profit_pct,                     # 最优组合利润
+            'ask_profit': combo_profit_pct,                    # 兼容字段
+            'best_combo': pair.best_combo,                     # 1 或 2
+            'combo_desc': pair.best_combo_desc,                # 组合描述
+            'combo1_cost': round(pair.combo1_cost * 100, 2) if pair.combo1_cost else None,
+            'combo2_cost': round(pair.combo2_cost * 100, 2) if pair.combo2_cost else None,
+            'signal_tier': pair.signal_tier,
             'platform': platform_name,
             'timestamp': now_str,
             'market_key': f"LSA-{platform_name.lower()}-{pair.pair_key}",
@@ -1638,7 +1636,7 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'key_differences': key_differences,
             'hard_market_tag': key_differences.get('hard', ''),
             'easy_market_tag': key_differences.get('easy', ''),
-            # 盘口详细数据
+            # YES 代币盘口详细数据
             'hard_bid': _fmt_price(pair.hard_best_bid),
             'hard_ask': _fmt_price(pair.hard_best_ask),
             'hard_spread': _fmt_price(pair.hard_spread),
@@ -1647,6 +1645,14 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'easy_spread': _fmt_price(pair.easy_spread),
             'hard_liq': pair.hard_has_liquidity,
             'easy_liq': pair.easy_has_liquidity,
+            # NO 代币盘口（用于展示组合细节）
+            'hard_no_bid': _fmt_price(pair.hard_no_bid),
+            'hard_no_ask': _fmt_price(pair.hard_no_ask),
+            'easy_no_bid': _fmt_price(pair.easy_no_bid),
+            'easy_no_ask': _fmt_price(pair.easy_no_ask),
+            # 交易量
+            'hard_vol': round(pair.hard_volume, 0),
+            'easy_vol': round(pair.easy_volume, 0),
         })
 
     # 排序: executable 优先，然后 limit_candidate，最后 monitor_only；同层按利润降序
