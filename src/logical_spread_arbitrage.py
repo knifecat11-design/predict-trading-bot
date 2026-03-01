@@ -241,25 +241,41 @@ class EventPair:
     easy_market_id: str
     easy_title: str
 
-    hard_price: float = 0.0
-    easy_price: float = 0.0
+    hard_price: float = 0.0           # mid-price（用于检测）
+    easy_price: float = 0.0           # mid-price（用于检测）
 
     logical_type: LogicalType = LogicalType.PRICE_THRESHOLD
     relationship_desc: str = ""
 
-    spread: float = 0.0
-    arbitrage_cost: float = 0.0
-    arbitrage_profit: float = 0.0
+    spread: float = 0.0               # hard_mid - easy_mid
+    arbitrage_cost: float = 0.0       # 基于 mid-price 的理论成本
+    arbitrage_profit: float = 0.0     # 基于 mid-price 的理论利润
     has_arbitrage: bool = False
+
+    # 基于 bestAsk 的实际执行成本（更保守）
+    ask_cost: float = 0.0             # 基于 bestAsk 的实际买入成本
+    ask_profit: float = 0.0           # 基于 bestAsk 的实际利润
 
     platform: str = "polymarket"
     detected_at: str = ""
-    event_id: str = ""  # 所属事件 ID
-    event_title: str = ""  # 所属事件标题
+    event_id: str = ""
+    event_title: str = ""
     hard_threshold: Optional[float] = None
     easy_threshold: Optional[float] = None
-    comparison: str = ""  # ">", "<"
-    value_type: str = ""  # price, fdv, percentage, quantity
+    comparison: str = ""
+    value_type: str = ""
+
+    # 盘口详细数据（用于前端展示）
+    hard_best_bid: Optional[float] = None
+    hard_best_ask: Optional[float] = None
+    hard_mid: Optional[float] = None
+    hard_spread: Optional[float] = None
+    easy_best_bid: Optional[float] = None
+    easy_best_ask: Optional[float] = None
+    easy_mid: Optional[float] = None
+    easy_spread: Optional[float] = None
+    hard_has_liquidity: bool = True
+    easy_has_liquidity: bool = True
 
     def __post_init__(self):
         if not self.detected_at:
@@ -270,6 +286,12 @@ class EventPair:
         return f"{self.logical_type.value}:{self.hard_market_id}:{self.easy_market_id}"
 
     def calculate_spread(self) -> None:
+        """计算价差和套利利润
+
+        使用 mid-price 进行套利检测（更宽松，发现更多机会），
+        同时计算 bestAsk 下的实际执行成本（更保守，反映真实成本）。
+        """
+        # 基于 mid-price 检测（主指标）
         self.spread = self.hard_price - self.easy_price
         if self.spread >= 0:
             self.has_arbitrage = True
@@ -279,6 +301,17 @@ class EventPair:
             self.has_arbitrage = False
             self.arbitrage_cost = 0
             self.arbitrage_profit = 0
+
+        # 基于 bestAsk 的实际执行成本
+        # 策略: 买 Hard NO (= 1 - hard_ask) + 买 Easy YES (= easy_ask)
+        hard_ask = self.hard_best_ask
+        easy_ask = self.easy_best_ask
+        if hard_ask is not None and easy_ask is not None and hard_ask > 0 and easy_ask > 0:
+            self.ask_cost = (1 - hard_ask) + easy_ask
+            self.ask_profit = 1 - self.ask_cost
+        else:
+            self.ask_cost = 0
+            self.ask_profit = 0
 
 
 @dataclass
@@ -291,8 +324,15 @@ class SubMarket:
     threshold: Optional[float] = None
     year: Optional[int] = None
     date_str: Optional[str] = None  # 完整日期字符串，如 "December 31, 2025"
-    yes_price: float = 0.0
-    value_type: str = "unknown"  # price, fdv, percentage, quantity
+    yes_price: float = 0.0          # 用于比较的主价格（mid 或 outcomePrices）
+    value_type: str = "unknown"     # price, fdv, percentage, quantity
+
+    # 盘口详细价格
+    best_bid: Optional[float] = None   # 买一价
+    best_ask: Optional[float] = None   # 卖一价
+    mid_price: Optional[float] = None  # 中间价 (bid+ask)/2
+    bid_ask_spread: Optional[float] = None  # 买卖价差 (ask-bid)
+    has_liquidity: bool = True         # 是否有真实流动性（bid 和 ask 都存在）
 
 
 class LogicalSpreadAnalyzer:
@@ -457,9 +497,11 @@ class LogicalSpreadAnalyzer:
         for word in self.COMPARISON_PATTERNS.keys():
             text = re.sub(r'\b' + word + r'\b', '', text, flags=re.IGNORECASE)
 
-        # 移除停用词
+        # 移除月份名称（避免 "june" vs "december" 降低相似度）
+        month_names = TimeKeywords.MONTHS
+        # 移除停用词和月份
         words = text.lower().split()
-        words = [w for w in words if w not in self.STOP_WORDS and len(w) > 1]
+        words = [w for w in words if w not in self.STOP_WORDS and w not in month_names and len(w) > 1]
 
         # 去重并排序
         words = sorted(set(words))
@@ -474,6 +516,11 @@ class LogicalSpreadAnalyzer:
         """
         解析子市场为结构化数据
 
+        定价策略 (三层优先级):
+        1. mid-price = (bestBid + bestAsk) / 2  — 最准确，反映盘口中位
+        2. outcomePrices[0]  — Polymarket 的全局快照价，≈ mid-price
+        3. bestAsk (仅在 bestBid 不可用时回退) — 最保守但可能失真
+
         Args:
             market: Polymarket 市场字典，包含 conditionId, question, bestAsk 等
         """
@@ -482,22 +529,77 @@ class LogicalSpreadAnalyzer:
             return None
 
         comparison = self.extract_comparison(title)
+        # 时间窗口型市场（"by December 31" 等）可能没有价格比较方向
+        # 只要有日期或年份信息就允许解析，使用 "time" 标记
         if not comparison:
-            return None
+            if TimeKeywords.has_time_constraint(title):
+                comparison = 'time'  # 特殊标记：仅用于时间窗口配对
+            else:
+                return None
 
-        # 获取价格
-        yes_price = 0.0
-        if market.get('bestAsk') is not None:
-            yes_price = float(market.get('bestAsk', 0))
-        elif market.get('outcomePrices'):
+        # === 解析盘口价格 ===
+        best_bid = None
+        best_ask = None
+
+        raw_bid = market.get('bestBid')
+        raw_ask = market.get('bestAsk')
+        if raw_bid is not None:
             try:
-                outcome_prices = json.loads(market.get('outcomePrices', '[]'))
-                if outcome_prices:
+                best_bid = float(raw_bid)
+                if best_bid <= 0 or best_bid >= 1:
+                    best_bid = None  # 无效值（0 或 1 代表无订单）
+            except (ValueError, TypeError):
+                best_bid = None
+        if raw_ask is not None:
+            try:
+                best_ask = float(raw_ask)
+                if best_ask <= 0 or best_ask >= 1:
+                    best_ask = None  # 无效值
+            except (ValueError, TypeError):
+                best_ask = None
+
+        # 计算 mid-price 和流动性
+        mid_price = None
+        bid_ask_spread = None
+        has_liquidity = False
+
+        if best_bid is not None and best_ask is not None:
+            mid_price = (best_bid + best_ask) / 2
+            bid_ask_spread = best_ask - best_bid
+            has_liquidity = True
+
+        # === 确定主价格（用于套利检测）===
+        # 优先: mid-price > outcomePrices > bestAsk > price
+        yes_price = 0.0
+
+        if mid_price is not None and mid_price > 0:
+            # 最佳: 有真实盘口的 mid-price
+            yes_price = mid_price
+        elif market.get('outcomePrices'):
+            # 次佳: Polymarket 全局快照价（≈ mid-price）
+            try:
+                op_raw = market.get('outcomePrices', '[]')
+                outcome_prices = json.loads(op_raw) if isinstance(op_raw, str) else op_raw
+                if outcome_prices and float(outcome_prices[0]) > 0:
                     yes_price = float(outcome_prices[0])
+                    # outcomePrices 也近似 mid，标记为有参考价格
+                    if mid_price is None:
+                        mid_price = yes_price
             except (json.JSONDecodeError, ValueError, IndexError):
                 pass
+        elif best_ask is not None and best_ask > 0:
+            # 回退: 只有 ask 没有 bid（流动性极差）
+            yes_price = best_ask
+            mid_price = best_ask
         elif market.get('price') is not None:
-            yes_price = float(market.get('price', 0))
+            try:
+                yes_price = float(market['price'])
+                mid_price = yes_price
+            except (ValueError, TypeError):
+                pass
+
+        if yes_price <= 0:
+            return None  # 无有效价格，跳过
 
         # 提取阈值（可能是价格、百分比或数量）
         threshold = self.extract_threshold(title)
@@ -513,7 +615,12 @@ class LogicalSpreadAnalyzer:
             year=self.extract_year(title),
             date_str=self.extract_date_str(title),
             yes_price=yes_price,
-            value_type=self.get_value_type(title)
+            value_type=self.get_value_type(title),
+            best_bid=best_bid,
+            best_ask=best_ask,
+            mid_price=mid_price,
+            bid_ask_spread=bid_ask_spread,
+            has_liquidity=has_liquidity,
         )
 
     def find_price_threshold_pairs_in_event(
@@ -542,8 +649,8 @@ class LogicalSpreadAnalyzer:
         """
         pairs = []
 
-        # 只保留有阈值的子市场
-        with_threshold = [s for s in submarkets if s.threshold is not None]
+        # 只保留有阈值且有价格方向的子市场（排除 'time' 标记的时间窗口市场）
+        with_threshold = [s for s in submarkets if s.threshold is not None and s.comparison in ('>', '<')]
 
         # 按阈值排序
         with_threshold.sort(key=lambda s: s.threshold or 0)
@@ -605,7 +712,8 @@ class LogicalSpreadAnalyzer:
                     event_title=event_title,
                     hard_price=hard.yes_price,
                     easy_price=easy.yes_price,
-                    value_type=hard.value_type
+                    value_type=hard.value_type,
+                    **self._bid_ask_fields(hard, easy),
                 )
 
                 pair.calculate_spread()
@@ -691,7 +799,8 @@ class LogicalSpreadAnalyzer:
                     event_title=event_title,
                     hard_price=hard.yes_price,
                     easy_price=easy.yes_price,
-                    value_type="time"
+                    value_type="time",
+                    **self._bid_ask_fields(hard, easy),
                 )
 
                 pair.calculate_spread()
@@ -724,8 +833,8 @@ class LogicalSpreadAnalyzer:
                     if s1.comparison != s2.comparison:
                         continue
 
-                    # 检查基础问题相似度（日期型需要更高相似度）
-                    if not self._are_titles_similar(s1, s2, min_similarity=0.75):
+                    # 检查基础问题相似度（同事件内的日期型，阈值可以宽松）
+                    if not self._are_titles_similar(s1, s2, min_similarity=0.5):
                         continue
 
                     # 早期是 hard，晚期是 easy
@@ -739,20 +848,37 @@ class LogicalSpreadAnalyzer:
                         logical_type=LogicalType.TIME_WINDOW,
                         relationship_desc=f"时间窗口: {hard.date_str} vs {easy.date_str}",
                         platform="polymarket",
-                        hard_threshold=0.0,  # 日期无法用数值表示
+                        hard_threshold=0.0,
                         easy_threshold=0.0,
                         comparison="earlier",
                         event_id=event_id,
                         event_title=event_title,
                         hard_price=hard.yes_price,
                         easy_price=easy.yes_price,
-                        value_type="time"
+                        value_type="time",
+                        **self._bid_ask_fields(hard, easy),
                     )
 
                     pair.calculate_spread()
                     pairs.append(pair)
 
         return pairs
+
+    @staticmethod
+    def _bid_ask_fields(hard: SubMarket, easy: SubMarket) -> Dict:
+        """从 SubMarket 提取盘口字段，传给 EventPair 构造"""
+        return {
+            'hard_best_bid': hard.best_bid,
+            'hard_best_ask': hard.best_ask,
+            'hard_mid': hard.mid_price,
+            'hard_spread': hard.bid_ask_spread,
+            'easy_best_bid': easy.best_bid,
+            'easy_best_ask': easy.best_ask,
+            'easy_mid': easy.mid_price,
+            'easy_spread': easy.bid_ask_spread,
+            'hard_has_liquidity': hard.has_liquidity,
+            'easy_has_liquidity': easy.has_liquidity,
+        }
 
     def _are_titles_similar(self, s1: SubMarket, s2: SubMarket, min_similarity: float = 0.6) -> bool:
         """判断两个子市场的基础问题是否相似"""

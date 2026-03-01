@@ -1607,20 +1607,27 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
         event_slug = pair.event_title.lower().replace(' ', '-').replace('?', '')[:50]
         event_url = f"https://polymarket.com/event/{event_slug}"
 
+        # 盘口数据：bid / ask / spread（百分比格式，乘以100）
+        def _fmt_price(v):
+            return round(v * 100, 2) if v is not None else None
+
+        # ask_profit: 基于 bestAsk 的实际利润（更保守）
+        ask_profit_pct = round(pair.ask_profit * 100, 2) if pair.ask_profit else None
+
         opportunities.append({
             'type': type_name,
             'relationship': pair.relationship_desc,
             'hard_title': pair.hard_title[:70],
-            'hard_yes': round(pair.hard_price * 100, 2),
+            'hard_yes': round(pair.hard_price * 100, 2),      # mid-price (主显示)
             'hard_id': pair.hard_market_id,
             'hard_url': f"{event_url}#{pair.hard_market_id[:16]}",
             'easy_title': pair.easy_title[:70],
-            'easy_yes': round(pair.easy_price * 100, 2),
+            'easy_yes': round(pair.easy_price * 100, 2),      # mid-price (主显示)
             'easy_id': pair.easy_market_id,
             'easy_url': f"{event_url}#{pair.easy_market_id[:16]}",
-            'cost': round(pair.arbitrage_cost * 100, 2),
-            'arbitrage': round(gross_pct, 2),
-            'net_profit': round(gross_pct, 2),  # 不扣除手续费
+            'cost': round(pair.arbitrage_cost * 100, 2),       # mid-price 理论成本
+            'arbitrage': round(gross_pct, 2),                  # mid-price 理论利润
+            'ask_profit': ask_profit_pct,                      # bestAsk 实际利润
             'platform': platform_name,
             'timestamp': now_str,
             'market_key': f"LSA-{platform_name.lower()}-{pair.pair_key}",
@@ -1628,10 +1635,18 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'arb_type': 'logical_spread',
             'event_title': pair.event_title[:70] if pair.event_title else '',
             'event_url': event_url,
-            # 新增：关键词差异和市场标签
             'key_differences': key_differences,
             'hard_market_tag': key_differences.get('hard', ''),
             'easy_market_tag': key_differences.get('easy', ''),
+            # 盘口详细数据
+            'hard_bid': _fmt_price(pair.hard_best_bid),
+            'hard_ask': _fmt_price(pair.hard_best_ask),
+            'hard_spread': _fmt_price(pair.hard_spread),
+            'easy_bid': _fmt_price(pair.easy_best_bid),
+            'easy_ask': _fmt_price(pair.easy_best_ask),
+            'easy_spread': _fmt_price(pair.easy_spread),
+            'hard_liq': pair.hard_has_liquidity,
+            'easy_liq': pair.easy_has_liquidity,
         })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
