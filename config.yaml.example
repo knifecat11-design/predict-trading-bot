@@ -68,6 +68,18 @@ arbitrage:
     - polymarket-opinion        # Polymarket vs Opinion.trade
     - polymarket-kalshi         # Polymarket vs Kalshi
 
+# 逻辑价差套利配置 (Logical Spread Arbitrage)
+logical_spread_arbitrage:
+  enabled: true                 # 是否启用逻辑价差套利检测
+  min_spread_threshold: 0.5     # 最小价差阈值（%），触发通知的最小倒挂幅度
+  min_threshold_diff_pct: 10.0  # 阈值最小差异百分比（如价格相差10%才配对）
+  fee_rate: 0.02                # 交易费率（2%），用于计算净收益
+  cooldown_minutes: 10          # 同一事件对通知冷却时间（分钟）
+  # 支持的逻辑关系类型：
+  # - price_threshold: 价格阈值 (BTC>$100k vs BTC>$50k)
+  # - time_window: 时间窗口 (2025 vs 2026)
+  # - conditional: 条件层级 (未来扩展)
+
 # WebSocket 实时监控配置
 websocket:
   enabled: true                 # 是否启用 WebSocket 实时监控

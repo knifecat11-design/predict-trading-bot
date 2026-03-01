@@ -400,9 +400,85 @@ def find_same_platform_arb(markets, platform_name, threshold=0.5):
     return results
 
 
+# ============================================================
+# Logical Spread Arbitrage
+# ============================================================
+
+def scan_logical_spread_arbitrage(markets, platform_name, config, detector=None):
+    """
+    扫描逻辑价差套利机会
+
+    检测同一平台内具有逻辑包含关系的事件对之间的价差套利
+    """
+    try:
+        from src.logical_spread_arbitrage import LogicalSpreadArbitrageDetector
+    except ImportError:
+        logging.warning("Logical spread arbitrage module not available")
+        return [], None
+
+    if detector is None:
+        detector = LogicalSpreadArbitrageDetector(config)
+
+    # 构建价格字典
+    price_dict = {m.get('id', ''): m.get('yes', 0) for m in markets if m.get('id')}
+
+    # 执行扫描
+    arbitrage_pairs = detector.scan_markets(markets, price_dict, platform_name)
+
+    return arbitrage_pairs, detector
+
+
+def format_logical_spread_message(pair, scan_count):
+    """格式化逻辑价差套利通知消息"""
+    spread_pct = pair.spread * 100
+    profit_pct = pair.arbitrage_profit * 100
+    hard_yes_pct = pair.hard_price * 100
+    easy_yes_pct = pair.easy_price * 100
+
+    type_name = {
+        'price_threshold': '价格阈值',
+        'time_window': '时间窗口',
+        'conditional': '条件层级',
+        'multi_outcome': '多结果分解',
+    }.get(pair.logical_type.value, '未知类型')
+
+    return (
+        f"<b>🔗 逻辑价差套利 #{scan_count}</b>\n"
+        f"\n"
+        f"<b>类型:</b> {type_name}\n"
+        f"<b>平台:</b> {pair.platform.title()}\n"
+        f"\n"
+        f"<b>逻辑关系:</b> {pair.relationship_desc}\n"
+        f"\n"
+        f"<b>较难事件 (Hard):</b>\n"
+        f"  {pair.hard_title[:60]}...\n"
+        f"  YES价格: {hard_yes_pct:.1f}%\n"
+        f"\n"
+        f"<b>较易事件 (Easy):</b>\n"
+        f"  {pair.easy_title[:60]}...\n"
+        f"  YES价格: {easy_yes_pct:.1f}%\n"
+        f"\n"
+        f"<b>价差:</b> {spread_pct:.2f}% (正常应为负)\n"
+        f"<b>套利成本:</b> {pair.arbitrage_cost:.1f}%\n"
+        f"<b>预期收益:</b> {profit_pct:.2f}%\n"
+        f"\n"
+        f"<b>策略:</b> 买入 Hard 的 NO + 买入 Easy 的 YES\n"
+        f"\n"
+        f"<b>时间:</b> {datetime.now().strftime('%H:%M:%S')}"
+    )
+
+
+# ============================================================
+# Original Message Formatting
+# ============================================================
+
 def format_arb_message(opp, scan_count):
     """Format arbitrage as Telegram message (binary or multi-outcome)"""
     arb_type = opp.get('arb_type', '')
+
+    # Check for logical spread arbitrage
+    if opp.get('is_logical_spread'):
+        return format_logical_spread_message(opp.get('pair_obj'), scan_count)
 
     # Multi-outcome arbitrage (same-platform or cross-platform combo)
     if arb_type in ('multi_outcome', 'cross_combo'):
@@ -462,10 +538,15 @@ def main():
     # Config
     arb_config = config.get('arbitrage', {})
     op_config = config.get('opinion_poly', {})
+    lsa_config = config.get('logical_spread_arbitrage', {})
     scan_interval = arb_config.get('scan_interval', 30)
     cooldown_minutes = arb_config.get('cooldown_minutes', 10)
     threshold = op_config.get('min_arbitrage_threshold', 2.0)
     min_confidence = op_config.get('min_confidence', 0.2)
+
+    # Logical Spread Arbitrage 配置
+    lsa_enabled = lsa_config.get('enabled', True)
+    lsa_min_spread = lsa_config.get('min_spread_threshold', 0.5)
 
     # Check API status
     api_status = check_platform_api(config)
@@ -480,11 +561,13 @@ def main():
 
     # Startup notification
     active_platforms = [k for k, v in api_status.items() if v]
+    lsa_status = "ON" if lsa_enabled else "OFF"
     sent = send_telegram(
         f"🚀 <b>Arbitrage Monitor Started</b>\n"
         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"Active: {', '.join(active_platforms)}\n"
-        f"Threshold: {threshold}%",
+        f"Threshold: {threshold}%\n"
+        f"Logical Spread: {lsa_status}",
         config
     )
     logger.info(f"Startup notification: {'sent' if sent else 'failed (rate limited?)'}")
@@ -494,6 +577,7 @@ def main():
     scan_count = 0
     last_notifications = {}
     last_sent_opportunities = {}  # 存储上次发送的机会详情
+    lsa_detector = None  # Logical Spread Arbitrage 检测器
 
     try:
         import signal
@@ -571,6 +655,8 @@ def main():
             # === Multi-outcome arbitrage (reuse dashboard functions + caches) ===
             multi_count = 0
             combo_count = 0
+            lsa_count = 0  # Logical spread arbitrage count
+
             try:
                 import web.dashboard as _dash
                 from web.dashboard import (find_polymarket_multi_outcome_arbitrage,
@@ -596,11 +682,36 @@ def main():
             except Exception as e:
                 logging.warning(f"  Multi-outcome detection failed: {e}")
 
+            # === Logical Spread Arbitrage (逻辑价差套利) ===
+            if lsa_enabled:
+                try:
+                    # 扫描 Polymarket 的逻辑价差套利
+                    lsa_pairs, lsa_detector = scan_logical_spread_arbitrage(
+                        poly_markets, 'polymarket', config, lsa_detector
+                    )
+
+                    for pair in lsa_pairs:
+                        spread_pct = pair.spread * 100
+                        if spread_pct >= lsa_min_spread:
+                            all_opps.append({
+                                'is_logical_spread': True,
+                                'pair_obj': pair,
+                                'market': f"[{pair.logical_type.value}] {pair.hard_title[:40]}...",
+                                'platforms': f"Polymarket (Logical Spread)",
+                                'arbitrage': round(spread_pct, 2),
+                                'market_key': f"LSA-{pair.pair_key}",
+                                'is_real': True,
+                            })
+                            lsa_count += 1
+                except Exception as e:
+                    logging.warning(f"  Logical spread detection failed: {e}")
+
             same_count = sum(1 for o in all_opps if 'SAME-' in o.get('market_key', ''))
-            cross_count = len(all_opps) - same_count - multi_count - combo_count
+            lsa_key_count = sum(1 for o in all_opps if o.get('market_key', '').startswith('LSA-'))
+            cross_count = len(all_opps) - same_count - multi_count - combo_count - lsa_key_count
             logger.info(f"  Arbitrage found: {len(all_opps)} total "
                         f"({same_count} same-platform, {cross_count} cross-platform, "
-                        f"{multi_count} multi-outcome, {combo_count} cross-combo)")
+                        f"{multi_count} multi-outcome, {combo_count} cross-combo, {lsa_key_count} logical-spread)")
 
             # 发送 Telegram 通知（组合方案：首次立即播报 + 分级冷却）
             # - 首次发现 → 立即播报
