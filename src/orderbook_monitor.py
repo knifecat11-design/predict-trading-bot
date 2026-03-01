@@ -236,14 +236,26 @@ class PolymarketOrderBookAPI:
             asks = []
             bids = []
 
-            # Yes token orderbook
-            yes_asks = ob_data.get('yes_asks', {})
-            yes_bids = ob_data.get('yes_bids', {})
+            # Polymarket CLOB API 返回格式:
+            # {"asks": [{"price": "0.55", "size": "100"}, ...],
+            #  "bids": [{"price": "0.50", "size": "200"}, ...]}
+            raw_asks = ob_data.get('asks', [])
+            raw_bids = ob_data.get('bids', [])
 
-            for price, size in yes_asks.get(dict, {}).items():
-                asks.append(OrderBookLevel(price=float(price), size=float(size)))
-            for price, size in yes_bids.get(dict, {}).items():
-                bids.append(OrderBookLevel(price=float(price), size=float(size)))
+            # 支持两种格式：列表 [{price, size}] 或字典 {price: size}
+            if isinstance(raw_asks, list):
+                for item in raw_asks:
+                    asks.append(OrderBookLevel(price=float(item['price']), size=float(item['size'])))
+            elif isinstance(raw_asks, dict):
+                for price, size in raw_asks.items():
+                    asks.append(OrderBookLevel(price=float(price), size=float(size)))
+
+            if isinstance(raw_bids, list):
+                for item in raw_bids:
+                    bids.append(OrderBookLevel(price=float(item['price']), size=float(item['size'])))
+            elif isinstance(raw_bids, dict):
+                for price, size in raw_bids.items():
+                    bids.append(OrderBookLevel(price=float(price), size=float(size)))
 
             # 排序
             asks.sort(key=lambda x: x.price)
@@ -297,7 +309,8 @@ class PolymarketOrderBookAPI:
                         if yes_price > 0 and yes_price < 1:
                             best_ask = yes_price
                             best_bid = max(0.01, yes_price - 0.01)
-                except:
+                except (json.JSONDecodeError, ValueError, IndexError) as e:
+                    logger.debug(f"[Market API] outcomePrices parse error: {e}")
                     return None
 
             if best_bid is None or best_ask is None:
@@ -696,12 +709,19 @@ class OrderbookLogicalSpreadMonitor:
             return None
 
         # 计算可执行成本
-        # 策略：买入 Hard 的 NO（需要买单）+ 买入 Easy 的 YES（需要卖单）
-        hard_no_cost = self.calculator.calculate_buy_cost(hard_ob, self.target_position)
+        # 策略：买入 Hard 的 NO + 买入 Easy 的 YES
+        # 买入 Hard NO = 在 YES 订单簿上卖出 YES（使用 bid 侧）
+        #   卖出 YES 的收入 = target × avg_bid
+        #   NO 的有效成本 = target × (1 - avg_bid) = target - 收入
+        # 买入 Easy YES = 在 YES 订单簿上买入 YES（使用 ask 侧）
+        hard_sell_yes = self.calculator.calculate_sell_cost(hard_ob, self.target_position)
         easy_yes_cost = self.calculator.calculate_buy_cost(easy_ob, self.target_position)
 
-        # 总成本 = Hard NO 成本 + Easy YES 成本
-        total_cost = hard_no_cost.total_cost + easy_yes_cost.total_cost
+        # hard_sell_yes.total_cost 为负数（卖出收入），NO 的有效成本 = target + total_cost（负数）
+        hard_no_effective_cost = self.target_position + hard_sell_yes.total_cost
+
+        # 总成本 = Hard NO 有效成本 + Easy YES 成本
+        total_cost = hard_no_effective_cost + easy_yes_cost.total_cost
 
         # 计算收益
         if total_cost > 0 and total_cost < self.target_position:
@@ -717,7 +737,7 @@ class OrderbookLogicalSpreadMonitor:
         )
 
         # 总滑点
-        total_slippage = abs(hard_no_cost.slippage) + abs(easy_yes_cost.slippage)
+        total_slippage = abs(hard_sell_yes.slippage) + abs(easy_yes_cost.slippage)
 
         # 构建结果
         return LogicalSpreadPair(
@@ -734,7 +754,7 @@ class OrderbookLogicalSpreadMonitor:
             easy_yes_ask=easy_yes,
             spread=spread,
             target_position=self.target_position,
-            hard_no_cost=hard_no_cost,
+            hard_no_cost=hard_sell_yes,
             easy_yes_cost=easy_yes_cost,
             total_executable_cost=total_cost,
             total_slippage=total_slippage,
