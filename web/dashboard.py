@@ -52,6 +52,7 @@ MAX_ARBITRAGE_DISPLAY = 30        # Max arbitrage opportunities to keep
 ARBITRAGE_EXPIRY_MINUTES = 10     # Remove stale arbitrage after N minutes
 OPINION_DETAILED_FETCH = 100      # Individual No price fetches (concurrent)
 POLYMARKET_FETCH_LIMIT = 5000     # Polymarket markets to fetch (total active ~28k)
+POLYMARKET_EVENTS_LIMIT = 3000    # Polymarket events to fetch for LSA + multi-outcome (total active ~2500+)
 OPINION_MARKET_LIMIT = 1000       # Total opinion markets to fetch (high cap, API returns ~150)
 OPINION_PARSED_LIMIT = 800        # Max parsed opinion markets
 PREDICT_EXTREME_FILTER = 0.02     # Filter markets with Yes < 2% or > 98%
@@ -356,7 +357,7 @@ def fetch_polymarket_data(config):
         # whereas /markets only returns top-volume markets so multi-outcome event
         # sub-markets may be missing from the batch.
         try:
-            events = poly_client.get_events(limit=200, active_only=True)
+            events = poly_client.get_events(limit=POLYMARKET_EVENTS_LIMIT, active_only=True)
             _poly_events_cache = events
             logger.info(f"Polymarket events: {len(events)} events (multi-outcome analysis)")
         except Exception as ev_err:
