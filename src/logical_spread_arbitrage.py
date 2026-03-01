@@ -731,29 +731,74 @@ class LogicalSpreadAnalyzer:
         # 按阈值排序
         with_threshold.sort(key=lambda s: s.threshold or 0)
 
+        # === 价格梯度方向推断 ===
+        # 当关键词解析不确定时（如 "hit 40%" 到底是 > 还是 <），
+        # 使用市场价格梯度推断真实方向：
+        #   - 价格随阈值递减 → ">" 方向（高阈值更难，价格更低）
+        #   - 价格随阈值递增 → "<" 方向（低阈值更难，价格更低）
+        # 仅对 3+ 同方向子市场有效（首尾价格差异足够判断）
+        inferred_direction = {}  # market_id -> inferred comparison
+        if len(with_threshold) >= 3:
+            # 按关键词方向分组
+            from collections import defaultdict
+            direction_groups = defaultdict(list)
+            for s in with_threshold:
+                direction_groups[s.comparison].append(s)
+
+            for kw_dir, group in direction_groups.items():
+                if len(group) < 3:
+                    continue
+                sorted_group = sorted(group, key=lambda s: s.threshold)
+                min_price = sorted_group[0].yes_price   # 最小阈值的价格
+                max_price = sorted_group[-1].yes_price   # 最大阈值的价格
+
+                # 根据价格梯度推断方向
+                if abs(min_price - max_price) < 0.02:
+                    continue  # 价格太接近，无法判断
+
+                if min_price < max_price:
+                    # 价格随阈值递增 → 高阈值 = 高概率 = 更容易 → 方向实际是 "<"
+                    actual_dir = '<'
+                else:
+                    # 价格随阈值递减 → 高阈值 = 低概率 = 更难 → 方向实际是 ">"
+                    actual_dir = '>'
+
+                if actual_dir != kw_dir:
+                    self.logger.debug(
+                        f"[LSA] Direction override: keyword='{kw_dir}' → price_gradient='{actual_dir}' "
+                        f"(event={event_title[:40]}, {len(group)} markets, "
+                        f"min_thresh_price={min_price:.2f}, max_thresh_price={max_price:.2f})"
+                    )
+                for s in group:
+                    inferred_direction[s.market_id] = actual_dir
+
         # 两两比较
         for i in range(len(with_threshold)):
             for j in range(i + 1, len(with_threshold)):
                 s1 = with_threshold[i]
                 s2 = with_threshold[j]
 
-                # 方向必须一致
-                if s1.comparison != s2.comparison:
+                # 方向必须一致（使用推断方向）
+                dir1 = inferred_direction.get(s1.market_id, s1.comparison)
+                dir2 = inferred_direction.get(s2.market_id, s2.comparison)
+                if dir1 != dir2:
                     continue
+
+                effective_dir = dir1
 
                 # 数值类型应该相同（price vs price, percentage vs percentage）
                 if s1.value_type != s2.value_type and s1.value_type != 'unknown' and s2.value_type != 'unknown':
                     continue
 
-                # 确定哪个是 hard/easy
-                if s1.comparison == '>':
-                    # 对于 ">" 方向：阈值大的更难
+                # 确定哪个是 hard/easy（使用推断方向）
+                if effective_dir == '>':
+                    # ">" 方向：阈值大的更难（如 BTC > $100k 比 > $50k 难）
                     if s1.threshold < s2.threshold:
                         hard, easy = s2, s1
                     else:
                         hard, easy = s1, s2
                 else:  # "<" 方向
-                    # 对于 "<" 方向：阈值小的更难
+                    # "<" 方向：阈值小的更难（如 drop to 20% 比 drop to 40% 难）
                     if s1.threshold < s2.threshold:
                         hard, easy = s1, s2
                     else:
@@ -779,11 +824,11 @@ class LogicalSpreadAnalyzer:
                     easy_market_id=easy.market_id,
                     easy_title=easy.title,
                     logical_type=LogicalType.PRICE_THRESHOLD,
-                    relationship_desc=f"{value_type_name} ({hard.comparison}): {self._format_threshold(hard.threshold)} vs {self._format_threshold(easy.threshold)}",
+                    relationship_desc=f"{value_type_name} ({effective_dir}): {self._format_threshold(hard.threshold)} vs {self._format_threshold(easy.threshold)}",
                     platform="polymarket",
                     hard_threshold=hard.threshold,
                     easy_threshold=easy.threshold,
-                    comparison=hard.comparison,
+                    comparison=effective_dir,
                     event_id=event_id,
                     event_title=event_title,
                     event_slug=event_slug,
