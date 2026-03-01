@@ -257,6 +257,10 @@
         .outcome-pills { line-height: 1.8; }
         .key-differences { display: flex; align-items: center; gap: 6px; font-size: 11px; }
         .key-diff-item { color: #d29922; font-weight: 500; background: #21262d; padding: 2px 6px; border-radius: 4px; }
+        .signal-tier { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+        .signal-tier.executable { color: #3fb950; background: rgba(63,185,80,0.15); border: 1px solid rgba(63,185,80,0.3); }
+        .signal-tier.limit-candidate { color: #d29922; background: rgba(210,153,34,0.15); border: 1px solid rgba(210,153,34,0.3); }
+        .signal-tier.monitor-only { color: #8b949e; background: rgba(139,148,158,0.1); border: 1px solid rgba(139,148,158,0.2); }
 
         @media (max-width: 1024px) {
             .platforms, .market-lists { grid-template-columns: repeat(2, 1fr); }
@@ -388,17 +392,18 @@
             <thead>
                 <tr>
                     <th>Market</th>
-                    <th>Platform</th>
                     <th>Type</th>
-                    <th>Key Differences</th>
-                    <th>Prices</th>
-                    <th>Cost</th>
-                    <th>Gross</th>
+                    <th>Key Diff</th>
+                    <th>Hard (bid/mid/ask)</th>
+                    <th>Easy (bid/mid/ask)</th>
+                    <th>Mid Gross</th>
+                    <th>Ask Profit</th>
+                    <th>Signal</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="lsa-body">
-                <tr><td colspan="8" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
+                <tr><td colspan="9" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
             </tbody>
         </table>
 
@@ -516,40 +521,64 @@
             const arbs = data.logical_spread_arb || [];
 
             if (countEl) {
-                countEl.textContent = arbs.length > 0 ? `${arbs.length} found` : '';
+                if (arbs.length > 0) {
+                    const execCount = arbs.filter(a => a.signal_tier === 'executable').length;
+                    const limitCount = arbs.filter(a => a.signal_tier === 'limit_candidate').length;
+                    const monitorCount = arbs.filter(a => a.signal_tier === 'monitor_only').length;
+                    const parts = [];
+                    if (execCount > 0) parts.push(`${execCount} executable`);
+                    if (limitCount > 0) parts.push(`${limitCount} limit`);
+                    if (monitorCount > 0) parts.push(`${monitorCount} monitor`);
+                    countEl.textContent = parts.join(' · ');
+                } else {
+                    countEl.textContent = '';
+                }
             }
 
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No logical spread arbitrage found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No logical spread arbitrage found</td></tr>';
                 return;
             }
 
-            tbody.innerHTML = arbs.map(a => {
-                // Platform 标签
-                const platformTagHtml = platformTag(a.platform || 'Polymarket');
+            // 格式化 bid/mid/ask 三档价格显示
+            function priceTriple(bid, mid, ask, hasLiq) {
+                const b = bid !== null && bid !== undefined ? bid.toFixed(1) : '-';
+                const m = mid !== null && mid !== undefined ? mid.toFixed(1) : (ask !== null ? ask.toFixed(1) : '-');
+                const a = ask !== null && ask !== undefined ? ask.toFixed(1) : '-';
+                const liqDot = hasLiq ? '' : '<span title="No bid-side liquidity" style="color:#f85149;font-size:10px"> ⚠</span>';
+                return `<span style="color:#8b949e;font-size:11px">${b}</span>`
+                     + `<span style="color:#58a6ff;font-weight:600;margin:0 2px">${m}</span>`
+                     + `<span style="color:#8b949e;font-size:11px">${a}</span>${liqDot}`;
+            }
 
-                // 构建价格显示（不带链接，仅展示）
-                const pricesHtml = `
-                    <span class="outcome-pill">
-                        <span class="outcome-name">${a.hard_market_tag || 'Hard'}</span>
-                        <span class="outcome-price">${a.hard_yes}c</span>
-                    </span>
-                    <span style="color:#8b949e;margin:0 4px">vs</span>
-                    <span class="outcome-pill">
-                        <span class="outcome-name">${a.easy_market_tag || 'Easy'}</span>
-                        <span class="outcome-price">${a.easy_yes}c</span>
-                    </span>
-                `;
+            // 信号分层标签
+            function tierBadge(tier) {
+                const labels = {
+                    'executable': 'Execute',
+                    'limit_candidate': 'Limit',
+                    'monitor_only': 'Monitor'
+                };
+                const css = (tier || 'monitor_only').replace('_', '-');
+                return `<span class="signal-tier ${css}">${labels[tier] || 'Monitor'}</span>`;
+            }
+
+            tbody.innerHTML = arbs.map(a => {
+                // Ask profit: 实际可执行利润（更保守）
+                const askProfitStr = a.ask_profit !== null && a.ask_profit !== undefined
+                    ? `${a.ask_profit}%`
+                    : 'N/A';
+                const askProfitClass = a.ask_profit > 0 ? 'high' : a.ask_profit !== null ? 'low' : '';
 
                 return `
                 <tr class="arb-row">
                     <td><a href="${a.event_url || '#'}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title || 'Event'}</a></td>
-                    <td>${platformTagHtml}</td>
                     <td><span style="font-size:12px;color:#8b949e;background:#21262d;padding:2px 6px;border-radius:4px">${a.type || 'LSA'}</span></td>
                     <td><div class="key-differences"><span class="key-diff-item">${a.hard_market_tag || 'Hard'}</span> <span style="color:#8b949e">→</span> <span class="key-diff-item">${a.easy_market_tag || 'Easy'}</span></div></td>
-                    <td><div class="outcome-pills">${pricesHtml}</div></td>
-                    <td style="font-weight:600;color:#d29922">${a.cost}c</td>
+                    <td style="white-space:nowrap">${priceTriple(a.hard_bid, a.hard_yes, a.hard_ask, a.hard_liq)}</td>
+                    <td style="white-space:nowrap">${priceTriple(a.easy_bid, a.easy_yes, a.easy_ask, a.easy_liq)}</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
+                    <td><span class="arb-pct ${askProfitClass}">${askProfitStr}</span></td>
+                    <td>${tierBadge(a.signal_tier)}</td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;
             }).join('');
