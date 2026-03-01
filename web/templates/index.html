@@ -372,6 +372,32 @@
             </tbody>
         </table>
 
+        <!-- Logical Spread Arbitrage -->
+        <div class="section-title">
+            Logical Spread Arbitrage
+            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— same-platform logical inclusion: P(hard) ≥ P(easy) · price thresholds &amp; time windows</span>
+            <span id="lsa-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
+        </div>
+        <table class="arb-table">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Hard Event</th>
+                    <th>Hard YES</th>
+                    <th>Easy Event</th>
+                    <th>Easy YES</th>
+                    <th>Spread</th>
+                    <th>Cost</th>
+                    <th>Gross</th>
+                    <th>Net</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody id="lsa-body">
+                <tr><td colspan="10" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
+            </tbody>
+        </table>
+
         <!-- Multi-result Arbitrage -->
         <div class="section-title">
             Multi-result Arbitrage
@@ -474,6 +500,43 @@
 
         function arbClass(pct) {
             return pct >= 5 ? 'high' : pct >= 2 ? 'mid' : 'low';
+        }
+
+        function renderLogicalSpreadArb(data) {
+            const tbody = document.getElementById('lsa-body');
+            const countEl = document.getElementById('lsa-count');
+            const arbs = data.logical_spread_arb || [];
+
+            if (countEl) {
+                countEl.textContent = arbs.length > 0 ? `${arbs.length} found` : '';
+            }
+
+            if (arbs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No logical spread arbitrage found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = arbs.map(a => {
+                // Format spread with sign
+                const spreadSign = a.spread >= 0 ? '+' : '';
+                // Determine status color
+                const spreadClass = a.spread > 0 ? 'color:#f85149;font-weight:600' : 'color:#d29922;font-weight:600';
+                const statusText = a.spread > 0 ? '倒挂' : '异常';
+
+                return `
+                <tr class="arb-row">
+                    <td><span style="font-size:12px;color:#8b949e;background:#21262d;padding:2px 6px;border-radius:4px">${a.type || 'LSA'}</span></td>
+                    <td title="${a.hard_title}">${a.hard_title}</td>
+                    <td><span style="font-weight:600">${a.hard_yes}c</span></td>
+                    <td title="${a.easy_title}">${a.easy_title}</td>
+                    <td><span style="font-weight:600">${a.easy_yes}c</span></td>
+                    <td><span style="${spreadClass}">${spreadSign}${a.spread}%</span></td>
+                    <td style="font-weight:600;color:#d29922">${a.cost}c</td>
+                    <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
+                    <td><span class="net-pct ${netClass(a.net_profit)}">${a.net_profit}%</span></td>
+                    <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
+                </tr>`;
+            }).join('');
         }
 
         function renderMultiArb(data) {
@@ -619,6 +682,9 @@
                 dot.style.background = connected ? '#3fb950' : '#484f58';
                 dot.title = `Poly: ${wsFeed.poly_subscribed || 0} subs (${wsFeed.poly_connected ? 'connected' : 'disconnected'})\nKalshi: ${wsFeed.kalshi_subscribed || 0} subs (${wsFeed.kalshi_connected ? 'connected' : 'disconnected'})`;
             }
+
+            // Logical Spread Arbitrage
+            renderLogicalSpreadArb(data);
 
             // Multi-result Arbitrage
             renderMultiArb(data);
