@@ -249,54 +249,53 @@ class LogicalType(Enum):
 
 @dataclass
 class EventPair:
-    """逻辑事件对 — 双向组合套利检测
+    """逻辑事件对 — 基于确定方向的结构套利
 
-    核心理念：对于一对有逻辑包含关系的市场 A 和 B，
-    检测两种套利组合的成本：
-    - 组合1: 买入 A_NO + 买入 B_YES → 成本 = A_NO_ask + B_YES_ask
-    - 组合2: 买入 A_YES + 买入 B_NO → 成本 = A_YES_ask + B_NO_ask
-    如果最小成本 < 1.0，则存在结构性套利机会。
+    核心流程:
+    1. 确认逻辑包含关系: Hard⊂Easy (Hard 是 Easy 的子集)
+       - 价格阈值: "BTC > $100k"(Hard) ⊂ "BTC > $50k"(Easy)
+       - 时间窗口: "by March 15"(Hard) ⊂ "by March 31"(Easy)
+    2. 检测价格倒挂: P(Hard_YES) ≥ P(Easy_YES)
+    3. 计算套利成本: 买 Hard_NO(ask) + 买 Easy_YES(ask)
+    4. 若成本 < 1.0 → 结构性套利（保证 payout ≥ 1）
 
-    这种方法无需依赖方向推断（hard/easy），
-    因为两个组合会自动找到正确的套利方向。
+    为什么只有一个方向:
+    - Hard⊂Easy 意味着 Hard=Yes → Easy=Yes（Hard 发生则 Easy 必发生）
+    - 因此 Hard=No ∨ Easy=Yes 覆盖所有可能结果
+    - 买 Hard_NO + 买 Easy_YES 保证最低收益 = 1
+    - 反向组合（买 Hard_YES + 买 Easy_NO）在 "Hard=No, Easy=Yes" 时收益 = 0，不是结构套利
     """
-    # 市场 A 和 B 的基本信息
-    # 注意：A/B 的 hard/easy 标签基于关键词/日期推断（仅用于展示），
-    # 套利检测不依赖这个标签的正确性
+    # Hard = 子集/更难的市场 (A), Easy = 超集/更容易的市场 (B)
     hard_market_id: str
     hard_title: str
     easy_market_id: str
     easy_title: str
 
-    hard_price: float = 0.0           # YES mid-price（参考价）
-    easy_price: float = 0.0           # YES mid-price（参考价）
+    hard_price: float = 0.0           # Hard YES mid-price
+    easy_price: float = 0.0           # Easy YES mid-price
 
     logical_type: LogicalType = LogicalType.PRICE_THRESHOLD
     relationship_desc: str = ""
 
-    # mid-price 参考指标（向后兼容）
-    spread: float = 0.0               # hard_mid - easy_mid
-    arbitrage_cost: float = 0.0       # mid-price 理论成本
-    arbitrage_profit: float = 0.0     # mid-price 理论利润
-    has_arbitrage: bool = False
+    # === 套利检测 ===
+    spread: float = 0.0               # hard_mid - easy_mid（≥0 = 价格倒挂）
+    has_arbitrage: bool = False        # 存在价格倒挂（mid-price 级别）
 
-    # === 双向组合套利（核心定价逻辑） ===
-    # 组合1: 买 Hard_NO + 买 Easy_YES
-    combo1_cost: float = 0.0          # Hard_NO_ask + Easy_YES_ask
-    combo1_profit: float = 0.0        # 1 - combo1_cost
-    # 组合2: 买 Hard_YES + 买 Easy_NO
-    combo2_cost: float = 0.0          # Hard_YES_ask + Easy_NO_ask
-    combo2_profit: float = 0.0        # 1 - combo2_cost
-    # 最优组合
-    best_combo: int = 0               # 1 or 2 (最小成本的组合)
-    best_combo_cost: float = 0.0      # 最小成本
-    best_combo_profit: float = 0.0    # 最优利润 = 1 - best_combo_cost
-    best_combo_desc: str = ""         # 组合描述（用于前端）
+    # === 套利执行（买 Hard_NO + 买 Easy_YES）===
+    arb_cost: float = 0.0             # Hard_NO_ask + Easy_YES_ask
+    arb_profit: float = 0.0           # 1 - arb_cost
+    arb_direction: str = ""           # 执行方向描述
+
+    # 兼容字段（dashboard 使用）
+    arbitrage_cost: float = 0.0
+    arbitrage_profit: float = 0.0
+    ask_cost: float = 0.0
+    ask_profit: float = 0.0
 
     # 信号分层
-    # "executable"      — bestAsk 直接有利可图 + 流动性足够
-    # "limit_candidate" — mid-price 显示机会但 ask 不足
-    # "monitor_only"    — 无套利或流动性极差
+    # "executable"      — ask 成本 < 1 + 两腿流动性充足
+    # "limit_candidate" — mid-price 倒挂但 ask 成本 ≥ 1，适合挂限价单
+    # "monitor_only"    — 无倒挂
     signal_tier: str = "monitor_only"
 
     platform: str = "polymarket"
@@ -343,146 +342,100 @@ class EventPair:
         return f"{self.logical_type.value}:{self.hard_market_id}:{self.easy_market_id}"
 
     def calculate_spread(self) -> None:
-        """计算双向组合套利成本
+        """基于确定方向的单向套利计算
 
-        核心逻辑：
-        1. 计算两个组合的成本（使用 ask 价格，即实际买入成本）
-        2. 取最小成本，如果 < 1.0 则存在套利
-        3. 流动性过滤：使用的两腿价差率任一超阈值则跳过
-        4. 分层分类信号
-
-        组合1: 买 Hard_NO + 买 Easy_YES
-            成本 = Hard_NO_ask + Easy_YES_ask
-            适用于: Hard 是子集 (P(Hard) 应该 <= P(Easy))
-        组合2: 买 Hard_YES + 买 Easy_NO
-            成本 = Hard_YES_ask + Easy_NO_ask
-            适用于: Easy 是子集 (反向逻辑，处理标签可能错误的情况)
+        流程:
+        1. 检测 mid-price 倒挂: P(Hard_YES) ≥ P(Easy_YES)
+        2. 计算唯一正确的组合: 买 Hard_NO(ask) + 买 Easy_YES(ask)
+        3. 判断 ask 成本 < 1.0 → 可执行套利
+        4. 分层: executable / limit_candidate / monitor_only
         """
-        # === mid-price 参考指标（向后兼容） ===
+        # === Step 1: Mid-price 倒挂检测 ===
         self.spread = self.hard_price - self.easy_price
-        if self.hard_price > 0 and self.easy_price > 0:
-            mid_cost = min(
-                (1 - self.hard_price) + self.easy_price,  # 类似 combo1
-                self.hard_price + (1 - self.easy_price),  # 类似 combo2
-            )
-            self.arbitrage_cost = mid_cost
-            self.arbitrage_profit = 1 - mid_cost
-        else:
-            self.arbitrage_cost = 0
-            self.arbitrage_profit = 0
+        self.has_arbitrage = (self.spread >= 0)
 
-        # === 双向组合套利检测（核心） ===
-        hard_yes_ask = self.hard_best_ask
-        hard_no_ask = self.hard_no_ask
+        if not self.has_arbitrage:
+            self.signal_tier = "monitor_only"
+            return
+
+        # === Step 2: 唯一正确的组合成本 ===
+        # Hard⊂Easy → 买 Hard_NO + 买 Easy_YES（保证 payout ≥ 1）
+        hard_no_ask = self.hard_no_ask      # = 1 - Hard_YES_bid
         easy_yes_ask = self.easy_best_ask
-        easy_no_ask = self.easy_no_ask
 
-        combo1_valid = False
-        combo2_valid = False
-
-        # 组合1: 买 Hard_NO + 买 Easy_YES
         if (hard_no_ask is not None and easy_yes_ask is not None
                 and hard_no_ask > 0 and easy_yes_ask > 0):
-            self.combo1_cost = hard_no_ask + easy_yes_ask
-            self.combo1_profit = 1 - self.combo1_cost
-            combo1_valid = True
-
-        # 组合2: 买 Hard_YES + 买 Easy_NO
-        if (hard_yes_ask is not None and easy_no_ask is not None
-                and hard_yes_ask > 0 and easy_no_ask > 0):
-            self.combo2_cost = hard_yes_ask + easy_no_ask
-            self.combo2_profit = 1 - self.combo2_cost
-            combo2_valid = True
-
-        # 选择最优组合
-        if combo1_valid and combo2_valid:
-            if self.combo1_cost <= self.combo2_cost:
-                self.best_combo = 1
-            else:
-                self.best_combo = 2
-        elif combo1_valid:
-            self.best_combo = 1
-        elif combo2_valid:
-            self.best_combo = 2
+            self.arb_cost = hard_no_ask + easy_yes_ask
+            self.arb_profit = 1.0 - self.arb_cost
+            self.arb_direction = (
+                f"买Hard_NO({hard_no_ask*100:.1f}¢) + "
+                f"买Easy_YES({easy_yes_ask*100:.1f}¢)"
+            )
         else:
-            self.best_combo = 0
+            # 无完整 ask 数据，用 mid-price 估算
+            self.arb_cost = (1.0 - self.hard_price) + self.easy_price
+            self.arb_profit = 1.0 - self.arb_cost
+            self.arb_direction = "mid-price 估算"
 
-        if self.best_combo == 1:
-            self.best_combo_cost = self.combo1_cost
-            self.best_combo_profit = self.combo1_profit
-            self.best_combo_desc = f"Buy Hard NO({self._pct(hard_no_ask)}) + Buy Easy YES({self._pct(easy_yes_ask)})"
-        elif self.best_combo == 2:
-            self.best_combo_cost = self.combo2_cost
-            self.best_combo_profit = self.combo2_profit
-            self.best_combo_desc = f"Buy Hard YES({self._pct(hard_yes_ask)}) + Buy Easy NO({self._pct(easy_no_ask)})"
+        # 同步兼容字段
+        self.arbitrage_cost = self.arb_cost
+        self.arbitrage_profit = self.arb_profit
+        self.ask_cost = self.arb_cost
+        self.ask_profit = self.arb_profit
 
-        # 套利判定：最优组合成本 < 1.0
-        self.has_arbitrage = self.best_combo > 0 and self.best_combo_cost < 1.0
-
-        # 向后兼容 ask_profit 字段
-        self.ask_cost = self.best_combo_cost if self.has_arbitrage else 0
-        self.ask_profit = self.best_combo_profit if self.has_arbitrage else 0
-
-        # === 信号分层 ===
+        # === Step 3: 信号分层 ===
         self.signal_tier = self._classify_signal_tier()
 
-    @staticmethod
-    def _pct(val) -> str:
-        """格式化为百分比（cents 显示）"""
-        if val is None:
-            return "N/A"
-        return f"{val * 100:.1f}¢"
-
-    def _spread_rate(self, bid, ask) -> Optional[float]:
+    def _spread_rate(self, bid: Optional[float], ask: Optional[float]) -> Optional[float]:
         """计算价差率: (ask - bid) / bid"""
         if bid is not None and ask is not None and bid > 0:
             return (ask - bid) / bid
         return None
 
+    @staticmethod
+    def _pct(val) -> str:
+        """格式化为 cents 显示"""
+        if val is None:
+            return "N/A"
+        return f"{val * 100:.1f}¢"
+
     def _classify_signal_tier(self) -> str:
-        """信号分层分类
+        """信号分层
 
-        Tier 1 - executable (可立即执行):
-            - 最优组合成本 < 1.0（存在套利）
-            - 两腿所用代币的价差率都在阈值内（流动性足够）
+        Tier 1 - executable:
+            - ask 成本 < 1.0（真实可执行利润 > 0）
+            - 两腿价差率 ≤ 10%（流动性充足）
 
-        Tier 2 - limit_candidate (挂单候选):
-            - mid-price 参考指标显示机会
-            - 但 ask 组合尚不直接盈利，或流动性不完全足够
-            - 适合挂限价单等待
+        Tier 2 - limit_candidate:
+            - mid-price 有倒挂（has_arbitrage=True）
+            - 但 ask 成本 ≥ 1.0（适合挂限价单等机会）
+            - 或 ask 成本 < 1.0 但流动性不足
 
-        Tier 3 - monitor_only (仅监控):
-            - 无实际套利机会，或流动性极差
+        Tier 3 - monitor_only:
+            - 无价格倒挂
         """
         if not self.has_arbitrage:
-            # 即使 ask 组合无套利，看 mid-price 是否暗示机会
-            if self.arbitrage_profit > 0:
-                return "limit_candidate"
             return "monitor_only"
 
-        # 检查最优组合使用的两腿流动性
-        if self.best_combo == 1:
-            # 组合1 使用: Hard_NO (= 1 - Hard_YES) 和 Easy_YES
-            spread1 = self._spread_rate(self.hard_no_bid, self.hard_no_ask)
-            spread2 = self._spread_rate(self.easy_best_bid, self.easy_best_ask)
-        elif self.best_combo == 2:
-            # 组合2 使用: Hard_YES 和 Easy_NO (= 1 - Easy_YES)
-            spread1 = self._spread_rate(self.hard_best_bid, self.hard_best_ask)
-            spread2 = self._spread_rate(self.easy_no_bid, self.easy_no_ask)
-        else:
-            return "monitor_only"
+        if self.arb_profit <= 0:
+            # mid-price 倒挂但 ask 成本 ≥ 1 → 挂单候选
+            return "limit_candidate"
 
-        # 流动性过滤：任一腿价差率超阈值则降级
-        spread_ok = True
-        if spread1 is not None and spread1 > self.max_spread_rate:
-            spread_ok = False
-        if spread2 is not None and spread2 > self.max_spread_rate:
-            spread_ok = False
+        # ask 成本 < 1 → 检查两腿流动性
+        # 使用到的两腿: Hard_NO 和 Easy_YES
+        hard_no_sr = self._spread_rate(self.hard_no_bid, self.hard_no_ask)
+        easy_yes_sr = self._spread_rate(self.easy_best_bid, self.easy_best_ask)
 
-        if spread_ok and self.best_combo_profit > 0:
+        legs_liquid = True
+        if hard_no_sr is not None and hard_no_sr > self.max_spread_rate:
+            legs_liquid = False
+        if easy_yes_sr is not None and easy_yes_sr > self.max_spread_rate:
+            legs_liquid = False
+
+        if legs_liquid:
             return "executable"
 
-        # 有套利但流动性不够理想
+        # 有利润但流动性不足
         return "limit_candidate"
 
 

@@ -1602,29 +1602,26 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
         def _fmt_price(v):
             return round(v * 100, 2) if v is not None else None
 
-        # 双组合利润（核心指标）
-        combo_profit_pct = round(pair.best_combo_profit * 100, 2) if pair.best_combo_profit else 0
-        combo_cost_pct = round(pair.best_combo_cost * 100, 2) if pair.best_combo_cost else 0
+        # 套利利润（基于 ask 的单向组合: 买Hard_NO + 买Easy_YES）
+        arb_profit_pct = round(pair.arb_profit * 100, 2)
+        arb_cost_pct = round(pair.arb_cost * 100, 2)
 
         opportunities.append({
             'type': type_name,
             'relationship': pair.relationship_desc,
             'hard_title': pair.hard_title[:70],
-            'hard_yes': round(pair.hard_price * 100, 2),      # YES mid-price（参考）
+            'hard_yes': round(pair.hard_price * 100, 2),      # Hard YES mid-price
             'hard_id': pair.hard_market_id,
             'hard_url': f"{event_url}#{pair.hard_market_id[:16]}",
             'easy_title': pair.easy_title[:70],
-            'easy_yes': round(pair.easy_price * 100, 2),      # YES mid-price（参考）
+            'easy_yes': round(pair.easy_price * 100, 2),      # Easy YES mid-price
             'easy_id': pair.easy_market_id,
             'easy_url': f"{event_url}#{pair.easy_market_id[:16]}",
-            # 双组合定价（核心）
-            'cost': combo_cost_pct,                            # 最优组合成本
-            'arbitrage': combo_profit_pct,                     # 最优组合利润
-            'ask_profit': combo_profit_pct,                    # 兼容字段
-            'best_combo': pair.best_combo,                     # 1 或 2
-            'combo_desc': pair.best_combo_desc,                # 组合描述
-            'combo1_cost': round(pair.combo1_cost * 100, 2) if pair.combo1_cost else None,
-            'combo2_cost': round(pair.combo2_cost * 100, 2) if pair.combo2_cost else None,
+            # 单向套利定价（买 Hard_NO + 买 Easy_YES）
+            'cost': arb_cost_pct,                              # 组合成本
+            'arbitrage': arb_profit_pct,                       # 组合利润
+            'ask_profit': arb_profit_pct,                      # 兼容字段
+            'arb_direction': pair.arb_direction,               # 执行方向描述
             'signal_tier': pair.signal_tier,
             'platform': platform_name,
             'timestamp': now_str,
@@ -1645,10 +1642,8 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'easy_spread': _fmt_price(pair.easy_spread),
             'hard_liq': pair.hard_has_liquidity,
             'easy_liq': pair.easy_has_liquidity,
-            # NO 代币盘口（用于展示组合细节）
-            'hard_no_bid': _fmt_price(pair.hard_no_bid),
+            # NO 代币盘口
             'hard_no_ask': _fmt_price(pair.hard_no_ask),
-            'easy_no_bid': _fmt_price(pair.easy_no_bid),
             'easy_no_ask': _fmt_price(pair.easy_no_ask),
             # 交易量
             'hard_vol': round(pair.hard_volume, 0),
