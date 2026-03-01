@@ -1434,8 +1434,8 @@ def find_polymarket_multi_outcome_arbitrage(poly_events, threshold=0.5):
 # Logical Spread Arbitrage (同平台逻辑价差套利)
 # ============================================================
 
-def find_logical_spread_arbitrage(markets, platform_name='Polymarket', threshold=0.0):
-    """检测同平台逻辑价差套利机会。
+def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=0.0):
+    """检测同平台逻辑价差套利机会（基于事件架构）。
 
     对于具有逻辑包含关系的事件对：
     - Hard 事件：条件更严格（如 BTC>$100k）
@@ -1443,8 +1443,11 @@ def find_logical_spread_arbitrage(markets, platform_name='Polymarket', threshold
     - 正常情况：P(hard) < P(easy)
     - 套利机会：P(hard) >= P(easy)（市场倒挂或定价异常）
 
+    新架构：基于 Polymarket /events 端点，在同一事件的子市场之间比较，
+    避免跨事件错误匹配（如 Senate vs Trump）。
+
     Args:
-        markets: 市场列表
+        events: 从 /events API 获取的事件列表（每个事件包含 markets[]）
         platform_name: 平台名称
         threshold: 最小价差阈值（默认 0.0，即包括 P(hard)=P(easy)）
 
@@ -1457,7 +1460,7 @@ def find_logical_spread_arbitrage(markets, platform_name='Polymarket', threshold
         logger.warning("Logical Spread Arbitrage module not available")
         return []
 
-    if not markets:
+    if not events:
         return []
 
     config = {
@@ -1470,15 +1473,11 @@ def find_logical_spread_arbitrage(markets, platform_name='Polymarket', threshold
 
     detector = LogicalSpreadArbitrageDetector(config)
 
-    # 构建价格字典
-    price_dict = {m.get('id', ''): m.get('yes', 0) for m in markets if m.get('id')}
-
-    # 执行扫描
-    arbitrage_pairs = detector.scan_markets(markets, price_dict, platform_name.lower())
+    # 执行扫描（基于事件）
+    arbitrage_pairs = detector.scan_events(events, platform_name.lower())
 
     # 转换为 dashboard 格式
     opportunities = []
-    fee_rate = PLATFORM_FEES.get(platform_name.lower(), 0.02)
     now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
 
     for pair in arbitrage_pairs:
@@ -1486,16 +1485,14 @@ def find_logical_spread_arbitrage(markets, platform_name='Polymarket', threshold
         if spread_pct < threshold:
             continue
 
-        # 计算净收益
+        # 计算收益（不考虑手续费，只计算实际买入成本）
         gross_pct = pair.arbitrage_profit * 100
-        net_pct = gross_pct - (fee_rate * 2 * 100)
+        # 不再扣除手续费：LSA 套利只看实际买入成本
 
         # 类型名称
         type_names = {
             'price_threshold': '价格阈值',
             'time_window': '时间窗口',
-            'conditional': '条件层级',
-            'multi_outcome': '多结果分解',
         }
         type_name = type_names.get(pair.logical_type.value, '未知类型')
 
@@ -1511,145 +1508,40 @@ def find_logical_spread_arbitrage(markets, platform_name='Polymarket', threshold
             'spread': round(spread_pct, 2),
             'cost': round(pair.arbitrage_cost * 100, 2),
             'arbitrage': round(gross_pct, 2),
-            'net_profit': round(net_pct, 2),
+            'net_profit': round(gross_pct, 2),  # 不扣除手续费
             'platform': platform_name,
             'timestamp': now_str,
             'market_key': f"LSA-{platform_name.lower()}-{pair.pair_key}",
             '_created_at': time.time(),
             'arb_type': 'logical_spread',
+            'event_title': pair.event_title[:70] if pair.event_title else '',
         })
 
     opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
     if opportunities:
-        logger.info(f"[{platform_name} LSA] Found {len(opportunities)} logical spread arbitrage")
+        logger.info(f"[{platform_name} LSA] Found {len(opportunities)} logical spread arbitrage (event-based)")
 
     return opportunities
 
 
-def find_logical_spread_arbitrage_with_orderbook(markets, platform_name='Polymarket', threshold=0.0):
+def find_logical_spread_arbitrage_with_orderbook(events, platform_name='Polymarket', threshold=0.0):
     """使用订单簿数据检测逻辑价差套利机会（高级版本）。
 
-    相比基础版本，这个函数：
-    1. 获取真实订单簿数据（买卖深度）
-    2. 计算可执行成本（考虑滑点）
-    3. 评估流动性并给出交易建议
+    注意：此功能暂时禁用，回退到基础事件版本。
+    订单簿监控模块需要更新以支持新的事件架构。
 
     Args:
-        markets: 市场列表
+        events: 从 /events API 获取的事件列表
         platform_name: 平台名称
         threshold: 最小价差阈值
 
     Returns:
-        套利机会列表（包含订单簿信息）
+        套利机会列表
     """
-    try:
-        from src.logical_spread_arbitrage import LogicalSpreadArbitrageDetector
-        from src.orderbook_monitor import OrderbookLogicalSpreadMonitor
-    except ImportError as e:
-        logger.warning(f"Orderbook monitor not available: {e}")
-        # 回退到基础版本
-        return find_logical_spread_arbitrage(markets, platform_name, threshold)
-
-    if not markets:
-        return []
-
-    # 首先使用基础检测器识别事件对
-    config = {
-        'logical_spread_arbitrage': {
-            'min_spread_threshold': threshold,
-            'fee_rate': PLATFORM_FEES.get(platform_name.lower(), 0.02),
-            'min_threshold_diff_pct': 10.0,
-            'target_position': LSA_TARGET_POSITION,
-            'max_slippage': LSA_MAX_SLIPPAGE,
-        }
-    }
-
-    detector = LogicalSpreadArbitrageDetector(config)
-    price_dict = {m.get('id', ''): m.get('yes', 0) for m in markets if m.get('id')}
-    arbitrage_pairs = detector.scan_markets(markets, price_dict, platform_name.lower())
-
-    if not arbitrage_pairs:
-        return []
-
-    # 使用订单簿监控器分析
-    monitor = OrderbookLogicalSpreadMonitor(config)
-
-    # 转换为 monitor 需要的格式
-    pair_infos = []
-    for pair in arbitrage_pairs:
-        pair_infos.append({
-            'hard_market_id': pair.hard_market_id,
-            'hard_title': pair.hard_title,
-            'easy_market_id': pair.easy_market_id,
-            'easy_title': pair.easy_title,
-            'logical_type': pair.logical_type.value,
-            'relationship_desc': pair.relationship_desc,
-        })
-
-    # 使用订单簿分析
-    results = monitor.scan_pairs(pair_infos, markets)
-
-    # 转换为 dashboard 格式
-    opportunities = []
-    fee_rate = PLATFORM_FEES.get(platform_name.lower(), 0.02)
-    now_str = datetime.now(_TZ_CST).strftime('%H:%M:%S')
-
-    for result in results:
-        if result.net_profit <= 0:
-            continue
-
-        spread_pct = result.spread * 100
-        gross_pct = (result.gross_profit / result.target_position) * 100 if result.target_position > 0 else 0
-        net_pct = (result.net_profit / result.target_position) * 100 if result.target_position > 0 else 0
-
-        # 流动性建议
-        recommendation_tags = {
-            'buy_now': '✓ 可立即执行',
-            'place_limit_order': '⚠ 建议挂单',
-            'wait': '✗ 流动性不足',
-        }
-
-        # 类型名称
-        type_names = {
-            'price_threshold': '价格阈值',
-            'time_window': '时间窗口',
-            'conditional': '条件层级',
-            'multi_outcome': '多结果分解',
-        }
-        type_name = type_names.get(result.logical_type, '未知类型')
-
-        opportunities.append({
-            'type': type_name,
-            'relationship': result.relationship_desc,
-            'hard_title': result.hard_title[:70],
-            'hard_yes': round(result.hard_yes_ask * 100, 2),
-            'hard_id': result.hard_market_id,
-            'easy_title': result.easy_title[:70],
-            'easy_yes': round(result.easy_yes_ask * 100, 2),
-            'easy_id': result.easy_market_id,
-            'spread': round(spread_pct, 2),
-            'cost': round((result.total_executable_cost / result.target_position) * 100, 2) if result.target_position > 0 else 0,
-            'arbitrage': round(gross_pct, 2),
-            'net_profit': round(net_pct, 2),
-            'platform': platform_name,
-            'timestamp': now_str,
-            'market_key': f"LSA-OB-{platform_name.lower()}-{result.pair_id}",
-            '_created_at': time.time(),
-            'arb_type': 'logical_spread_ob',
-            'orderbook_info': {
-                'executable_shares': round(result.hard_no_cost.executable_shares + result.easy_yes_cost.executable_shares, 1),
-                'total_slippage': round(result.total_slippage, 2),
-                'recommendation': recommendation_tags.get(result.recommendation, result.recommendation),
-                'levels_used_hard': result.hard_no_cost.levels_used if result.hard_no_cost else 0,
-                'levels_used_easy': result.easy_yes_cost.levels_used if result.easy_yes_cost else 0,
-            }
-        })
-
-    opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
-    if opportunities:
-        logger.info(f"[{platform_name} LSA-OB] Found {len(opportunities)} orderbook-based opportunities")
-
-    return opportunities
+    # TODO: 更新 orderbook_monitor 以支持新的事件架构
+    # 目前回退到基础版本
+    logger.debug("[LSA-OB] Orderbook version disabled, using basic event-based version")
+    return find_logical_spread_arbitrage(events, platform_name, threshold)
 
 
 # ============================================================
@@ -2485,21 +2377,12 @@ def background_scanner():
 
             # === Logical Spread Arbitrage (同平台逻辑价差套利) ===
             # 检测 Polymarket 上的价格阈值型和时间窗口型套利
+            # 使用 /events 端点，在同一事件的子市场之间比较，避免跨事件错误匹配
             logical_spread_arb = []
-            if LSA_ENABLED and poly_markets:
-                if LSA_USE_ORDERBOOK:
-                    # 使用订单簿数据计算可执行成本（实验性功能）
-                    try:
-                        logical_spread_arb = find_logical_spread_arbitrage_with_orderbook(
-                            poly_markets, 'Polymarket', threshold=0.0)
-                    except Exception as e:
-                        logger.warning(f"[LSA-OB] 订单簿检测失败，回退到基础版本: {e}")
-                        logical_spread_arb = find_logical_spread_arbitrage(
-                            poly_markets, 'Polymarket', threshold=0.0)
-                else:
-                    # 基础版本：使用 bestAsk 价格
-                    logical_spread_arb = find_logical_spread_arbitrage(
-                        poly_markets, 'Polymarket', threshold=0.0)
+            if LSA_ENABLED and _poly_events_cache:
+                # 基于事件的版本：直接使用 events 数据
+                logical_spread_arb = find_logical_spread_arbitrage(
+                    _poly_events_cache, 'Polymarket', threshold=0.0)
 
             # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes, same platform) ===
             # Uses _poly_events_cache populated by fetch_polymarket_data via /events endpoint.
