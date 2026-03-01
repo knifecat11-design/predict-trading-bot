@@ -257,6 +257,10 @@
         .outcome-pills { line-height: 1.8; }
         .key-differences { display: flex; align-items: center; gap: 6px; font-size: 11px; }
         .key-diff-item { color: #d29922; font-weight: 500; background: #21262d; padding: 2px 6px; border-radius: 4px; }
+        .signal-tier { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+        .signal-tier.executable { color: #3fb950; background: rgba(63,185,80,0.15); border: 1px solid rgba(63,185,80,0.3); }
+        .signal-tier.limit-candidate { color: #d29922; background: rgba(210,153,34,0.15); border: 1px solid rgba(210,153,34,0.3); }
+        .signal-tier.monitor-only { color: #8b949e; background: rgba(139,148,158,0.1); border: 1px solid rgba(139,148,158,0.2); }
 
         @media (max-width: 1024px) {
             .platforms, .market-lists { grid-template-columns: repeat(2, 1fr); }
@@ -394,11 +398,12 @@
                     <th>Easy (bid/mid/ask)</th>
                     <th>Mid Gross</th>
                     <th>Ask Profit</th>
+                    <th>Signal</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="lsa-body">
-                <tr><td colspan="8" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
+                <tr><td colspan="9" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
             </tbody>
         </table>
 
@@ -516,11 +521,22 @@
             const arbs = data.logical_spread_arb || [];
 
             if (countEl) {
-                countEl.textContent = arbs.length > 0 ? `${arbs.length} found` : '';
+                if (arbs.length > 0) {
+                    const execCount = arbs.filter(a => a.signal_tier === 'executable').length;
+                    const limitCount = arbs.filter(a => a.signal_tier === 'limit_candidate').length;
+                    const monitorCount = arbs.filter(a => a.signal_tier === 'monitor_only').length;
+                    const parts = [];
+                    if (execCount > 0) parts.push(`${execCount} executable`);
+                    if (limitCount > 0) parts.push(`${limitCount} limit`);
+                    if (monitorCount > 0) parts.push(`${monitorCount} monitor`);
+                    countEl.textContent = parts.join(' · ');
+                } else {
+                    countEl.textContent = '';
+                }
             }
 
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No logical spread arbitrage found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No logical spread arbitrage found</td></tr>';
                 return;
             }
 
@@ -533,6 +549,17 @@
                 return `<span style="color:#8b949e;font-size:11px">${b}</span>`
                      + `<span style="color:#58a6ff;font-weight:600;margin:0 2px">${m}</span>`
                      + `<span style="color:#8b949e;font-size:11px">${a}</span>${liqDot}`;
+            }
+
+            // 信号分层标签
+            function tierBadge(tier) {
+                const labels = {
+                    'executable': 'Execute',
+                    'limit_candidate': 'Limit',
+                    'monitor_only': 'Monitor'
+                };
+                const css = (tier || 'monitor_only').replace('_', '-');
+                return `<span class="signal-tier ${css}">${labels[tier] || 'Monitor'}</span>`;
             }
 
             tbody.innerHTML = arbs.map(a => {
@@ -551,6 +578,7 @@
                     <td style="white-space:nowrap">${priceTriple(a.easy_bid, a.easy_yes, a.easy_ask, a.easy_liq)}</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
                     <td><span class="arb-pct ${askProfitClass}">${askProfitStr}</span></td>
+                    <td>${tierBadge(a.signal_tier)}</td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;
             }).join('');

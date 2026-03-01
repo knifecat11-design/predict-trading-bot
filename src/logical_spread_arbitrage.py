@@ -256,6 +256,12 @@ class EventPair:
     ask_cost: float = 0.0             # 基于 bestAsk 的实际买入成本
     ask_profit: float = 0.0           # 基于 bestAsk 的实际利润
 
+    # 信号分层（两层策略）
+    # "executable"      — bestAsk 直接有利可图，可立即执行
+    # "limit_candidate" — mid-price 显示机会，适合挂限价单
+    # "monitor_only"    — mid-price 有价差但流动性极差，仅监控
+    signal_tier: str = "monitor_only"
+
     platform: str = "polymarket"
     detected_at: str = ""
     event_id: str = ""
@@ -286,7 +292,12 @@ class EventPair:
         return f"{self.logical_type.value}:{self.hard_market_id}:{self.easy_market_id}"
 
     def calculate_spread(self) -> None:
-        """计算价差和套利利润
+        """计算价差和套利利润，并分层分类信号
+
+        两层策略:
+        1. executable      — bestAsk 两腿都有利可图，可立即市价执行
+        2. limit_candidate — mid-price 显示机会但 bestAsk 不够，适合挂限价单
+        3. monitor_only    — mid-price 有价差但流动性极差或价差极小，仅监控
 
         使用 mid-price 进行套利检测（更宽松，发现更多机会），
         同时计算 bestAsk 下的实际执行成本（更保守，反映真实成本）。
@@ -312,6 +323,55 @@ class EventPair:
         else:
             self.ask_cost = 0
             self.ask_profit = 0
+
+        # === 信号分层 ===
+        self.signal_tier = self._classify_signal_tier()
+
+    def _classify_signal_tier(self) -> str:
+        """分类信号层级
+
+        Tier 1 - executable (即时可执行):
+            - bestAsk 两腿都有效
+            - ask_profit > 0（市价买入两腿后净赚）
+            - 两腿都有流动性（bid 和 ask 都存在）
+
+        Tier 2 - limit_candidate (挂单候选):
+            - mid-price 显示套利机会（has_arbitrage=True, arbitrage_profit > 0）
+            - bestAsk 利润不足或缺失（ask_profit <= 0 或无法计算）
+            - 至少一腿有盘口数据
+            - mid-price 在合理区间（盘口价差不超过 30%）
+
+        Tier 3 - monitor_only (仅监控):
+            - mid-price 有价差但流动性极差（两腿都无流动性）
+            - 或者盘口价差过宽（> 30%），mid-price 参考意义有限
+        """
+        if not self.has_arbitrage:
+            return "monitor_only"
+
+        # Tier 1: bestAsk 直接有利可图
+        if (self.ask_profit > 0 and
+                self.hard_has_liquidity and self.easy_has_liquidity):
+            return "executable"
+
+        # 检查盘口价差是否在合理区间
+        # 价差 > 30% 说明流动性极差，mid-price 参考意义不大
+        MAX_REASONABLE_SPREAD = 0.30
+        hard_spread_ok = (self.hard_spread is not None and
+                          self.hard_spread <= MAX_REASONABLE_SPREAD)
+        easy_spread_ok = (self.easy_spread is not None and
+                          self.easy_spread <= MAX_REASONABLE_SPREAD)
+
+        # Tier 2: mid-price 在合理区间，适合挂限价单
+        if self.arbitrage_profit > 0:
+            # 至少一腿有合理盘口
+            if hard_spread_ok or easy_spread_ok:
+                return "limit_candidate"
+            # 两腿都没有盘口价差数据但 mid 有效（来自 outcomePrices）
+            if (self.hard_spread is None and self.easy_spread is None and
+                    self.hard_mid is not None and self.easy_mid is not None):
+                return "limit_candidate"
+
+        return "monitor_only"
 
 
 @dataclass

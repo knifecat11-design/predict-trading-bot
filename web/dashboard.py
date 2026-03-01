@@ -1628,6 +1628,7 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'cost': round(pair.arbitrage_cost * 100, 2),       # mid-price 理论成本
             'arbitrage': round(gross_pct, 2),                  # mid-price 理论利润
             'ask_profit': ask_profit_pct,                      # bestAsk 实际利润
+            'signal_tier': pair.signal_tier,                   # 信号分层: executable/limit_candidate/monitor_only
             'platform': platform_name,
             'timestamp': now_str,
             'market_key': f"LSA-{platform_name.lower()}-{pair.pair_key}",
@@ -1649,9 +1650,16 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'easy_liq': pair.easy_has_liquidity,
         })
 
-    opportunities.sort(key=lambda x: x['arbitrage'], reverse=True)
+    # 排序: executable 优先，然后 limit_candidate，最后 monitor_only；同层按利润降序
+    tier_order = {'executable': 0, 'limit_candidate': 1, 'monitor_only': 2}
+    opportunities.sort(key=lambda x: (tier_order.get(x.get('signal_tier', 'monitor_only'), 9), -x['arbitrage']))
     if opportunities:
-        logger.info(f"[{platform_name} LSA] Found {len(opportunities)} logical spread arbitrage (event-based)")
+        tier_counts = {}
+        for opp in opportunities:
+            t = opp.get('signal_tier', 'monitor_only')
+            tier_counts[t] = tier_counts.get(t, 0) + 1
+        tier_str = ', '.join(f"{v} {k}" for k, v in tier_counts.items())
+        logger.info(f"[{platform_name} LSA] Found {len(opportunities)} logical spread arbitrage ({tier_str})")
 
     return opportunities
 
