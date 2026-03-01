@@ -69,9 +69,9 @@ class ComparisonKeywords:
         'decline', 'declines',
     }
 
-    # 符号形式
-    SYMBOLS_GREATER = {'>', '≥', '+', '⬆️', '↑', '📈'}
-    SYMBOLS_LESS = {'<', '≤', '-', '⬇️', '↓', '📉'}
+    # 符号形式（不含 +/- 因为它们经常出现在非比较上下文中，如 "10-year", "100+"）
+    SYMBOLS_GREATER = {'>', '≥', '⬆️', '↑', '📈'}
+    SYMBOLS_LESS = {'<', '≤', '⬇️', '↓', '📉'}
 
     @classmethod
     def get_direction(cls, title: str) -> Optional[str]:
@@ -82,7 +82,21 @@ class ComparisonKeywords:
         """
         title_lower = title.lower()
 
-        # 先检查符号
+        # 最高优先: 显式方向标记 (HIGH)/(LOW)
+        # Polymarket 指数类市场使用 "(HIGH)"/"(LOW)" 明确标注方向
+        if '(high)' in title_lower:
+            return '>'
+        if '(low)' in title_lower:
+            return '<'
+
+        # 高优先: "X or lower/higher" 短语修饰符覆盖关键词方向
+        # "reach 3.5% or lower" → <，即使 "reach" 是 > 关键词
+        if re.search(r'or\s+(?:lower|less|below|fewer)', title_lower):
+            return '<'
+        if re.search(r'or\s+(?:higher|more|above|greater)', title_lower):
+            return '>'
+
+        # 检查符号
         for char in title:
             if char in cls.SYMBOLS_GREATER:
                 return '>'
@@ -826,8 +840,13 @@ class LogicalSpreadAnalyzer:
                 if year_diff > 2 or year_diff < 1:
                     continue
 
-                # 检查基础问题相似度
-                if not self._are_titles_similar(s1, s2):
+                # 不同阈值交给 price_threshold 处理
+                if (s1.threshold is not None and s2.threshold is not None
+                        and s1.threshold != s2.threshold):
+                    continue
+
+                # 年份型需要高相似度：问题必须几乎相同，只有年份不同
+                if not self._are_titles_similar(s1, s2, min_similarity=0.85):
                     continue
 
                 # 只有累积截止型（by/before）才构成子集关系
@@ -910,12 +929,39 @@ class LogicalSpreadAnalyzer:
                     s1 = with_date[i]
                     s2 = with_date[j]
 
+                    # 日期必须不同（相同日期无时间窗口可言）
+                    if get_date_key(s1) == get_date_key(s2):
+                        continue
+
                     # 关键：比较方向必须一致（不能一个 reach 一个 dip）
                     if s1.comparison != s2.comparison:
                         continue
 
-                    # 检查基础问题相似度（同事件内的日期型，阈值可以宽松）
-                    if not self._are_titles_similar(s1, s2, min_similarity=0.5):
+                    # 如果两个市场有不同的阈值，交给 price_threshold 处理
+                    # 例: "ETH > $3,500 by Dec" vs "ETH > $5,000 by Dec" 是 price_threshold
+                    if (s1.threshold is not None and s2.threshold is not None
+                            and s1.threshold != s2.threshold):
+                        continue
+
+                    # 日期型需要高相似度：问题必须几乎相同，只有日期不同
+                    # 避免匹配不同实体（如 Google vs OpenAI, UFC 选手A vs 选手B）
+                    if not self._are_titles_similar(s1, s2, min_similarity=0.85):
+                        continue
+
+                    # 只有累积截止型（by/before）才构成子集关系
+                    # "on February 3" vs "on February 26" 是不相交的具体日期事件
+                    # "in June" vs "in September" 也是不相交的（只能发生在某个月）
+                    t1_lower = s1.title.lower()
+                    t2_lower = s2.title.lower()
+                    has_cumulative = any(
+                        kw in t1_lower or kw in t2_lower
+                        for kw in ('by ', 'before ', 'end of ')
+                    )
+                    has_disjoint = any(
+                        kw in t1_lower and kw in t2_lower
+                        for kw in (' on ', ' in ')
+                    )
+                    if has_disjoint and not has_cumulative:
                         continue
 
                     # 排序后 s1 日期 <= s2 日期
