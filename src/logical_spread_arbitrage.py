@@ -266,6 +266,7 @@ class EventPair:
     detected_at: str = ""
     event_id: str = ""
     event_title: str = ""
+    event_slug: str = ""               # 事件 slug（用于构建 URL）
     hard_threshold: Optional[float] = None
     easy_threshold: Optional[float] = None
     comparison: str = ""
@@ -687,7 +688,8 @@ class LogicalSpreadAnalyzer:
         self,
         submarkets: List[SubMarket],
         event_id: str,
-        event_title: str
+        event_title: str,
+        event_slug: str = ""
     ) -> List[EventPair]:
         """
         在同一事件内查找价格阈值型套利机会
@@ -770,6 +772,7 @@ class LogicalSpreadAnalyzer:
                     comparison=hard.comparison,
                     event_id=event_id,
                     event_title=event_title,
+                    event_slug=event_slug,
                     hard_price=hard.yes_price,
                     easy_price=easy.yes_price,
                     value_type=hard.value_type,
@@ -785,7 +788,8 @@ class LogicalSpreadAnalyzer:
         self,
         submarkets: List[SubMarket],
         event_id: str,
-        event_title: str
+        event_title: str,
+        event_slug: str = ""
     ) -> List[EventPair]:
         """
         在同一事件内查找时间窗口型套利机会
@@ -857,6 +861,7 @@ class LogicalSpreadAnalyzer:
                     comparison="earlier",
                     event_id=event_id,
                     event_title=event_title,
+                    event_slug=event_slug,
                     hard_price=hard.yes_price,
                     easy_price=easy.yes_price,
                     value_type="time",
@@ -869,20 +874,36 @@ class LogicalSpreadAnalyzer:
         # 日期型比较（如 "by Dec 31" vs "by Mar 31"）
         # 注意：需要更高的相似度要求，避免匹配完全不同的事件
         if len(with_date) >= 2:
-            # 按月份排序（简单处理）
+            # 按月份+日期排序（确保同月内按日期排序）
             month_order = {
                 'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
                 'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
             }
 
-            def get_month_key(s: SubMarket) -> int:
+            def get_date_key(s: SubMarket) -> tuple:
+                """提取 (年份, 月份, 日期) 排序键，确保同月内按日排序"""
+                year = 9999
+                month = 999
+                day = 999
                 if s.date_str:
-                    for month, num in month_order.items():
-                        if month in s.date_str.lower():
-                            return num
-                return 999
+                    ds = s.date_str.lower()
+                    for m_name, m_num in month_order.items():
+                        if m_name in ds:
+                            month = m_num
+                            break
+                    # 提取日期数字（如 "March 31, 2026" 中的 31）
+                    day_match = re.search(r'\b(\d{1,2})\b', s.date_str)
+                    if day_match:
+                        d = int(day_match.group(1))
+                        if 1 <= d <= 31:
+                            day = d
+                    # 提取年份
+                    year_match = re.search(r'\b(20[2-9]\d)\b', s.date_str)
+                    if year_match:
+                        year = int(year_match.group(1))
+                return (year, month, day)
 
-            with_date.sort(key=get_month_key)
+            with_date.sort(key=get_date_key)
 
             for i in range(len(with_date)):
                 for j in range(i + 1, len(with_date)):
@@ -897,7 +918,9 @@ class LogicalSpreadAnalyzer:
                     if not self._are_titles_similar(s1, s2, min_similarity=0.5):
                         continue
 
-                    # 早期是 hard，晚期是 easy
+                    # 排序后 s1 日期 <= s2 日期
+                    # 早期截止 = 更难（子集），晚期截止 = 更容易（超集）
+                    # 例: "by March 15" (hard) vs "by March 31" (easy)
                     hard, easy = s1, s2
 
                     pair = EventPair(
@@ -913,6 +936,7 @@ class LogicalSpreadAnalyzer:
                         comparison="earlier",
                         event_id=event_id,
                         event_title=event_title,
+                        event_slug=event_slug,
                         hard_price=hard.yes_price,
                         easy_price=easy.yes_price,
                         value_type="time",
@@ -1007,6 +1031,7 @@ class LogicalSpreadArbitrageDetector:
         for event in events:
             event_id = event.get('id', '')
             event_title = event.get('title', event.get('slug', ''))
+            event_slug = event.get('slug', '')
             markets = event.get('markets', [])
 
             if not markets or len(markets) < 2:
@@ -1024,13 +1049,13 @@ class LogicalSpreadArbitrageDetector:
 
             # 查找价格阈值型套利
             price_pairs = self.analyzer.find_price_threshold_pairs_in_event(
-                submarkets, event_id, event_title
+                submarkets, event_id, event_title, event_slug
             )
             all_pairs.extend(price_pairs)
 
             # 查找时间窗口型套利
             time_pairs = self.analyzer.find_time_window_pairs_in_event(
-                submarkets, event_id, event_title
+                submarkets, event_id, event_title, event_slug
             )
             all_pairs.extend(time_pairs)
 

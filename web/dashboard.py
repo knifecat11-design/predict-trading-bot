@@ -1601,10 +1601,8 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
         # 提取关键词差异（用于前端显示）
         key_differences = _extract_key_differences(pair.hard_title, pair.easy_title)
 
-        # 构建 URL（仿照 polymarket 格式）
-        # 事件 URL: https://polymarket.com/event/{event_slug}
-        # 市场 URL: https://polymarket.com/event/{event_slug}#{market_id}
-        event_slug = pair.event_title.lower().replace(' ', '-').replace('?', '')[:50]
+        # 构建 URL（使用 API 返回的 event slug）
+        event_slug = pair.event_slug or pair.event_id
         event_url = f"https://polymarket.com/event/{event_slug}"
 
         # 盘口数据：bid / ask / spread（百分比格式，乘以100）
