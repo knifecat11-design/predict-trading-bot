@@ -1650,9 +1650,13 @@ def find_logical_spread_arbitrage(events, platform_name='Polymarket', threshold=
             'easy_vol': round(pair.easy_volume, 0),
         })
 
-    # 排序: executable 优先，然后 limit_candidate，最后 monitor_only；同层按利润降序
+    # 排序: executable → limit_candidate → monitor_only；同层按交易量降序，再按利润降序
     tier_order = {'executable': 0, 'limit_candidate': 1, 'monitor_only': 2}
-    opportunities.sort(key=lambda x: (tier_order.get(x.get('signal_tier', 'monitor_only'), 9), -x['arbitrage']))
+    opportunities.sort(key=lambda x: (
+        tier_order.get(x.get('signal_tier', 'monitor_only'), 9),
+        -(x.get('hard_vol', 0) + x.get('easy_vol', 0)),  # 交易量降序
+        -x['arbitrage'],                                    # 利润降序
+    ))
     if opportunities:
         tier_counts = {}
         for opp in opportunities:

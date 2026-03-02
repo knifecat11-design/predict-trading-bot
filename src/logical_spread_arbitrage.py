@@ -680,8 +680,11 @@ class LogicalSpreadAnalyzer:
         if not comparison:
             if TimeKeywords.has_time_constraint(title):
                 comparison = 'time'  # 特殊标记：仅用于时间窗口配对
+            elif (self.extract_threshold(title) is not None
+                  or self.extract_percentage(title) is not None):
+                comparison = 'unknown'  # 有阈值但无方向关键词 → monitor 候选
             else:
-                return None
+                return None  # 无方向、无时间、无阈值 → 无法配对
 
         # === 解析盘口价格 ===
         best_bid = None
@@ -1142,6 +1145,124 @@ class LogicalSpreadAnalyzer:
 
         return similarity >= min_similarity
 
+    def find_monitor_pairs_in_event(
+        self,
+        submarkets: List[SubMarket],
+        event_id: str,
+        event_title: str,
+        event_slug: str = "",
+        existing_pair_keys: Set[str] = None
+    ) -> List[EventPair]:
+        """宽松条件的 monitor 层配对 — 兜底严格逻辑之外的潜在机会
+
+        与严格配对的区别:
+        1. 包含 comparison='unknown' 的市场（有阈值但无方向关键词）
+        2. 阈值差异门槛降低（5% vs 严格的 10%）
+        3. 使用价格梯度推断方向（仅限 monitor 层，不影响 exec/limit）
+        4. 所有结果强制 signal_tier='monitor_only'
+
+        Args:
+            existing_pair_keys: 严格配对已生成的 pair_key 集合（用于去重）
+        """
+        if existing_pair_keys is None:
+            existing_pair_keys = set()
+
+        pairs = []
+        MONITOR_MIN_DIFF_PCT = 5.0  # 宽松阈值差异（严格层为 10%）
+
+        # 所有有阈值的子市场（包括 '>', '<', 'unknown'）
+        with_threshold = [
+            s for s in submarkets
+            if s.threshold is not None and s.comparison in ('>', '<', 'unknown')
+        ]
+        if len(with_threshold) < 2:
+            return []
+
+        # 按阈值排序
+        with_threshold.sort(key=lambda s: s.threshold or 0)
+
+        for i in range(len(with_threshold)):
+            for j in range(i + 1, len(with_threshold)):
+                s1 = with_threshold[i]  # 低阈值
+                s2 = with_threshold[j]  # 高阈值
+
+                # 数值类型应该相同
+                if (s1.value_type != s2.value_type
+                        and s1.value_type != 'unknown'
+                        and s2.value_type != 'unknown'):
+                    continue
+
+                # 阈值差异（宽松）
+                if s1.threshold > 0 and s2.threshold > 0:
+                    diff_pct = abs(s2.threshold - s1.threshold) / min(s1.threshold, s2.threshold) * 100
+                    if diff_pct < MONITOR_MIN_DIFF_PCT:
+                        continue
+
+                # === 方向推断 ===
+                # 优先使用关键词方向；如果两边都有且一致，直接用
+                dir1 = s1.comparison if s1.comparison in ('>', '<') else None
+                dir2 = s2.comparison if s2.comparison in ('>', '<') else None
+
+                if dir1 and dir2 and dir1 != dir2:
+                    continue  # 方向冲突，跳过
+
+                effective_dir = dir1 or dir2  # 至少一边有关键词方向
+
+                if not effective_dir:
+                    # 两边都是 unknown → 用价格梯度推断
+                    # 低阈值价格 > 高阈值价格 → '>'（高阈值更难，概率更低）
+                    # 低阈值价格 < 高阈值价格 → '<'（低阈值更难，概率更低）
+                    if abs(s1.yes_price - s2.yes_price) < 0.01:
+                        continue  # 价格太接近，无法判断
+                    effective_dir = '>' if s1.yes_price > s2.yes_price else '<'
+
+                # 确定 hard/easy
+                if effective_dir == '>':
+                    hard, easy = s2, s1  # 高阈值更难
+                else:
+                    hard, easy = s1, s2  # 低阈值更难
+
+                # 去重：跳过严格层已找到的配对
+                pair_key = f"price_threshold:{hard.market_id}:{easy.market_id}"
+                if pair_key in existing_pair_keys:
+                    continue
+
+                value_type_name = {
+                    'fdv': 'FDV', 'percentage': '百分比',
+                    'quantity': '数量', 'price': '价格',
+                }.get(hard.value_type, '阈值')
+
+                pair = EventPair(
+                    hard_market_id=hard.market_id,
+                    hard_title=hard.title,
+                    easy_market_id=easy.market_id,
+                    easy_title=easy.title,
+                    logical_type=LogicalType.PRICE_THRESHOLD,
+                    relationship_desc=f"{value_type_name} ({effective_dir}): "
+                                      f"{self._format_threshold(hard.threshold)} vs "
+                                      f"{self._format_threshold(easy.threshold)}",
+                    platform="polymarket",
+                    hard_threshold=hard.threshold,
+                    easy_threshold=easy.threshold,
+                    comparison=effective_dir,
+                    event_id=event_id,
+                    event_title=event_title,
+                    event_slug=event_slug,
+                    hard_price=hard.yes_price,
+                    easy_price=easy.yes_price,
+                    value_type=hard.value_type,
+                    **self._bid_ask_fields(hard, easy),
+                )
+
+                pair.calculate_spread()
+
+                # Monitor 层：只保留有 mid-price 倒挂的
+                if pair.has_arbitrage:
+                    pair.signal_tier = 'monitor_only'  # 强制 monitor
+                    pairs.append(pair)
+
+        return pairs
+
     @staticmethod
     def _format_threshold(value: float) -> str:
         """格式化阈值显示"""
@@ -1185,7 +1306,10 @@ class LogicalSpreadArbitrageDetector:
         platform: str = "polymarket"
     ) -> List[EventPair]:
         """
-        扫描事件列表，检测逻辑价差套利机会
+        扫描事件列表，检测逻辑价差套利机会（两轮扫描）
+
+        第一轮（严格）: 关键词方向确定 → executable / limit_candidate
+        第二轮（宽松）: 包含无方向关键词的市场 → monitor_only
 
         Args:
             events: 从 /events API 获取的事件列表
@@ -1193,9 +1317,10 @@ class LogicalSpreadArbitrageDetector:
             platform: 平台名称
 
         Returns:
-            检测到的套利机会列表
+            检测到的套利机会列表（按 tier 排序）
         """
-        all_pairs = []
+        strict_pairs = []
+        monitor_pairs = []
 
         for event in events:
             event_id = event.get('id', '')
@@ -1204,9 +1329,9 @@ class LogicalSpreadArbitrageDetector:
             markets = event.get('markets', [])
 
             if not markets or len(markets) < 2:
-                continue  # 至少需要 2 个子市场才能形成对
+                continue
 
-            # 解析子市场
+            # 解析子市场（包含 comparison='unknown' 的）
             submarkets = []
             for market in markets:
                 submarket = self.analyzer.parse_submarket(market)
@@ -1216,46 +1341,53 @@ class LogicalSpreadArbitrageDetector:
             if len(submarkets) < 2:
                 continue
 
-            # 查找价格阈值型套利
+            # === 第一轮：严格配对（executable / limit_candidate）===
             price_pairs = self.analyzer.find_price_threshold_pairs_in_event(
                 submarkets, event_id, event_title, event_slug
             )
-            all_pairs.extend(price_pairs)
-
-            # 查找时间窗口型套利
             time_pairs = self.analyzer.find_time_window_pairs_in_event(
                 submarkets, event_id, event_title, event_slug
             )
-            all_pairs.extend(time_pairs)
+            strict_pairs.extend(price_pairs)
+            strict_pairs.extend(time_pairs)
+
+            # === 第二轮：宽松配对（monitor_only）===
+            # 收集严格层已配对的 key，避免重复
+            existing_keys = {p.pair_key for p in price_pairs + time_pairs}
+            monitor = self.analyzer.find_monitor_pairs_in_event(
+                submarkets, event_id, event_title, event_slug, existing_keys
+            )
+            monitor_pairs.extend(monitor)
 
         # 过滤：只保留有套利机会的
-        arbitrage_pairs = [p for p in all_pairs if p.has_arbitrage]
+        strict_arb = [p for p in strict_pairs if p.has_arbitrage]
+        monitor_arb = [p for p in monitor_pairs if p.has_arbitrage]
 
         # 过滤：极薄流动性市场（两个子市场 24h 交易量之和 < 阈值）
         if self.min_combined_volume > 0:
-            before_vol = len(arbitrage_pairs)
-            arbitrage_pairs = [
-                p for p in arbitrage_pairs
+            strict_arb = [
+                p for p in strict_arb
                 if (p.hard_volume + p.easy_volume) >= self.min_combined_volume
             ]
-            filtered_vol = before_vol - len(arbitrage_pairs)
-            if filtered_vol > 0:
-                self.logger.debug(
-                    f"[LogicalSpread] Volume filter: removed {filtered_vol} pairs "
-                    f"(combined 24h vol < ${self.min_combined_volume:.0f})"
-                )
-
-        # 进一步过滤：价差阈值
-        if self.min_spread_threshold > 0:
-            arbitrage_pairs = [
-                p for p in arbitrage_pairs
-                if p.best_combo_profit * 100 >= self.min_spread_threshold
+            # Monitor 层用更宽松的交易量门槛（严格层的一半）
+            monitor_vol_min = self.min_combined_volume / 2
+            monitor_arb = [
+                p for p in monitor_arb
+                if (p.hard_volume + p.easy_volume) >= monitor_vol_min
             ]
 
-        self._cached_pairs = arbitrage_pairs
-        self.logger.info(f"[LogicalSpread] 扫描 {len(events)} 个事件，检测到 {len(arbitrage_pairs)} 个套利机会")
+        # 合并
+        all_arbitrage = strict_arb + monitor_arb
 
-        return arbitrage_pairs
+        self._cached_pairs = all_arbitrage
+        strict_count = len(strict_arb)
+        monitor_count = len(monitor_arb)
+        self.logger.info(
+            f"[LogicalSpread] 扫描 {len(events)} 个事件，"
+            f"检测到 {strict_count} 个严格套利 + {monitor_count} 个 monitor 机会"
+        )
+
+        return all_arbitrage
 
     def update_prices(
         self,

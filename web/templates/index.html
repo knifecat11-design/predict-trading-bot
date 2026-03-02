@@ -398,12 +398,13 @@
                     <th>Easy (bid/mid/ask)</th>
                     <th>Cost</th>
                     <th>Profit</th>
+                    <th>Vol 24h</th>
                     <th>Signal</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="lsa-body">
-                <tr><td colspan="9" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
+                <tr><td colspan="10" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
             </tbody>
         </table>
 
@@ -536,7 +537,7 @@
             }
 
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No logical spread arbitrage found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No logical spread arbitrage found</td></tr>';
                 return;
             }
 
@@ -549,6 +550,15 @@
                 return `<span style="color:#8b949e;font-size:11px">${b}</span>`
                      + `<span style="color:#58a6ff;font-weight:600;margin:0 2px">${m}</span>`
                      + `<span style="color:#8b949e;font-size:11px">${a}</span>${liqDot}`;
+            }
+
+            // 交易量格式化 (combined 24h volume)
+            function formatVol(hardVol, easyVol) {
+                const total = (hardVol || 0) + (easyVol || 0);
+                if (total >= 1000000) return `$${(total/1000000).toFixed(1)}M`;
+                if (total >= 1000) return `$${(total/1000).toFixed(1)}K`;
+                if (total > 0) return `$${total.toFixed(0)}`;
+                return '-';
             }
 
             // 信号分层标签
@@ -583,6 +593,7 @@
                     <td style="white-space:nowrap">${priceTriple(a.easy_bid, a.easy_yes, a.easy_ask, a.easy_liq)}</td>
                     <td style="white-space:nowrap">${costStr}</td>
                     <td><span class="arb-pct ${profitClass}">${profitStr}</span></td>
+                    <td style="font-size:12px;color:#8b949e;white-space:nowrap">${formatVol(a.hard_vol, a.easy_vol)}</td>
                     <td>${tierBadge(a.signal_tier)}</td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;
