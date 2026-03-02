@@ -499,6 +499,36 @@ class LogicalSpreadAnalyzer:
         'during', 'end', 'yes', 'no', 'any', 'all'
     }
 
+    # 区间/分桶标题正则 — 用于检测互斥的范围型子市场（如 IPO market cap buckets）
+    # 匹配: "$100-200B", "$750B-1T", "$1T-1.25T", "100-200", "50K-100K" 等
+    RANGE_BUCKET_PATTERN = re.compile(
+        r'\$?\d+(?:[.,]\d+)?\s*[BMKT]?\s*[-–]\s*\$?\d+(?:[.,]\d+)?\s*[BMKT]?',
+        re.IGNORECASE
+    )
+    # 匹配: "$600B+", "$1.5T+", "100+" 等开放端点
+    OPEN_BUCKET_PATTERN = re.compile(
+        r'\$?\d+(?:[.,]\d+)?\s*[BMKT]?\s*\+',
+        re.IGNORECASE
+    )
+
+    @classmethod
+    def is_range_bucket_event(cls, markets: List[Dict]) -> bool:
+        """检测事件是否为互斥区间型（如 IPO market cap buckets）
+
+        区间型事件的子市场彼此互斥（每个覆盖一个独立范围），
+        不存在子集/超集的逻辑包含关系，不应做 LSA 配对。
+
+        判断标准: 如果 ≥2 个子市场标题包含 "X-Y" 范围格式，整个事件被视为区间型。
+        """
+        range_count = 0
+        for m in markets:
+            title = m.get('question', m.get('title', ''))
+            if cls.RANGE_BUCKET_PATTERN.search(title) or cls.OPEN_BUCKET_PATTERN.search(title):
+                range_count += 1
+            if range_count >= 2:
+                return True
+        return False
+
     def __init__(self, config: Dict = None):
         self.config = config or {}
         self.logger = logger
@@ -1329,6 +1359,10 @@ class LogicalSpreadArbitrageDetector:
             markets = event.get('markets', [])
 
             if not markets or len(markets) < 2:
+                continue
+
+            # 跳过互斥区间型事件（如 IPO market cap buckets: <$100B, $100-200B, ...）
+            if self.analyzer.is_range_bucket_event(markets):
                 continue
 
             # 解析子市场（包含 comparison='unknown' 的）

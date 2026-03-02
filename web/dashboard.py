@@ -1688,6 +1688,234 @@ def find_logical_spread_arbitrage_with_orderbook(events, platform_name='Polymark
     return find_logical_spread_arbitrage(events, platform_name, threshold)
 
 
+def normalize_kalshi_for_lsa(raw_markets):
+    """将 Kalshi 原始市场数据归一化为 LSA 兼容的事件格式。
+
+    Kalshi 字段映射到 Polymarket 兼容格式:
+      - event_ticker → event id/slug
+      - ticker → conditionId (子市场唯一 ID)
+      - title → question (子市场标题)
+      - yes_ask_dollars → bestAsk
+      - yes_bid_dollars → bestBid (用于推导 NO_ask = 1 - yes_bid)
+      - volume_24h → volume24hr
+      - close_time → 用于过滤已过期市场
+
+    Returns:
+        List[Dict]: 事件列表，每个事件包含 id, title, slug, markets[]
+    """
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for m in raw_markets:
+        et = m.get('event_ticker', '')
+        if et:
+            groups[et].append(m)
+
+    now_utc = datetime.now(timezone.utc)
+    events = []
+
+    for event_ticker, markets in groups.items():
+        if len(markets) < 2:
+            continue
+
+        normalized_markets = []
+        for m in markets:
+            # 跳过已过期的市场
+            close_time = m.get('close_time', '')
+            if close_time:
+                try:
+                    ct = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
+                    if ct < now_utc:
+                        continue
+                except Exception:
+                    pass
+
+            # 跳过已结算的市场
+            status = m.get('status', '')
+            if status in ('settled', 'closed', 'finalized'):
+                continue
+
+            # 解析价格
+            try:
+                yes_ask = float(m.get('yes_ask_dollars', '0') or '0')
+                yes_bid = float(m.get('yes_bid_dollars', '0') or '0')
+            except (ValueError, TypeError):
+                continue
+
+            if yes_ask <= 0:
+                continue
+
+            title = m.get('title', '') or m.get('subtitle', '') or m.get('ticker', '')
+            volume = float(m.get('volume_24h', 0) or 0)
+
+            normalized_markets.append({
+                'conditionId': m.get('ticker', ''),
+                'question': title,
+                'bestBid': str(yes_bid) if yes_bid > 0 else None,
+                'bestAsk': str(yes_ask),
+                'volume24hr': volume,
+                'closed': False,
+                'active': True,
+            })
+
+        if len(normalized_markets) < 2:
+            continue
+
+        # 事件标题: 用第一个市场的 title 或 event_ticker
+        event_title = event_ticker.replace('-', ' ')
+
+        events.append({
+            'id': event_ticker,
+            'title': event_title,
+            'slug': event_ticker.lower(),
+            'markets': normalized_markets,
+        })
+
+    logger.info(f"[Kalshi LSA] Normalized {len(events)} events with 2+ submarkets from {len(raw_markets)} raw markets")
+    return events
+
+
+def find_kalshi_lsa(raw_markets, threshold=0.0):
+    """检测 Kalshi 平台内的逻辑价差套利机会。
+
+    流程:
+    1. 将 Kalshi 原始市场按 event_ticker 分组
+    2. 归一化为 LSA 兼容格式
+    3. 复用 Polymarket 的 LSA 检测逻辑
+    4. 替换平台名称和 URL
+
+    Args:
+        raw_markets: Kalshi 原始市场列表（from KalshiClient.get_markets()）
+        threshold: 最小价差阈值
+
+    Returns:
+        套利机会列表（dashboard 格式）
+    """
+    events = normalize_kalshi_for_lsa(raw_markets)
+    if not events:
+        return []
+
+    opportunities = find_logical_spread_arbitrage(events, 'Kalshi', threshold)
+
+    # 修正 URL: Kalshi 使用 event_ticker 而非 slug
+    for opp in opportunities:
+        event_ticker = opp.get('market_key', '').split('-', 2)[-1] if opp.get('market_key') else ''
+        # 从 event_url 中提取事件 ID
+        evt_id = opp.get('event_title', '').replace(' ', '-').upper()
+        # 使用原始 event_ticker 构建 Kalshi URL
+        # event_url 已经在 find_logical_spread_arbitrage 中设置，但基于 slug
+        # Kalshi 实际 URL 格式: https://kalshi.com/markets/{event_ticker}
+        if opp.get('event_url', '').startswith('https://polymarket.com'):
+            slug = opp.get('event_url', '').split('/')[-1]
+            opp['event_url'] = f"https://kalshi.com/markets/{slug.upper()}"
+            # 修正子市场链接
+            opp['hard_url'] = opp['event_url']
+            opp['easy_url'] = opp['event_url']
+
+    return opportunities
+
+
+def normalize_predict_for_lsa(raw_markets, orderbooks):
+    """将 Predict.fun 原始市场数据归一化为 LSA 兼容的事件格式。
+
+    Predict.fun 使用 slug 层级分组（parentSlug / groupSlug / eventSlug），
+    每个子市场有独立的 orderbook (bid/ask)。
+
+    字段映射:
+      - parentSlug/groupSlug → event id/slug
+      - market id → conditionId
+      - question → question
+      - orderbook yes_bid/yes_ask → bestBid/bestAsk
+      - volume24h → volume24hr
+
+    Returns:
+        List[Dict]: 事件列表，每个事件包含 id, title, slug, markets[]
+    """
+    from collections import defaultdict
+    groups = defaultdict(list)
+
+    for m in raw_markets:
+        market_id = m.get('id', m.get('market_id', ''))
+        if not market_id:
+            continue
+
+        # 获取 orderbook 数据
+        ob = orderbooks.get(market_id)
+        yes_ask = None
+        yes_bid = None
+        if ob:
+            yes_ask = ob.get('yes_ask')
+            yes_bid = ob.get('yes_bid')
+
+        # 跳过无有效价格的市场
+        if yes_ask is None or yes_ask <= 0 or yes_ask >= 1:
+            continue
+
+        question_text = m.get('question') or m.get('title', '')
+        parent_slug = (
+            m.get('groupSlug') or m.get('parentSlug') or
+            m.get('eventSlug') or m.get('marketSlug') or
+            m.get('market_slug') or m.get('group_slug') or
+            m.get('parent_slug')
+        )
+        if not parent_slug:
+            parent_slug = question_to_predict_slug(question_text)
+
+        volume = float(m.get('volume24h', m.get('volume', 0)) or 0)
+
+        groups[parent_slug].append({
+            'conditionId': market_id,
+            'question': question_text,
+            'bestBid': str(yes_bid) if yes_bid and yes_bid > 0 else None,
+            'bestAsk': str(yes_ask),
+            'volume24hr': volume,
+            'closed': False,
+            'active': True,
+        })
+
+    events = []
+    for parent_slug, markets in groups.items():
+        if len(markets) < 2:
+            continue
+        events.append({
+            'id': parent_slug,
+            'title': parent_slug.replace('-', ' ').title(),
+            'slug': parent_slug,
+            'markets': markets,
+        })
+
+    logger.info(f"[Predict LSA] Normalized {len(events)} events with 2+ submarkets")
+    return events
+
+
+def find_predict_lsa(raw_markets, orderbooks, threshold=0.0):
+    """检测 Predict.fun 平台内的逻辑价差套利机会。
+
+    Args:
+        raw_markets: Predict.fun 原始市场列表
+        orderbooks: Predict.fun orderbook 缓存 {{market_id: {yes_ask, yes_bid, ...}}}
+        threshold: 最小价差阈值
+
+    Returns:
+        套利机会列表（dashboard 格式）
+    """
+    events = normalize_predict_for_lsa(raw_markets, orderbooks)
+    if not events:
+        return []
+
+    opportunities = find_logical_spread_arbitrage(events, 'Predict', threshold)
+
+    # 修正 URL
+    for opp in opportunities:
+        if opp.get('event_url', '').startswith('https://polymarket.com'):
+            slug = opp.get('event_url', '').split('/')[-1]
+            opp['event_url'] = f"https://predict.fun/market/{slug}"
+            opp['hard_url'] = opp['event_url']
+            opp['easy_url'] = opp['event_url']
+
+    return opportunities
+
+
 # ============================================================
 # Cross-platform multi-outcome combo arbitrage
 # ============================================================
@@ -2524,9 +2752,20 @@ def background_scanner():
             # 使用 /events 端点，在同一事件的子市场之间比较，避免跨事件错误匹配
             logical_spread_arb = []
             if LSA_ENABLED and _poly_events_cache:
-                # 基于事件的版本：直接使用 events 数据
+                # Polymarket LSA: 基于事件的版本
                 logical_spread_arb = find_logical_spread_arbitrage(
                     _poly_events_cache, 'Polymarket', threshold=0.0)
+
+            # Kalshi LSA: 按 event_ticker 分组后复用同一检测逻辑
+            if LSA_ENABLED and _kalshi_raw_cache:
+                kalshi_lsa = find_kalshi_lsa(_kalshi_raw_cache, threshold=0.0)
+                logical_spread_arb.extend(kalshi_lsa)
+
+            # Predict.fun LSA: 按 slug 分组后复用同一检测逻辑
+            if LSA_ENABLED and _predict_raw_cache and _predict_ob_cache:
+                predict_lsa = find_predict_lsa(
+                    _predict_raw_cache, _predict_ob_cache, threshold=0.0)
+                logical_spread_arb.extend(predict_lsa)
 
             # === Multi-outcome arbitrage (Polymarket events with 3+ outcomes, same platform) ===
             # Uses _poly_events_cache populated by fetch_polymarket_data via /events endpoint.
@@ -2580,7 +2819,12 @@ def background_scanner():
                     if key not in new_lsa_map:
                         if old_opp.get('_created_at', 0) > expiry_cutoff:
                             new_lsa_map[key] = old_opp
-                sorted_lsa = sorted(new_lsa_map.values(), key=lambda x: x['arbitrage'], reverse=True)
+                tier_order = {'executable': 0, 'limit_candidate': 1, 'monitor_only': 2}
+                sorted_lsa = sorted(new_lsa_map.values(), key=lambda x: (
+                    tier_order.get(x.get('signal_tier', 'monitor_only'), 9),
+                    -(x.get('hard_vol', 0) + x.get('easy_vol', 0)),
+                    -x['arbitrage'],
+                ))
                 _state['logical_spread_arb'] = sorted_lsa[:MAX_ARBITRAGE_DISPLAY]
 
                 # Merge multi-outcome arb (same-platform + cross-combo) with existing

@@ -385,7 +385,7 @@
         <!-- Logical Spread Arbitrage -->
         <div class="section-title">
             Logical Spread Arbitrage
-            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— Hard⊂Easy structural arb: buy Hard_NO + Easy_YES &lt; $1 · price thresholds &amp; time windows</span>
+            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— Hard⊂Easy structural arb: buy Hard_NO + Easy_YES &lt; $1 · Polymarket + Kalshi + Predict</span>
             <span id="lsa-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
         </div>
         <table class="arb-table">
@@ -586,7 +586,7 @@
 
                 return `
                 <tr class="arb-row">
-                    <td><a href="${a.event_url || '#'}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title || 'Event'}</a></td>
+                    <td><a href="${a.event_url || '#'}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title || 'Event'}</a> ${platformTag(a.platform || 'Polymarket')}</td>
                     <td><span style="font-size:12px;color:#8b949e;background:#21262d;padding:2px 6px;border-radius:4px">${a.type || 'LSA'}</span></td>
                     <td><div class="key-differences"><span class="key-diff-item">${a.hard_market_tag || 'Hard'}</span> <span style="color:#8b949e">⊂</span> <span class="key-diff-item">${a.easy_market_tag || 'Easy'}</span></div></td>
                     <td style="white-space:nowrap">${priceTriple(a.hard_bid, a.hard_yes, a.hard_ask, a.hard_liq)}</td>
