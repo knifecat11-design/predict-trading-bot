@@ -422,12 +422,11 @@
                     <th style="min-width:320px">Outcomes (buy all Yes)</th>
                     <th>Total Cost</th>
                     <th>Gross</th>
-                    <th>Shares</th>
                     <th>Time</th>
                 </tr>
             </thead>
             <tbody id="multi-arb-body">
-                <tr><td colspan="7" class="empty-state pulse">Scanning for multi-outcome opportunities...</td></tr>
+                <tr><td colspan="6" class="empty-state pulse">Scanning for multi-outcome opportunities...</td></tr>
             </tbody>
         </table>
 
@@ -619,17 +618,11 @@
             }
 
             if (arbs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No multi-outcome arbitrage found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No multi-outcome arbitrage found</td></tr>';
                 return;
             }
 
             tbody.innerHTML = arbs.map(a => {
-                // shares: 可购买的股数（两个平台 ask_size 之和，或单方，或 N/A）
-                const shares = a.shares;
-                const sharesStr = shares !== null && shares !== undefined
-                    ? shares.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    : 'N/A';
-                const sharesStyle = 'color:#d29922;font-weight:600';  // 黄色显示 shares
                 const isCrossCombo = a.arb_type === 'cross_combo';
 
                 // Build outcome pills — for cross-combo show which platform each comes from
@@ -658,14 +651,21 @@
                     ? platformTag('Cross')
                     : platformTag(a.platform);
 
+                // Event column: for cross-combo, show both matched events
+                const eventHtml = isCrossCombo && a.event_title_b
+                    ? `<div>
+                        <a href="${a.event_url}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title}</a>
+                        <div style="font-size:11px;color:#8b949e;margin-top:2px">+ <a href="${a.event_url_b}" target="_blank" style="color:#8b949e;text-decoration:none">${a.event_title_b}</a></div>
+                    </div>`
+                    : `<a href="${a.event_url}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title}</a>`;
+
                 return `
                 <tr class="multi-arb-row${isCrossCombo ? ' cross-combo-row' : ''}">
-                    <td><a href="${a.event_url}" target="_blank" style="color:#03a9f4;font-weight:600;text-decoration:none">${a.event_title}</a></td>
+                    <td>${eventHtml}</td>
                     <td>${platformDisplay}</td>
                     <td><div class="outcome-pills">${pillsHtml}</div></td>
                     <td style="font-weight:600;color:#d29922">${a.total_cost}c</td>
                     <td><span class="arb-pct ${arbClass(a.arbitrage)}">${a.arbitrage}%</span></td>
-                    <td><span style="${sharesStyle}">${sharesStr}</span></td>
                     <td style="color:#484f58;font-size:12px">${a.timestamp}</td>
                 </tr>`;
             }).join('');

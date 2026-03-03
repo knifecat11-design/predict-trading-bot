@@ -2386,8 +2386,29 @@ def find_cross_platform_multi_outcome_arb(
                         best_score = score
                         best_eb = eb
 
-                if best_score < 0.45 or best_eb is None:
+                # 提高阈值：0.65 避免不同事件被错误匹配（原 0.45 太宽松）
+                if best_score < 0.65 or best_eb is None:
                     continue
+
+                # 实体重叠检查：两个事件的 outcomes 需要有至少一个共同结果
+                # 这避免了 "Winner" 和 "Top 4" 这样不同类型的事件被匹配
+                outcomes_a = {o['label_norm'] for o in ea.get('outcomes', [])}
+                outcomes_b = {o['label_norm'] for o in best_eb.get('outcomes', [])}
+                outcome_overlap = len(outcomes_a & outcomes_b)
+
+                # 至少需要一个 outcome label 重合（考虑 0.55 的 outcome 匹配阈值）
+                # 使用更宽松的检查：有 substring 匹配也算
+                has_overlap = False
+                for oa in outcomes_a:
+                    for ob in outcomes_b:
+                        if oa == ob or oa in ob or ob in oa:
+                            has_overlap = True
+                            break
+                    if has_overlap:
+                        break
+
+                if not has_overlap:
+                    continue  # 没有任何共同 outcomes，跳过此组合
 
                 combo_key = tuple(sorted([ea['event_key'], best_eb['event_key']]))
                 if combo_key in processed_combos:
@@ -2515,7 +2536,9 @@ def find_cross_platform_multi_outcome_arb(
 
                 opportunities.append({
                     'event_title': ea['event_title'],
+                    'event_title_b': best_eb['event_title'],  # 第二个事件标题（用于调试显示）
                     'event_url': ea['event_url'],
+                    'event_url_b': best_eb['event_url'],  # 第二个事件 URL
                     'platform': '+'.join(platforms_used),
                     'platform_color': '#ff9800',
                     'platforms': platforms_used,

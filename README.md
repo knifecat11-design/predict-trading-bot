@@ -3,8 +3,9 @@
 [![Railway](https://img.shields.io/badge/deployment-Railway-0e0c2e.svg)](https://railway.app/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-active-success.svg)]()
 
-> 全平台预测市场套利监控系统 — 实时扫描 4 大平台价差，Telegram 即时推送 + Web 实时仪表盘。
+> **全平台预测市场套利监控系统** — 实时扫描 4 大平台价差，Telegram 即时推送 + Web 实时仪表盘。
 
 **支持平台:** Polymarket · Opinion.trade · Predict.fun · Kalshi
 
@@ -13,29 +14,34 @@
 ## ✨ 核心特性
 
 ### 🔍 全平台双向套利监控
-- **4 平台 6 对组合**: 任意两个平台之间自动检测套利，覆盖所有 C(4,2) = 6 种配对
-- **双向检测**: 每对平台同时检查两个方向（A买Yes+B买No，B买Yes+A买No）
-- **同平台套利**: 检测单个平台内 Yes+No < $1.00 的机会
-- **多结果套利**: Polymarket 多结果事件（如世界杯冠军 20 个队伍，买齐所有结果 < $1）
-- **跨平台组合套利**: 同一事件在不同平台为每个结果选最低价组合（England@Kalshi + Brazil@Predict + France@Polymarket）
+
+| 特性 | 说明 |
+|:---|:---|
+| **4 平台 6 对组合** | 任意两个平台之间自动检测套利，覆盖所有 C(4,2) = 6 种配对 |
+| **双向检测** | 每对平台同时检查两个方向（A买Yes+B买No，B买Yes+A买No） |
+| **同平台套利** | 检测单个平台内 Yes+No < $1.00 的机会 |
+| **多结果套利** | Polymarket 多结果事件（如世界杯冠军 20 个队伍，买齐所有结果 < $1） |
+| **跨平台组合套利** | 同一事件在不同平台为每个结果选最低价组合（England@Kalshi + Brazil@Predict） |
 
 ### 📡 实时价格推送
+
 - **WebSocket 实时价格**: Polymarket + Kalshi 订阅价格变动，秒级响应
 - **并发订单簿抓取**: ThreadPoolExecutor 10 线程并行获取 Opinion/Predict 深度
 - **轮询兜底**: WebSocket 断线自动回退轮询模式
 
-### 📊 两种部署服务
-
-| 服务 | 功能 | 入口 |
-|------|------|------|
-| **Monitor Bot** | Telegram 套利播报 | `start_arbitrage.py` |
-| **Web Dashboard** | Flask 实时仪表盘 | `web/dashboard.py` (port 5000) |
-
 ### 🧠 智能市场匹配
-- **倒排索引匹配**: O(n+m) 高效跨平台同名市场识别（24 倍加速，41s → 1.68s）
+
+- **倒排索引匹配**: O(n+m) 高效跨平台同名市场识别（**24 倍加速**，41s → 1.68s）
 - **加权评分**: 实体 (40%) + 数字/日期 (30%) + 词汇 (20%) + 字符串相似度 (10%)
 - **硬约束**: 年份、价格值必须一致（防止 "Trump 2024" 匹配 "Trump 2028"）
 - **语义反转检测**: "Trump out" vs "Trump remain" 自动识别为对立问题
+
+### 📊 两种部署服务
+
+| 服务 | 功能 | 入口 |
+|:---|:---|:---|
+| **Monitor Bot** | Telegram 套利播报 | `start_arbitrage.py` |
+| **Web Dashboard** | Flask 实时仪表盘 | `web/dashboard.py` (port 5000) |
 
 ---
 
@@ -79,7 +85,7 @@
 ## 📊 支持平台
 
 | 平台 | API | 认证 | 市场数 | 价格来源 |
-|------|-----|------|--------|---------|
+|:---|:---|:---|:---|:---|
 | **Polymarket** | Gamma API | 无需密钥 | ~28,000 | bestAsk/bestBid |
 | **Kalshi** | Public API v2 | 无需密钥 | ~4,000 | yes_ask/no_ask (内嵌) |
 | **Opinion.trade** | OpenAPI | API Key | ~150 | Yes+No 独立订单簿 |
@@ -95,7 +101,7 @@
 
 1. 点击上方按钮
 2. 在 Railway 设置环境变量（至少需要 Telegram）:
-   ```
+   ```bash
    TELEGRAM_BOT_TOKEN=你的Bot_Token
    TELEGRAM_CHAT_ID=你的Chat_ID
    ```
@@ -130,7 +136,7 @@ python web/dashboard.py
 ### 环境变量
 
 | 变量 | 必填 | 默认值 | 说明 |
-|------|:----:|--------|------|
+|:---|:---:|:---|:---|
 | `TELEGRAM_BOT_TOKEN` | ✅ | — | Telegram Bot Token (from @BotFather) |
 | `TELEGRAM_CHAT_ID` | ✅ | — | 目标 Chat ID |
 | `PREDICT_API_KEY` | ❌ | — | Predict.fun API 密钥 |
@@ -254,8 +260,8 @@ predict-trading-bot/
 ## 🔑 获取 API 密钥
 
 ### Polymarket / Kalshi — 无需密钥
-- Polymarket: [Gamma API Docs](https://docs.polymarket.com/developers/gamma-markets-api/overview)
-- Kalshi: Public API，直接可用
+- **Polymarket**: [Gamma API Docs](https://docs.polymarket.com/developers/gamma-markets-api/overview)
+- **Kalshi**: Public API，直接可用
 
 ### Opinion.trade — 需要 API Key
 - 在 [Opinion.trade](https://app.opinion.trade/) 注册后获取
@@ -271,14 +277,34 @@ predict-trading-bot/
 
 ## 🔧 技术栈
 
-- **语言**: Python 3.11+
-- **Web**: Flask 3.0 + Flask-SocketIO 5.3
-- **HTTP**: requests (Session 连接池)
-- **WebSocket**: websocket-client + websockets (Polymarket/Kalshi 实时推送)
-- **并发**: ThreadPoolExecutor (10 workers)
-- **配置**: PyYAML + python-dotenv (三级配置合并)
-- **部署**: Railway (Nixpacks builder)
-- **通知**: Telegram Bot API (429 自动退避)
+| 技术 | 版本 | 用途 |
+|:---|:---|:---|
+| **Python** | 3.11+ | 核心语言 |
+| **Flask** | 3.0+ | Web 框架 |
+| **Flask-SocketIO** | 5.3+ | 实时通信 |
+| **requests** | 2.31+ | HTTP 客户端 |
+| **websocket-client** | 1.6+ | WebSocket 客户端 |
+| **PyYAML** | 6.0+ | 配置解析 |
+| **python-dotenv** | 1.0+ | 环境变量 |
+
+---
+
+## ❓ 常见问题
+
+### Q: 为什么收不到 Telegram 通知？
+**A:** 请检查：
+1. `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID` 是否正确
+2. 尝试向 Bot 发送消息，确保 Bot 已启动
+3. 检查是否达到配置的阈值范围（默认需要 2% 以上套利空间）
+
+### Q: 如何测试通知功能？
+**A:** 运行程序时会自动发送测试消息。
+
+### Q: 套利机会多久会出现一次？
+**A:** 取决于市场波动和平台效率差异。配置的 `MIN_ARBITRAGE_THRESHOLD` 越低，通知越频繁。
+
+### Q: 可以同时监控多个市场吗？
+**A:** 可以，系统默认监控所有支持的市场。
 
 ---
 
@@ -301,14 +327,47 @@ predict-trading-bot/
 
 ---
 
+## 🗺️ 开发路线图
+
+- [ ] 增加更多预测平台支持
+- [ ] 历史套利机会记录和统计
+- [ ] 移动端适配
+- [ ] 自动执行套利（可选）
+
+---
+
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 📄 许可证
-
-MIT License
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
 
 ---
 
-**Links**: [Polymarket](https://polymarket.com/) · [Kalshi](https://kalshi.com/) · [Opinion.trade](https://app.opinion.trade/) · [Predict.fun](https://predict.fun/) · [Railway](https://railway.app/) · [Telegram](https://telegram.org/)
+## 📄 许可证
+
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+---
+
+## 🙏 致谢
+
+- [Polymarket](https://polymarket.com/) - 预测市场平台
+- [Kalshi](https://kalshi.com/) - 预测市场平台
+- [Opinion.trade](https://app.opinion.trade/) - 预测市场平台
+- [Predict.fun](https://predict.fun/) - 预测市场平台
+- [Railway](https://railway.app/) - 部署平台
+
+---
+
+<div align="center">
+
+**⚠️ 注意**: 本工具仅供学习和研究使用。使用本工具进行实际交易的风险由使用者自行承担。
+
+Made with ❤️ by [knifecat11-design](https://github.com/knifecat11-design)
+
+</div>
