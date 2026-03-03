@@ -1081,17 +1081,46 @@ def update_price_history(arbitrage_list):
     _state['price_history'] = history
 
 
-def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0):
-    """Find arbitrage between two platform market lists"""
+def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platform_b_name, threshold=2.0, excluded_markets=None):
+    """Find arbitrage between two platform market lists
+
+    Args:
+        markets_a, markets_b: Market lists from two platforms
+        platform_a_name, platform_b_name: Platform names
+        threshold: Minimum arbitrage percentage to report
+        excluded_markets: Dict of platform -> list of excluded market IDs/slugs
+    """
     from src.market_matcher import MarketMatcher
 
     opportunities = []
     checked_pairs = 0
     skipped_end_date = 0
     skipped_price_sanity = 0
+    skipped_excluded = 0
+
+    # Build excluded market sets for both platforms
+    excluded_a = set()
+    excluded_b = set()
+    if excluded_markets:
+        excluded_a = set(excluded_markets.get(platform_a_name.lower(), []))
+        excluded_b = set(excluded_markets.get(platform_b_name.lower(), []))
+
+    # Helper function to check if a market should be excluded
+    def is_excluded(market, excluded_set):
+        market_id = str(market.get('id', ''))
+        market_slug = str(market.get('slug', ''))
+        market_question_id = str(market.get('question_id', ''))
+        market_condition_id = str(market.get('condition_id', ''))
+        return (market_id in excluded_set or
+                market_slug in excluded_set or
+                market_question_id in excluded_set or
+                market_condition_id in excluded_set)
 
     markets_a_plain = []
     for m in markets_a:
+        if is_excluded(m, excluded_a):
+            skipped_excluded += 1
+            continue
         m_copy = m.copy()
         m_copy['title_plain'] = strip_html(m.get('title', ''))
         m_copy['title_with_html'] = m.get('title', '')
@@ -1101,11 +1130,17 @@ def find_cross_platform_arbitrage(markets_a, markets_b, platform_a_name, platfor
 
     markets_b_plain = []
     for m in markets_b:
+        if is_excluded(m, excluded_b):
+            skipped_excluded += 1
+            continue
         m_copy = m.copy()
         m_copy['title_plain'] = strip_html(m.get('title', ''))
         m_copy['title_with_html'] = m.get('title', '')
         m_copy['match_title'] = m.get('match_title', '') or m_copy['title_plain']
         markets_b_plain.append(m_copy)
+
+    if skipped_excluded > 0:
+        logger.info(f"[{platform_a_name} vs {platform_b_name}] Filtered {skipped_excluded} excluded markets")
 
     matcher = MarketMatcher({})
     matched_pairs = matcher.match_markets_cross_platform(
@@ -2618,6 +2653,7 @@ def background_scanner():
     config = load_config()
     threshold = float(config.get('opinion_poly', {}).get('min_arbitrage_threshold', 2.0))
     scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 60))
+    excluded_markets = config.get('arbitrage', {}).get('excluded_markets', {})
 
     logger.info(f"Scanner started: threshold={threshold}%, interval={scan_interval}s")
     logger.info(f"Limits: poly={POLYMARKET_FETCH_LIMIT}, "
@@ -2742,7 +2778,7 @@ def background_scanner():
             for markets_a, markets_b, name_a, name_b in cross_platform_combos:
                 if markets_a and markets_b:
                     arb = find_cross_platform_arbitrage(
-                        markets_a, markets_b, name_a, name_b, threshold)
+                        markets_a, markets_b, name_a, name_b, threshold, excluded_markets)
                     all_arb.extend(arb)
                     cross_pairs_checked += 1
 

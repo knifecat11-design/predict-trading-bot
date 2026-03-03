@@ -288,13 +288,20 @@ def fetch_probable_markets(config):
 
 
 
-def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2):
+def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_confidence=0.2, excluded_markets=None):
     """Find cross-platform arbitrage using MarketMatcher (same algorithm as dashboard)
 
     Uses the sophisticated MarketMatcher from src/market_matcher.py with:
     - Weighted scoring: Entity (40%) + Number/date (30%) + Vocabulary (20%) + String (10%)
     - Manual mapping support
     - Hard constraints on year/price matching
+
+    Args:
+        markets_a, markets_b: Market lists from two platforms
+        name_a, name_b: Platform names (e.g., 'Polymarket', 'Kalshi')
+        threshold: Minimum arbitrage percentage to report
+        min_confidence: Minimum matching confidence (unused, kept for compatibility)
+        excluded_markets: Dict of platform -> list of excluded market IDs/slugs
     """
     try:
         from src.market_matcher import MarketMatcher
@@ -302,15 +309,42 @@ def find_arbitrage(markets_a, markets_b, name_a, name_b, threshold=2.0, min_conf
         logging.error("Cannot import MarketMatcher — cross-platform matching disabled")
         return []
 
+    # Build excluded market sets for both platforms
+    excluded_a = set()
+    excluded_b = set()
+    if excluded_markets:
+        excluded_a = set(excluded_markets.get(name_a.lower(), []))
+        excluded_b = set(excluded_markets.get(name_b.lower(), []))
+
+    # Helper function to check if a market should be excluded
+    def is_excluded(market, excluded_set):
+        market_id = str(market.get('id', ''))
+        market_slug = str(market.get('slug', ''))
+        market_question_id = str(market.get('question_id', ''))
+        market_condition_id = str(market.get('condition_id', ''))
+        return (market_id in excluded_set or
+                market_slug in excluded_set or
+                market_question_id in excluded_set or
+                market_condition_id in excluded_set)
+
+    # Filter out excluded markets
+    markets_a_filtered = [m for m in markets_a if not is_excluded(m, excluded_a)]
+    markets_b_filtered = [m for m in markets_b if not is_excluded(m, excluded_b)]
+
+    excluded_count_a = len(markets_a) - len(markets_a_filtered)
+    excluded_count_b = len(markets_b) - len(markets_b_filtered)
+    if excluded_count_a > 0 or excluded_count_b > 0:
+        logging.info(f"  [Filter] Excluded {excluded_count_a} {name_a} markets, {excluded_count_b} {name_b} markets")
+
     # Prepare markets with match_title for the matcher
     markets_a_prepared = []
-    for m in markets_a:
+    for m in markets_a_filtered:
         m_copy = m.copy()
         m_copy['match_title'] = m.get('match_title', m.get('title', ''))
         markets_a_prepared.append(m_copy)
 
     markets_b_prepared = []
-    for m in markets_b:
+    for m in markets_b_filtered:
         m_copy = m.copy()
         m_copy['match_title'] = m.get('match_title', m.get('title', ''))
         markets_b_prepared.append(m_copy)
@@ -544,6 +578,14 @@ def main():
     threshold = op_config.get('min_arbitrage_threshold', 2.0)
     min_confidence = op_config.get('min_confidence', 0.2)
 
+    # 市场黑名单配置
+    excluded_markets = arb_config.get('excluded_markets', {})
+    if excluded_markets:
+        logger.info(f"Excluded markets configured:")
+        for platform, markets in excluded_markets.items():
+            if markets:
+                logger.info(f"  {platform}: {len(markets)} markets")
+
     # Logical Spread Arbitrage 配置
     lsa_enabled = lsa_config.get('enabled', True)
     lsa_min_spread = lsa_config.get('min_spread_threshold', 0.5)
@@ -647,7 +689,7 @@ def main():
                 pairs.append((kalshi_markets, probable_markets, 'Kalshi', 'Probable'))
 
             for ma, mb, na, nb in pairs:
-                opps = find_arbitrage(ma, mb, na, nb, threshold, min_confidence)
+                opps = find_arbitrage(ma, mb, na, nb, threshold, min_confidence, excluded_markets)
                 for opp in opps:
                     opp['is_real'] = True  # 跨平台套利数据来自 public API，无需过滤
                 all_opps.extend(opps)

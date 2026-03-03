@@ -50,7 +50,8 @@ def load_config(config_path: str = 'config.yaml') -> dict:
             'enabled': os.getenv('ARBITRAGE_ENABLED', 'true').lower() == 'true',
             'min_arbitrage_threshold': float(os.getenv('MIN_ARBITRAGE_THRESHOLD', config.get('arbitrage', {}).get('min_arbitrage_threshold', 2.0))),
             'scan_interval': int(os.getenv('SCAN_INTERVAL', config.get('arbitrage', {}).get('scan_interval', 10))),
-            'cooldown_minutes': int(os.getenv('COOLDOWN_MINUTES', config.get('arbitrage', {}).get('cooldown_minutes', 5)))
+            'cooldown_minutes': int(os.getenv('COOLDOWN_MINUTES', config.get('arbitrage', {}).get('cooldown_minutes', 5))),
+            'excluded_markets': config.get('arbitrage', {}).get('excluded_markets', {})
         }
     }
 

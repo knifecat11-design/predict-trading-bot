@@ -67,6 +67,17 @@ arbitrage:
     - polymarket-predict        # Polymarket vs Predict.fun
     - polymarket-opinion        # Polymarket vs Opinion.trade
     - polymarket-kalshi         # Polymarket vs Kalshi
+  # 市场黑名单（排除不符合筛选要求的市场）
+  excluded_markets:
+    polymarket:
+      - "drake-maye-rookie-card-above-in-february-2026"
+      # 可以在此添加更多需要排除的市场 ID 或 slug
+    predict:
+      # - "example-market-id"
+    kalshi:
+      # - "example-market-id"
+    opinion:
+      # - "example-market-id"
 
 # 逻辑价差套利配置 (Logical Spread Arbitrage)
 logical_spread_arbitrage:
