@@ -142,6 +142,32 @@
         .dispute-sev-badge.HIGH { color: #f85149; background: rgba(248,81,73,0.18); }
         .dispute-sev-badge.MEDIUM { color: #d29922; background: rgba(210,153,34,0.18); }
         .dispute-sev-badge.LOW { color: #3fb950; background: rgba(63,185,80,0.18); }
+        /* Spike tag */
+        .dispute-spike-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 6px;
+            letter-spacing: 0.3px;
+            animation: spike-pulse 2s ease-in-out infinite;
+        }
+        .dispute-spike-tag.up {
+            color: #f85149;
+            background: rgba(248,81,73,0.14);
+            border: 1px solid rgba(248,81,73,0.3);
+        }
+        .dispute-spike-tag.down {
+            color: #58a6ff;
+            background: rgba(88,166,255,0.14);
+            border: 1px solid rgba(88,166,255,0.3);
+        }
+        @keyframes spike-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.65; }
+        }
         .dispute-type-badge {
             font-size: 10px;
             font-weight: 600;
@@ -925,6 +951,23 @@
                 // Bond
                 const bond = s.bond_usdc > 0 ? `$${s.bond_usdc.toLocaleString()}` : '-';
 
+                // Spike tag (prominent label for significant price moves)
+                let spikeHtml = '';
+                if (s.is_spike && s.price_change_24h !== null) {
+                    const dir = s.price_change_24h >= 0 ? 'up' : 'down';
+                    const arrow = s.price_change_24h >= 0 ? '&#9650;' : '&#9660;';
+                    const pct = Math.abs(s.price_change_24h).toFixed(0);
+                    spikeHtml = `<span class="dispute-spike-tag ${dir}">${arrow} ${pct}% 24h</span>`;
+                }
+
+                // 24h price change (non-spike, smaller display)
+                let changeHtml = '-';
+                if (s.price_change_24h !== null && s.price_change_24h !== undefined) {
+                    const sign = s.price_change_24h >= 0 ? '+' : '';
+                    const color = s.price_change_24h >= 0 ? '#3fb950' : '#f85149';
+                    changeHtml = `<span class="value" style="color:${color}">${sign}${s.price_change_24h.toFixed(1)}%</span>`;
+                }
+
                 // Details with UMA link
                 let detailsHtml = s.details || '';
                 if (s.uma_url) {
@@ -935,6 +978,7 @@
                 <div class="dispute-card sev-${s.severity}">
                     <div class="dispute-card-header">
                         <span class="dispute-sev-badge ${s.severity}">${s.severity}</span>
+                        ${spikeHtml}
                         <span class="dispute-type-badge">${typeIcon} ${typeLabel}</span>
                     </div>
                     <div class="dispute-card-title">${titleHtml}</div>
@@ -952,8 +996,8 @@
                             ${divHtml}
                         </div>
                         <div class="dispute-metric">
-                            <span class="label">Bond</span>
-                            <span class="value" style="color:#d29922">${bond}</span>
+                            <span class="label">24h Change</span>
+                            ${changeHtml}
                         </div>
                     </div>
                     <div class="dispute-card-details">${detailsHtml}</div>
