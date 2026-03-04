@@ -780,56 +780,8 @@ def main():
                         f"({same_count} same-platform, {cross_count} cross-platform, "
                         f"{multi_count} multi-outcome, {combo_count} cross-combo, {lsa_key_count} logical-spread)")
 
-            # 发送 Telegram 通知（组合方案：首次立即播报 + 分级冷却）
-            # - 首次发现 → 立即播报
-            # - 大幅变化(≥1%) → 30分钟后可播报
-            # - 中等变化(0.5-1%) → 1小时后可播报
-            # - 小幅变化(<0.5%) → 不播报
-            for opp in all_opps:
-                if not opp['is_real']:
-                    continue
-
-                # 使用 market_key 作为唯一标识
-                market_key = opp.get('market_key', '')
-                if not market_key:
-                    continue
-
-                should_notify = False
-                last_opp = last_sent_opportunities.get(market_key)
-
-                if last_opp is None:
-                    # 首次发现这个机会 → 立即播报
-                    should_notify = True
-                else:
-                    # 检查价格变化幅度和时间冷却
-                    price_change = abs(opp['arbitrage'] - last_opp['arbitrage'])
-
-                    if price_change < 0.5:
-                        # 小幅变化 < 0.5% → 不播报
-                        continue
-                    elif price_change >= 1.0:
-                        # 大幅变化 ≥ 1% → 30分钟冷却
-                        min_wait_minutes = 30
-                    else:
-                        # 中等变化 0.5-1% → 1小时冷却
-                        min_wait_minutes = 60
-
-                    # 检查冷却时间
-                    if market_key in last_notifications:
-                        elapsed = datetime.now() - last_notifications[market_key]
-                        if elapsed >= timedelta(minutes=min_wait_minutes):
-                            should_notify = True
-                            logger.debug(f"  Price changed: {last_opp['arbitrage']:.2f}% -> {opp['arbitrage']:.2f}% (Δ{price_change:.2f}%, elapsed: {elapsed.seconds//60}m)")
-                    else:
-                        should_notify = True
-
-                if should_notify:
-                    msg = format_arb_message(opp, scan_count)
-                    if send_telegram(msg, config):
-                        label = opp.get('market') or opp.get('event_title', '')
-                        logger.info(f"  TG sent: {label[:30]} ({opp['arbitrage']}%)")
-                        last_notifications[market_key] = datetime.now()
-                        last_sent_opportunities[market_key] = opp.copy()  # 更新最后发送的机会
+            # 套利 Telegram 通知已禁用 — 仅保留争议信号通知
+            # (套利数据仍然正常扫描和记录日志，供 dashboard 使用)
 
             # === Dispute Signal Detection (UMA Oracle) ===
             if dispute_enabled and dispute_detector:
