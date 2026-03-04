@@ -91,6 +91,21 @@ logical_spread_arbitrage:
   # - time_window: 时间窗口 (2025 vs 2026)
   # - conditional: 条件层级 (未来扩展)
 
+# UMA Oracle 争议信号配置 (Dispute Signal)
+dispute:
+  enabled: true                 # 是否启用争议信号检测
+  scan_interval: 120            # 争议扫描间隔（秒），独立于套利扫描
+  divergence_threshold: 20.0    # Oracle vs 市场价格偏差阈值（%）
+  cooldown_minutes: 30          # 通知冷却时间（分钟）
+  cache_seconds: 60             # GraphQL 查询缓存时间（秒）
+  # 数据来源：UMA Optimistic Oracle v2 + Managed OOv2 (Polygon)
+  # 通过 Goldsky GraphQL 子图查询，无需 API key
+  # 信号类型（按严重度）：
+  # - new_dispute (HIGH): 新提案被争议（有人支付保证金挑战）
+  # - settlement_reversal (HIGH): DVM 投票推翻原提案（重大反转）
+  # - oracle_market_divergence (MEDIUM): Oracle 结果与市场价格严重偏差
+  # - proposal_contradiction (LOW): 挑战期内提案与市场价格矛盾
+
 # WebSocket 实时监控配置
 websocket:
   enabled: true                 # 是否启用 WebSocket 实时监控

@@ -562,7 +562,7 @@ def main():
     print("=" * 70)
     print("  Cross-Platform Arbitrage Monitor")
     print("  Polymarket | Opinion.trade | Predict.fun | Probable | Kalshi")
-    print("  Version: v2.3 (2026-02-26) - 分级冷却播报: 首次立即, ≥1%需30分钟, 0.5-1%需1小时")
+    print("  Version: v2.4 (2026-03-04) - 新增 UMA Oracle 争议信号检测")
     print("=" * 70)
     print()
 
@@ -590,6 +590,12 @@ def main():
     lsa_enabled = lsa_config.get('enabled', True)
     lsa_min_spread = lsa_config.get('min_spread_threshold', 0.5)
 
+    # Dispute Signal 配置
+    dispute_config = config.get('dispute', {})
+    dispute_enabled = os.getenv('DISPUTE_SIGNAL_ENABLED', str(dispute_config.get('enabled', True))).lower() == 'true'
+    dispute_scan_interval = int(os.getenv('DISPUTE_SCAN_INTERVAL', dispute_config.get('scan_interval', 120)))
+    dispute_cooldown_minutes = int(os.getenv('DISPUTE_COOLDOWN_MINUTES', dispute_config.get('cooldown_minutes', 30)))
+
     # Check API status
     api_status = check_platform_api(config)
     logger.info(f"Platform API Status:")
@@ -598,18 +604,35 @@ def main():
     logger.info(f"  Predict:    {'Active' if api_status['predict'] else 'No API Key'}")
     logger.info(f"  Kalshi:     {'Active' if api_status['kalshi'] else 'Inactive'}")
     logger.info(f"  Probable:   {'Active' if api_status['probable'] else 'Inactive'}")
+    logger.info(f"  UMA Oracle: {'Active' if dispute_enabled else 'Disabled'}")
     logger.info(f"Threshold: {threshold}%  Interval: {scan_interval}s  Cooldown: {cooldown_minutes}m")
     logger.info("")
+
+    # 初始化争议信号检测器
+    dispute_detector = None
+    uma_client = None
+    if dispute_enabled:
+        try:
+            from src.uma_oracle_api import UMAOracleClient
+            from src.dispute_signal import DisputeSignalDetector, format_dispute_signal_message, Severity
+            uma_client = UMAOracleClient(config)
+            dispute_detector = DisputeSignalDetector(uma_client, config)
+            logger.info("Dispute signal detector initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize dispute detector: {e}")
+            dispute_enabled = False
 
     # Startup notification
     active_platforms = [k for k, v in api_status.items() if v]
     lsa_status = "ON" if lsa_enabled else "OFF"
+    dispute_status = "ON" if dispute_enabled else "OFF"
     sent = send_telegram(
         f"🚀 <b>Arbitrage Monitor Started</b>\n"
         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"Active: {', '.join(active_platforms)}\n"
         f"Threshold: {threshold}%\n"
-        f"Logical Spread: {lsa_status}",
+        f"Logical Spread: {lsa_status}\n"
+        f"Dispute Signal: {dispute_status}",
         config
     )
     logger.info(f"Startup notification: {'sent' if sent else 'failed (rate limited?)'}")
@@ -620,6 +643,8 @@ def main():
     last_notifications = {}
     last_sent_opportunities = {}  # 存储上次发送的机会详情
     lsa_detector = None  # Logical Spread Arbitrage 检测器
+    last_dispute_scan = 0  # 上次争议扫描时间戳
+    dispute_notifications = {}  # 争议信号冷却跟踪
 
     try:
         import signal
@@ -805,6 +830,43 @@ def main():
                         logger.info(f"  TG sent: {label[:30]} ({opp['arbitrage']}%)")
                         last_notifications[market_key] = datetime.now()
                         last_sent_opportunities[market_key] = opp.copy()  # 更新最后发送的机会
+
+            # === Dispute Signal Detection (UMA Oracle) ===
+            if dispute_enabled and dispute_detector:
+                now_ts = time.time()
+                if now_ts - last_dispute_scan >= dispute_scan_interval:
+                    last_dispute_scan = now_ts
+                    try:
+                        from src.dispute_signal import format_dispute_signal_message, Severity
+                        signals = dispute_detector.detect_signals(poly_markets)
+                        dispute_signal_count = len(signals)
+                        if dispute_signal_count > 0:
+                            logger.info(f"  Dispute signals: {dispute_signal_count}")
+
+                        for sig in signals:
+                            if dispute_detector.is_already_notified(sig):
+                                continue
+
+                            # 冷却策略: HIGH 立即, MEDIUM 30分钟, LOW 60分钟
+                            cooldown_map = {
+                                Severity.HIGH: 0,
+                                Severity.MEDIUM: dispute_cooldown_minutes,
+                                Severity.LOW: dispute_cooldown_minutes * 2,
+                            }
+                            cooldown_min = cooldown_map.get(sig.severity, 60)
+
+                            if cooldown_min > 0 and sig.signal_key in dispute_notifications:
+                                elapsed = datetime.now() - dispute_notifications[sig.signal_key]
+                                if elapsed < timedelta(minutes=cooldown_min):
+                                    continue
+
+                            msg = format_dispute_signal_message(sig, scan_count)
+                            if send_telegram(msg, config):
+                                logger.info(f"  TG sent dispute: [{sig.severity.value}] {sig.title[:30]}")
+                                dispute_notifications[sig.signal_key] = datetime.now()
+                                dispute_detector.mark_notified(sig)
+                    except Exception as e:
+                        logging.warning(f"  Dispute signal scan failed: {e}")
 
             if scan_count % 10 == 0:
                 logger.info(f"[Stats] {scan_count} scans completed")
