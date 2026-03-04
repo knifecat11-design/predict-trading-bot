@@ -158,14 +158,9 @@ class DisputeSignalDetector:
     # ============================================================
 
     def _check_new_disputes(self, disputes: List[OracleRequest]) -> List[DisputeSignal]:
-        """检测新争议（对比已知 ID）"""
+        """检测活跃争议 — 每次扫描都返回所有活跃争议"""
         signals = []
         for req in disputes:
-            if req.request_id in self._known_dispute_ids:
-                continue
-
-            self._known_dispute_ids.add(req.request_id)
-
             signals.append(DisputeSignal(
                 signal_type=SignalType.NEW_DISPUTE,
                 severity=Severity.HIGH,
@@ -191,14 +186,10 @@ class DisputeSignalDetector:
         """检测结算反转：DVM 投票结果 ≠ 原提案"""
         signals = []
         for req in settlements:
-            if req.request_id in self._known_settlement_ids:
-                continue
             # 需要有原始提案和结算价格，且两者不同
             if (req.proposed_price_raw and req.settlement_price_raw
                     and req.proposed_price_raw != req.settlement_price_raw
                     and req.disputer is not None):
-
-                self._known_settlement_ids.add(req.request_id)
 
                 signals.append(DisputeSignal(
                     signal_type=SignalType.SETTLEMENT_REVERSAL,
