@@ -2917,27 +2917,56 @@ def background_scanner():
                     if now_dispute - _dispute_last_scan >= _dispute_scan_interval:
                         _dispute_last_scan = now_dispute
                         try:
-                            signals = _dispute_detector.detect_signals(poly_markets)
+                            # 传入 raw Polymarket 数据（含数字 id 字段）给内部价格匹配
+                            raw_for_detect = []
+                            for rm in _poly_raw_markets:
+                                num_id = str(rm.get('id', ''))
+                                if num_id:
+                                    ba = rm.get('bestAsk')
+                                    op = rm.get('outcomePrices', '[]')
+                                    y = None
+                                    if ba is not None:
+                                        try:
+                                            y = float(ba)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    if not y or y <= 0:
+                                        try:
+                                            prices = json.loads(op) if isinstance(op, str) else op
+                                            if prices and len(prices) >= 1:
+                                                y = float(prices[0])
+                                        except Exception:
+                                            pass
+                                    if y and y > 0:
+                                        raw_for_detect.append({
+                                            'id': num_id,
+                                            'title': rm.get('question', ''),
+                                            'yes': y,
+                                            'no': round(1.0 - y, 4),
+                                        })
+                            signals = _dispute_detector.detect_signals(raw_for_detect)
                             dispute_list = []
 
-                            # 构建 market_id → raw Polymarket 数据索引（用于获取 URL + best_ask）
+                            # 构建 market_id(数字) → raw Polymarket 数据索引
+                            # UMA ancillaryData 里的 market_id 是 Poly 的数字 id 字段
                             poly_lookup = {}
                             for rm in _poly_raw_markets:
-                                cid = rm.get('conditionId', rm.get('condition_id', ''))
-                                if cid:
-                                    poly_lookup[str(cid)] = rm
+                                num_id = str(rm.get('id', ''))
+                                if num_id:
+                                    poly_lookup[num_id] = rm
 
                             for sig in signals:
                                 # 查找 Polymarket URL + best_ask
                                 poly_url = ''
-                                best_ask_price = sig.market_price_yes  # 回退用 detect_signals 内的值
+                                best_ask_price = sig.market_price_yes
                                 raw_m = poly_lookup.get(str(sig.market_id)) if sig.market_id else None
                                 if raw_m:
                                     # URL: 使用 event slug
                                     events = raw_m.get('events', [])
                                     ev = events[0] if events else {}
-                                    ev_slug = ev.get('slug', '') or raw_m.get('slug', '') or sig.market_id
-                                    poly_url = f"https://polymarket.com/event/{ev_slug}"
+                                    ev_slug = ev.get('slug', '') or raw_m.get('slug', '')
+                                    if ev_slug:
+                                        poly_url = f"https://polymarket.com/event/{ev_slug}"
                                     # best_ask 价格
                                     ba = raw_m.get('bestAsk')
                                     if ba is not None:
@@ -2954,9 +2983,16 @@ def background_scanner():
                                         except Exception:
                                             pass
 
+                                # 回退: 用 title slugify 生成 Polymarket 搜索链接
+                                if not poly_url and sig.title:
+                                    title_slug = slugify(sig.title)
+                                    if title_slug:
+                                        poly_url = f"https://polymarket.com/event/{title_slug}"
+
                                 # Divergence: |oracle_target - market_best_ask|
+                                # oracle_target: 争议投票认为的正确价格
                                 oracle_target = None
-                                oc = sig.oracle_outcome.split('(')[0].strip()  # "Yes (争议中)" → "Yes"
+                                oc = sig.oracle_outcome.split('(')[0].strip()
                                 if oc == 'Yes':
                                     oracle_target = 1.0
                                 elif oc == 'No':
