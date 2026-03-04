@@ -55,6 +55,15 @@ def load_config(config_path: str = 'config.yaml') -> dict:
         }
     }
 
+    # 争议信号配置
+    env_overrides['dispute'] = {
+        'enabled': os.getenv('DISPUTE_SIGNAL_ENABLED', str(config.get('dispute', {}).get('enabled', True))).lower() == 'true',
+        'scan_interval': int(os.getenv('DISPUTE_SCAN_INTERVAL', config.get('dispute', {}).get('scan_interval', 120))),
+        'divergence_threshold': float(os.getenv('DISPUTE_DIVERGENCE_THRESHOLD', config.get('dispute', {}).get('divergence_threshold', 20.0))),
+        'cooldown_minutes': int(os.getenv('DISPUTE_COOLDOWN_MINUTES', config.get('dispute', {}).get('cooldown_minutes', 30))),
+        'cache_seconds': int(config.get('dispute', {}).get('cache_seconds', 60)),
+    }
+
     # 合并配置
     for key, value in env_overrides.items():
         if key not in config:
