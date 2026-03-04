@@ -48,6 +48,8 @@ class DisputeSignal:
     request_id: str                # Oracle request ID
     timestamp: int                 # 事件时间戳
     source: str                    # 来源子图 (OOv2/MOOV2)
+    request_hash: Optional[str] = None      # 链上 requestHash (for UMA URL)
+    request_log_index: Optional[int] = None # 链上 eventLogIndex
 
     @property
     def signal_key(self) -> str:
@@ -178,6 +180,8 @@ class DisputeSignalDetector:
                 request_id=req.request_id,
                 timestamp=req.dispute_timestamp or int(time.time()),
                 source=req.source_endpoint,
+                request_hash=req.request_hash,
+                request_log_index=req.request_log_index,
             ))
 
         return signals
@@ -267,6 +271,8 @@ class DisputeSignalDetector:
                 request_id=req.request_id,
                 timestamp=req.proposal_timestamp or req.request_timestamp,
                 source=req.source_endpoint,
+                request_hash=req.request_hash,
+                request_log_index=req.request_log_index,
             ))
 
         return signals
@@ -319,6 +325,8 @@ class DisputeSignalDetector:
                 request_id=req.request_id,
                 timestamp=req.proposal_timestamp or req.request_timestamp,
                 source=req.source_endpoint,
+                request_hash=req.request_hash,
+                request_log_index=req.request_log_index,
             ))
 
         return signals
