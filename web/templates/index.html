@@ -356,6 +356,7 @@
             <span>Multi-result: <span class="val" id="stat-multi" style="color:#58a6ff">0</span></span>
             <span>Cross-Combo: <span class="val" id="stat-cross-combo" style="color:#ff9800">0</span></span>
             <span style="color:#3fb950">Net+: <span class="val" id="stat-profitable" style="color:#3fb950">0</span></span>
+            <span style="color:#f85149">Disputes: <span class="val" id="stat-disputes" style="color:#f85149">0</span></span>
             <span>|</span>
             <span>WS: <span class="val" id="stat-ws-updates">0</span> <span id="ws-feed-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#484f58;vertical-align:middle"></span></span>
         </div>
@@ -427,6 +428,31 @@
             </thead>
             <tbody id="multi-arb-body">
                 <tr><td colspan="6" class="empty-state pulse">Scanning for multi-outcome opportunities...</td></tr>
+            </tbody>
+        </table>
+
+        <!-- Dispute Signals (UMA Oracle) -->
+        <div class="section-title">
+            UMA Oracle Dispute Signals
+            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— Polymarket resolution disputes, reversals &amp; oracle vs market divergence</span>
+            <span id="dispute-count" style="margin-left:auto;font-size:13px;color:#f85149;font-weight:600"></span>
+        </div>
+        <table class="arb-table">
+            <thead>
+                <tr>
+                    <th>Severity</th>
+                    <th>Type</th>
+                    <th>Market</th>
+                    <th>Oracle Result</th>
+                    <th>Market Price</th>
+                    <th>Divergence</th>
+                    <th>Bond</th>
+                    <th>Details</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody id="dispute-body">
+                <tr><td colspan="9" class="empty-state pulse">Scanning UMA Oracle for disputes...</td></tr>
             </tbody>
         </table>
 
@@ -671,6 +697,71 @@
             }).join('');
         }
 
+        function renderDisputeSignals(data) {
+            const tbody = document.getElementById('dispute-body');
+            const countEl = document.getElementById('dispute-count');
+            const signals = data.dispute_signals || [];
+
+            if (countEl) {
+                if (signals.length > 0) {
+                    const highCount = signals.filter(s => s.severity === 'HIGH').length;
+                    const medCount = signals.filter(s => s.severity === 'MEDIUM').length;
+                    const parts = [];
+                    if (highCount > 0) parts.push(highCount + ' HIGH');
+                    if (medCount > 0) parts.push(medCount + ' MEDIUM');
+                    if (signals.length - highCount - medCount > 0) parts.push((signals.length - highCount - medCount) + ' LOW');
+                    countEl.textContent = parts.join(' · ');
+                } else {
+                    countEl.textContent = '';
+                }
+            }
+
+            if (signals.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No dispute signals detected</td></tr>';
+                return;
+            }
+
+            const typeLabels = {
+                'new_dispute': 'New Dispute',
+                'settlement_reversal': 'Reversal',
+                'oracle_market_divergence': 'Divergence',
+                'proposal_contradiction': 'Contradiction',
+            };
+            const typeIcons = {
+                'new_dispute': '⚠️',
+                'settlement_reversal': '🔄',
+                'oracle_market_divergence': '📊',
+                'proposal_contradiction': '🔍',
+            };
+            const sevColors = { 'HIGH': '#f85149', 'MEDIUM': '#d29922', 'LOW': '#3fb950' };
+
+            tbody.innerHTML = signals.map(s => {
+                const sevColor = sevColors[s.severity] || '#8b949e';
+                const typeLabel = typeLabels[s.signal_type] || s.signal_type;
+                const typeIcon = typeIcons[s.signal_type] || '❓';
+                const marketPrice = s.market_price_yes !== null && s.market_price_yes !== undefined
+                    ? `${(s.market_price_yes * 100).toFixed(1)}%`
+                    : '-';
+                const divergence = s.divergence_pct !== null && s.divergence_pct !== undefined
+                    ? `<span class="arb-pct ${s.divergence_pct >= 30 ? 'high' : s.divergence_pct >= 15 ? 'mid' : 'low'}">${s.divergence_pct.toFixed(1)}%</span>`
+                    : '-';
+                const bond = s.bond_usdc > 0 ? `$${s.bond_usdc.toLocaleString()}` : '-';
+
+                return `
+                <tr style="border-left:3px solid ${sevColor}">
+                    <td><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:700;color:${sevColor};background:${sevColor}22">${s.severity}</span></td>
+                    <td>${typeIcon} ${typeLabel}</td>
+                    <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.title}">${s.title}</td>
+                    <td style="font-weight:600;color:#58a6ff">${s.oracle_outcome}</td>
+                    <td>${marketPrice}</td>
+                    <td>${divergence}</td>
+                    <td style="color:#d29922">${bond}</td>
+                    <td style="font-size:12px;color:#8b949e;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.details}">${s.details}</td>
+                    <td style="color:#484f58;font-size:12px">${s.timestamp}</td>
+                </tr>`;
+            }).join('');
+        }
+
         function renderMarkets(containerId, markets) {
             const el = document.getElementById(containerId);
             if (!markets || markets.length === 0) {
@@ -732,6 +823,7 @@
                 document.getElementById('stat-multi').textContent = stats.multi_outcome_arb || 0;
                 document.getElementById('stat-cross-combo').textContent = stats.cross_combo_arb || 0;
                 document.getElementById('stat-profitable').textContent = stats.profitable_after_fees || 0;
+                document.getElementById('stat-disputes').textContent = stats.dispute_signals || 0;
                 document.getElementById('stat-ws-updates').textContent = stats.ws_updates || 0;
             }
 
@@ -749,6 +841,9 @@
 
             // Multi-result Arbitrage
             renderMultiArb(data);
+
+            // Dispute Signals (UMA Oracle)
+            renderDisputeSignals(data);
 
             // Arbitrage
             const tbody = document.getElementById('arb-body');

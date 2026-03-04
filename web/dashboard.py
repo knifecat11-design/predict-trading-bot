@@ -102,6 +102,7 @@ _state = {
     'arbitrage': [],
     'logical_spread_arb': [],  # Logical Spread Arbitrage: P(hard) >= P(easy) on same platform
     'multi_outcome_arb': [],   # Multi-result arbitrage: sum of Yes prices < $1 on same platform
+    'dispute_signals': [],     # UMA Oracle dispute signals (Polymarket)
     'scan_count': 0,
     'started_at': datetime.now().isoformat(),
     'threshold': 2.0,
@@ -2655,6 +2656,19 @@ def background_scanner():
     scan_interval = int(config.get('arbitrage', {}).get('scan_interval', 60))
     excluded_markets = config.get('arbitrage', {}).get('excluded_markets', {})
 
+    # 争议信号检测器初始化
+    _dispute_detector = None
+    _dispute_last_scan = 0
+    _dispute_scan_interval = 120  # 争议扫描间隔（秒）
+    try:
+        from src.uma_oracle_api import UMAOracleClient
+        from src.dispute_signal import DisputeSignalDetector
+        _uma_client = UMAOracleClient(config)
+        _dispute_detector = DisputeSignalDetector(_uma_client, config)
+        logger.info("Dashboard: Dispute signal detector initialized")
+    except Exception as e:
+        logger.warning(f"Dashboard: Dispute detector init failed: {e}")
+
     logger.info(f"Scanner started: threshold={threshold}%, interval={scan_interval}s")
     logger.info(f"Limits: poly={POLYMARKET_FETCH_LIMIT}, "
                 f"opinion_detailed={OPINION_DETAILED_FETCH}, "
@@ -2897,6 +2911,35 @@ def background_scanner():
                 sorted_multi = sorted(new_multi_map.values(), key=lambda x: x['arbitrage'], reverse=True)
                 _state['multi_outcome_arb'] = sorted_multi[:MAX_ARBITRAGE_DISPLAY]
 
+                # === Dispute Signal Detection (UMA Oracle) ===
+                if _dispute_detector:
+                    now_dispute = time.time()
+                    if now_dispute - _dispute_last_scan >= _dispute_scan_interval:
+                        _dispute_last_scan = now_dispute
+                        try:
+                            signals = _dispute_detector.detect_signals(poly_markets)
+                            dispute_list = []
+                            for sig in signals:
+                                dispute_list.append({
+                                    'signal_type': sig.signal_type.value,
+                                    'severity': sig.severity.value,
+                                    'market_id': sig.market_id,
+                                    'title': sig.title,
+                                    'oracle_outcome': sig.oracle_outcome,
+                                    'market_price_yes': sig.market_price_yes,
+                                    'divergence_pct': round(sig.divergence_pct, 1) if sig.divergence_pct else None,
+                                    'bond_usdc': sig.bond_usdc,
+                                    'details': sig.details,
+                                    'request_id': sig.request_id,
+                                    'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
+                                    'source': sig.source,
+                                })
+                            _state['dispute_signals'] = dispute_list
+                            if dispute_list:
+                                logger.info(f"Dispute signals: {len(dispute_list)} detected")
+                        except Exception as e:
+                            logger.warning(f"Dispute signal scan failed: {e}")
+
                 _state['scan_count'] += 1
                 _state['last_scan'] = datetime.now(_TZ_CST).strftime('%Y-%m-%d %H:%M:%S')
                 _state['threshold'] = threshold
@@ -2924,6 +2967,7 @@ def background_scanner():
                     'multi_outcome_arb': len(multi_outcome_arb),
                     'cross_combo_arb': len(cross_combo_arb),
                     'ws_updates': _ws_update_count,
+                    'dispute_signals': len(_state.get('dispute_signals', [])),
                 }
 
                 # Update price history for active arb opportunities
