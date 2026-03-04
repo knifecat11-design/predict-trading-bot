@@ -2919,18 +2919,72 @@ def background_scanner():
                         try:
                             signals = _dispute_detector.detect_signals(poly_markets)
                             dispute_list = []
+
+                            # 构建 market_id → raw Polymarket 数据索引（用于获取 URL + best_ask）
+                            poly_lookup = {}
+                            for rm in _poly_raw_markets:
+                                cid = rm.get('conditionId', rm.get('condition_id', ''))
+                                if cid:
+                                    poly_lookup[str(cid)] = rm
+
                             for sig in signals:
+                                # 查找 Polymarket URL + best_ask
+                                poly_url = ''
+                                best_ask_price = sig.market_price_yes  # 回退用 detect_signals 内的值
+                                raw_m = poly_lookup.get(str(sig.market_id)) if sig.market_id else None
+                                if raw_m:
+                                    # URL: 使用 event slug
+                                    events = raw_m.get('events', [])
+                                    ev = events[0] if events else {}
+                                    ev_slug = ev.get('slug', '') or raw_m.get('slug', '') or sig.market_id
+                                    poly_url = f"https://polymarket.com/event/{ev_slug}"
+                                    # best_ask 价格
+                                    ba = raw_m.get('bestAsk')
+                                    if ba is not None:
+                                        try:
+                                            best_ask_price = float(ba)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    if best_ask_price is None or best_ask_price <= 0:
+                                        ostr = raw_m.get('outcomePrices', '[]')
+                                        try:
+                                            prices = json.loads(ostr) if isinstance(ostr, str) else ostr
+                                            if prices and len(prices) >= 1:
+                                                best_ask_price = float(prices[0])
+                                        except Exception:
+                                            pass
+
+                                # Divergence: |oracle_target - market_best_ask|
+                                oracle_target = None
+                                oc = sig.oracle_outcome.split('(')[0].strip()  # "Yes (争议中)" → "Yes"
+                                if oc == 'Yes':
+                                    oracle_target = 1.0
+                                elif oc == 'No':
+                                    oracle_target = 0.0
+                                elif oc == 'Unknown':
+                                    oracle_target = 0.5
+
+                                divergence = None
+                                if oracle_target is not None and best_ask_price is not None and best_ask_price > 0:
+                                    divergence = round(abs(oracle_target - best_ask_price) * 100, 1)
+
+                                # UMA Oracle request 链接
+                                uma_url = f"https://oracle.uma.xyz/?transactionHash={sig.request_id}&eventIndex=0" if sig.request_id else ''
+
                                 dispute_list.append({
                                     'signal_type': sig.signal_type.value,
                                     'severity': sig.severity.value,
                                     'market_id': sig.market_id,
                                     'title': sig.title,
+                                    'poly_url': poly_url,
                                     'oracle_outcome': sig.oracle_outcome,
-                                    'market_price_yes': sig.market_price_yes,
-                                    'divergence_pct': round(sig.divergence_pct, 1) if sig.divergence_pct else None,
+                                    'market_price_yes': round(best_ask_price, 4) if best_ask_price else None,
+                                    'divergence_pct': divergence,
+                                    'oracle_target': oracle_target,
                                     'bond_usdc': sig.bond_usdc,
                                     'details': sig.details,
                                     'request_id': sig.request_id,
+                                    'uma_url': uma_url,
                                     'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
                                     'source': sig.source,
                                 })

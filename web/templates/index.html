@@ -55,7 +55,145 @@
         .ws-dot.disconnected { background: #f85149; box-shadow: 0 0 6px #f85149; }
         .ws-dot.connecting { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1s ease-in-out infinite; }
 
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        /* Two-column layout: dispute sidebar + main content */
+        .page-layout {
+            display: flex;
+            gap: 0;
+            min-height: calc(100vh - 60px);
+        }
+        .dispute-sidebar {
+            width: 340px;
+            min-width: 340px;
+            background: #0d1117;
+            border-right: 1px solid #21262d;
+            padding: 16px 14px;
+            overflow-y: auto;
+            max-height: calc(100vh - 60px);
+            position: sticky;
+            top: 60px;
+        }
+        .dispute-sidebar-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #f0f6fc;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .dispute-sidebar-sub {
+            font-size: 11px;
+            color: #484f58;
+            margin-bottom: 14px;
+            line-height: 1.4;
+        }
+        .dispute-count-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .dispute-count-chip {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+        .dispute-count-chip.high { color: #f85149; background: rgba(248,81,73,0.15); }
+        .dispute-count-chip.medium { color: #d29922; background: rgba(210,153,34,0.15); }
+        .dispute-count-chip.low { color: #3fb950; background: rgba(63,185,80,0.15); }
+        .dispute-card {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 10px;
+            transition: border-color 0.2s;
+        }
+        .dispute-card:hover { border-color: #30363d; }
+        .dispute-card.sev-HIGH { border-left: 3px solid #f85149; }
+        .dispute-card.sev-MEDIUM { border-left: 3px solid #d29922; }
+        .dispute-card.sev-LOW { border-left: 3px solid #3fb950; }
+        .dispute-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .dispute-sev-badge {
+            font-size: 10px;
+            font-weight: 800;
+            padding: 1px 6px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+        }
+        .dispute-sev-badge.HIGH { color: #f85149; background: rgba(248,81,73,0.18); }
+        .dispute-sev-badge.MEDIUM { color: #d29922; background: rgba(210,153,34,0.18); }
+        .dispute-sev-badge.LOW { color: #3fb950; background: rgba(63,185,80,0.18); }
+        .dispute-type-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 4px;
+            background: #21262d;
+            color: #8b949e;
+        }
+        .dispute-card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #58a6ff;
+            margin-bottom: 8px;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .dispute-card-title a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        .dispute-card-title a:hover { text-decoration: underline; }
+        .dispute-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px 12px;
+            margin-bottom: 8px;
+        }
+        .dispute-metric {
+            font-size: 11px;
+            color: #8b949e;
+        }
+        .dispute-metric .label { display: block; font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 0.3px; }
+        .dispute-metric .value { font-weight: 700; color: #e0e6ed; font-size: 13px; }
+        .dispute-metric .value.oracle-yes { color: #3fb950; }
+        .dispute-metric .value.oracle-no { color: #f85149; }
+        .dispute-metric .value.oracle-unk { color: #d29922; }
+        .dispute-metric .value.diverge-high { color: #f85149; }
+        .dispute-metric .value.diverge-mid { color: #d29922; }
+        .dispute-metric .value.diverge-low { color: #8b949e; }
+        .dispute-card-details {
+            font-size: 11px;
+            color: #6e7681;
+            line-height: 1.4;
+            margin-bottom: 6px;
+        }
+        .dispute-card-details a { color: #58a6ff; text-decoration: none; }
+        .dispute-card-details a:hover { text-decoration: underline; }
+        .dispute-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            color: #484f58;
+        }
+        .dispute-empty {
+            text-align: center;
+            color: #484f58;
+            padding: 30px 10px;
+            font-size: 12px;
+        }
+        .container { max-width: 1400px; padding: 20px; flex: 1; min-width: 0; }
 
         /* Platform status cards */
         .platforms {
@@ -262,6 +400,18 @@
         .signal-tier.limit-candidate { color: #d29922; background: rgba(210,153,34,0.15); border: 1px solid rgba(210,153,34,0.3); }
         .signal-tier.monitor-only { color: #8b949e; background: rgba(139,148,158,0.1); border: 1px solid rgba(139,148,158,0.2); }
 
+        @media (max-width: 1200px) {
+            .page-layout { flex-direction: column; }
+            .dispute-sidebar {
+                width: 100%;
+                min-width: unset;
+                max-height: 400px;
+                border-right: none;
+                border-bottom: 1px solid #21262d;
+                position: static;
+            }
+            .dispute-sidebar .dispute-card { display: inline-block; width: 300px; vertical-align: top; margin-right: 10px; }
+        }
         @media (max-width: 1024px) {
             .platforms, .market-lists { grid-template-columns: repeat(2, 1fr); }
         }
@@ -286,7 +436,18 @@
         </div>
     </div>
 
-    <div class="container">
+    <div class="page-layout">
+        <!-- Dispute Signals Sidebar -->
+        <div class="dispute-sidebar" id="dispute-sidebar">
+            <div class="dispute-sidebar-title">UMA Oracle Disputes</div>
+            <div class="dispute-sidebar-sub">Polymarket resolution disputes, reversals & oracle/market divergence</div>
+            <div class="dispute-count-bar" id="dispute-count-bar"></div>
+            <div id="dispute-cards">
+                <div class="dispute-empty pulse">Scanning UMA Oracle...</div>
+            </div>
+        </div>
+
+        <div class="container">
         <!-- Platform Status -->
         <div class="platforms">
             <div class="platform-card" id="card-polymarket">
@@ -431,31 +592,6 @@
             </tbody>
         </table>
 
-        <!-- Dispute Signals (UMA Oracle) -->
-        <div class="section-title">
-            UMA Oracle Dispute Signals
-            <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— Polymarket resolution disputes, reversals &amp; oracle vs market divergence</span>
-            <span id="dispute-count" style="margin-left:auto;font-size:13px;color:#f85149;font-weight:600"></span>
-        </div>
-        <table class="arb-table">
-            <thead>
-                <tr>
-                    <th>Severity</th>
-                    <th>Type</th>
-                    <th>Market</th>
-                    <th>Oracle Result</th>
-                    <th>Market Price</th>
-                    <th>Divergence</th>
-                    <th>Bond</th>
-                    <th>Details</th>
-                    <th>Time</th>
-                </tr>
-            </thead>
-            <tbody id="dispute-body">
-                <tr><td colspan="9" class="empty-state pulse">Scanning UMA Oracle for disputes...</td></tr>
-            </tbody>
-        </table>
-
         <!-- Market Lists -->
         <div class="section-title">Top Markets by Platform</div>
         <div class="market-lists">
@@ -480,7 +616,8 @@
                 <div id="list-probable"><div class="empty-state">Loading...</div></div>
             </div>
         </div>
-    </div>
+    </div><!-- /container -->
+    </div><!-- /page-layout -->
 
     <!-- Socket.IO client -->
     <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
@@ -698,67 +835,103 @@
         }
 
         function renderDisputeSignals(data) {
-            const tbody = document.getElementById('dispute-body');
-            const countEl = document.getElementById('dispute-count');
+            const container = document.getElementById('dispute-cards');
+            const countBar = document.getElementById('dispute-count-bar');
             const signals = data.dispute_signals || [];
 
-            if (countEl) {
-                if (signals.length > 0) {
-                    const highCount = signals.filter(s => s.severity === 'HIGH').length;
-                    const medCount = signals.filter(s => s.severity === 'MEDIUM').length;
-                    const parts = [];
-                    if (highCount > 0) parts.push(highCount + ' HIGH');
-                    if (medCount > 0) parts.push(medCount + ' MEDIUM');
-                    if (signals.length - highCount - medCount > 0) parts.push((signals.length - highCount - medCount) + ' LOW');
-                    countEl.textContent = parts.join(' · ');
-                } else {
-                    countEl.textContent = '';
-                }
-            }
+            // Count bar
+            const highCount = signals.filter(s => s.severity === 'HIGH').length;
+            const medCount = signals.filter(s => s.severity === 'MEDIUM').length;
+            const lowCount = signals.length - highCount - medCount;
+            let chips = '';
+            if (highCount > 0) chips += `<span class="dispute-count-chip high">${highCount} HIGH</span>`;
+            if (medCount > 0) chips += `<span class="dispute-count-chip medium">${medCount} MED</span>`;
+            if (lowCount > 0) chips += `<span class="dispute-count-chip low">${lowCount} LOW</span>`;
+            countBar.innerHTML = chips || '<span style="font-size:11px;color:#484f58">0 signals</span>';
 
             if (signals.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No dispute signals detected</td></tr>';
+                container.innerHTML = '<div class="dispute-empty">No dispute signals detected</div>';
                 return;
             }
 
             const typeLabels = {
-                'new_dispute': 'New Dispute',
+                'new_dispute': 'Dispute',
                 'settlement_reversal': 'Reversal',
                 'oracle_market_divergence': 'Divergence',
-                'proposal_contradiction': 'Contradiction',
+                'proposal_contradiction': 'Challenge',
             };
             const typeIcons = {
-                'new_dispute': '⚠️',
-                'settlement_reversal': '🔄',
-                'oracle_market_divergence': '📊',
-                'proposal_contradiction': '🔍',
+                'new_dispute': '\u26a0',
+                'settlement_reversal': '\ud83d\udd04',
+                'oracle_market_divergence': '\ud83d\udcca',
+                'proposal_contradiction': '\ud83d\udd0d',
             };
-            const sevColors = { 'HIGH': '#f85149', 'MEDIUM': '#d29922', 'LOW': '#3fb950' };
 
-            tbody.innerHTML = signals.map(s => {
-                const sevColor = sevColors[s.severity] || '#8b949e';
+            container.innerHTML = signals.map(s => {
                 const typeLabel = typeLabels[s.signal_type] || s.signal_type;
-                const typeIcon = typeIcons[s.signal_type] || '❓';
-                const marketPrice = s.market_price_yes !== null && s.market_price_yes !== undefined
-                    ? `${(s.market_price_yes * 100).toFixed(1)}%`
+                const typeIcon = typeIcons[s.signal_type] || '?';
+
+                // Market title with Polymarket link
+                const titleHtml = s.poly_url
+                    ? `<a href="${s.poly_url}" target="_blank">${s.title}</a>`
+                    : s.title;
+
+                // Oracle outcome color
+                const oc = (s.oracle_outcome || '').split('(')[0].trim();
+                const oracleClass = oc === 'Yes' ? 'oracle-yes' : oc === 'No' ? 'oracle-no' : 'oracle-unk';
+
+                // Market price
+                const mktPrice = s.market_price_yes !== null && s.market_price_yes !== undefined
+                    ? `${(s.market_price_yes * 100).toFixed(1)}c`
                     : '-';
-                const divergence = s.divergence_pct !== null && s.divergence_pct !== undefined
-                    ? `<span class="arb-pct ${s.divergence_pct >= 30 ? 'high' : s.divergence_pct >= 15 ? 'mid' : 'low'}">${s.divergence_pct.toFixed(1)}%</span>`
-                    : '-';
+
+                // Divergence
+                let divHtml = '-';
+                if (s.divergence_pct !== null && s.divergence_pct !== undefined) {
+                    const dc = s.divergence_pct >= 30 ? 'diverge-high' : s.divergence_pct >= 15 ? 'diverge-mid' : 'diverge-low';
+                    divHtml = `<span class="value ${dc}">${s.divergence_pct.toFixed(1)}%</span>`;
+                }
+
+                // Bond
                 const bond = s.bond_usdc > 0 ? `$${s.bond_usdc.toLocaleString()}` : '-';
 
+                // Details with UMA link
+                let detailsHtml = s.details || '';
+                if (s.uma_url) {
+                    detailsHtml += ` <a href="${s.uma_url}" target="_blank">View on UMA Oracle &rarr;</a>`;
+                }
+
                 return `
-                <tr style="border-left:3px solid ${sevColor}">
-                    <td><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:700;color:${sevColor};background:${sevColor}22">${s.severity}</span></td>
-                    <td>${typeIcon} ${typeLabel}</td>
-                    <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.title}">${s.title}</td>
-                    <td style="font-weight:600;color:#58a6ff">${s.oracle_outcome}</td>
-                    <td>${marketPrice}</td>
-                    <td>${divergence}</td>
-                    <td style="color:#d29922">${bond}</td>
-                    <td style="font-size:12px;color:#8b949e;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.details}">${s.details}</td>
-                    <td style="color:#484f58;font-size:12px">${s.timestamp}</td>
-                </tr>`;
+                <div class="dispute-card sev-${s.severity}">
+                    <div class="dispute-card-header">
+                        <span class="dispute-sev-badge ${s.severity}">${s.severity}</span>
+                        <span class="dispute-type-badge">${typeIcon} ${typeLabel}</span>
+                    </div>
+                    <div class="dispute-card-title">${titleHtml}</div>
+                    <div class="dispute-metrics">
+                        <div class="dispute-metric">
+                            <span class="label">Oracle</span>
+                            <span class="value ${oracleClass}">${s.oracle_outcome}</span>
+                        </div>
+                        <div class="dispute-metric">
+                            <span class="label">Market Price</span>
+                            <span class="value">${mktPrice}</span>
+                        </div>
+                        <div class="dispute-metric">
+                            <span class="label">Divergence</span>
+                            ${divHtml}
+                        </div>
+                        <div class="dispute-metric">
+                            <span class="label">Bond</span>
+                            <span class="value" style="color:#d29922">${bond}</span>
+                        </div>
+                    </div>
+                    <div class="dispute-card-details">${detailsHtml}</div>
+                    <div class="dispute-card-footer">
+                        <span>${s.source || ''}</span>
+                        <span>${s.timestamp}</span>
+                    </div>
+                </div>`;
             }).join('');
         }
 
