@@ -3007,6 +3007,9 @@ def background_scanner():
                                 # Polymarket URL: 复用套利模块的 event slug 逻辑
                                 poly_url = ''
                                 best_ask_price = sig.market_price_yes
+                                price_change_24h = None
+                                price_change_1h = None
+                                volume_24h = 0
                                 if raw_m:
                                     events = raw_m.get('events', [])
                                     ev = events[0] if events else {}
@@ -3017,6 +3020,23 @@ def background_scanner():
                                     y = _extract_yes_price(raw_m)
                                     if y and y > 0:
                                         best_ask_price = y
+                                    # 价格变化
+                                    try:
+                                        pc = raw_m.get('oneDayPriceChange')
+                                        if pc is not None:
+                                            price_change_24h = round(float(pc) * 100, 1)
+                                    except (ValueError, TypeError):
+                                        pass
+                                    try:
+                                        hc = raw_m.get('oneHourPriceChange')
+                                        if hc is not None:
+                                            price_change_1h = round(float(hc) * 100, 1)
+                                    except (ValueError, TypeError):
+                                        pass
+                                    try:
+                                        volume_24h = float(raw_m.get('volume24hr') or 0)
+                                    except (ValueError, TypeError):
+                                        pass
 
                                 # 回退: slugify 标题生成链接
                                 if not poly_url and sig.title:
@@ -3038,6 +3058,17 @@ def background_scanner():
                                 if oracle_target is not None and best_ask_price is not None and best_ask_price > 0:
                                     divergence = round(abs(oracle_target - best_ask_price) * 100, 1)
 
+                                # 急剧变化判定: |24h变化| >= 20%
+                                is_spike = False
+                                if price_change_24h is not None and abs(price_change_24h) >= 20.0:
+                                    is_spike = True
+
+                                # 优先级评分: divergence权重60% + 24h变化权重20% + volume权重20%
+                                div_score = abs(divergence) if divergence else 0
+                                change_score = abs(price_change_24h) if price_change_24h else 0
+                                vol_score = min(volume_24h / 100000, 10)  # 10万=1分, 上限10
+                                priority_score = div_score * 0.6 + change_score * 0.2 + vol_score * 0.2 * 10
+
                                 # UMA Oracle URL: chainId=137 (Polygon)
                                 uma_url = ''
                                 if sig.request_hash:
@@ -3051,9 +3082,17 @@ def background_scanner():
                                         f"&eventIndex={log_idx}"
                                     )
 
+                                # 基于综合评分重新分级 severity
+                                if priority_score >= 40:
+                                    computed_severity = 'HIGH'
+                                elif priority_score >= 15:
+                                    computed_severity = 'MEDIUM'
+                                else:
+                                    computed_severity = 'LOW'
+
                                 dispute_list.append({
                                     'signal_type': sig.signal_type.value,
-                                    'severity': sig.severity.value,
+                                    'severity': computed_severity,
                                     'market_id': sig.market_id,
                                     'title': sig.title,
                                     'poly_url': poly_url,
@@ -3065,9 +3104,16 @@ def background_scanner():
                                     'details': sig.details,
                                     'request_id': sig.request_id,
                                     'uma_url': uma_url,
+                                    'price_change_24h': price_change_24h,
+                                    'price_change_1h': price_change_1h,
+                                    'volume_24h': round(volume_24h),
+                                    'is_spike': is_spike,
+                                    'priority_score': round(priority_score, 1),
                                     'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
                                     'source': sig.source,
                                 })
+                            # 按优先级排序: 分数高的在前
+                            dispute_list.sort(key=lambda x: x['priority_score'], reverse=True)
                             _state['dispute_signals'] = dispute_list
                             if dispute_list:
                                 logger.info(f"Dispute signals: {len(dispute_list)} detected")
