@@ -69,6 +69,8 @@ class OracleRequest:
     settlement_timestamp: Optional[int] = None
     expiration_timestamp: Optional[int] = None
     source_endpoint: str = ""  # 来源子图
+    request_hash: Optional[str] = None       # 链上 requestHash（用于 UMA Oracle URL）
+    request_log_index: Optional[int] = None  # 链上 eventLogIndex
 
 
 class UMAOracleClient:
@@ -220,6 +222,8 @@ class UMAOracleClient:
                 settlement_timestamp=int(raw.get("settlementTimestamp") or 0) if raw.get("settlementTimestamp") else None,
                 expiration_timestamp=int(raw.get("proposalExpirationTimestamp") or 0) if raw.get("proposalExpirationTimestamp") else None,
                 source_endpoint=source,
+                request_hash=raw.get("requestHash"),
+                request_log_index=int(raw.get("requestLogIndex") or 0) if raw.get("requestLogIndex") else None,
             )
         except Exception as e:
             logger.warning(f"Failed to parse oracle request: {e}")
@@ -270,6 +274,7 @@ class UMAOracleClient:
     disputer disputeTimestamp state
     settlementPrice settlementTimestamp
     bond requestTimestamp proposalTimestamp
+    requestHash requestLogIndex
   }}
 }}"""
         results = self._query_both_endpoints(query, "disputes")
@@ -290,6 +295,7 @@ class UMAOracleClient:
     disputer disputeTimestamp state
     settlementPrice settlementTimestamp
     bond requestTimestamp proposalTimestamp
+    requestHash requestLogIndex
   }}
 }}"""
         results = self._query_both_endpoints(query, "proposals")
@@ -310,6 +316,7 @@ class UMAOracleClient:
     disputer disputeTimestamp state
     settlementPrice settlementTimestamp
     bond requestTimestamp proposalTimestamp
+    requestHash requestLogIndex
   }}
 }}"""
         results = self._query_both_endpoints(query, "settlements")

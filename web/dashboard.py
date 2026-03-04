@@ -2648,6 +2648,28 @@ def _on_ws_price_update(platform: str, market_id: str, yes_ask: float, no_ask: f
             pass
 
 
+def _extract_yes_price(raw_market: dict) -> float:
+    """从 Polymarket 原始 API 数据提取 Yes price (bestAsk → outcomePrices 回退)"""
+    ba = raw_market.get('bestAsk')
+    if ba is not None:
+        try:
+            v = float(ba)
+            if v > 0:
+                return v
+        except (ValueError, TypeError):
+            pass
+    ostr = raw_market.get('outcomePrices', '[]')
+    try:
+        prices = json.loads(ostr) if isinstance(ostr, str) else ostr
+        if prices and len(prices) >= 1:
+            v = float(prices[0])
+            if v > 0:
+                return v
+    except Exception:
+        pass
+    return 0.0
+
+
 def background_scanner():
     """Background thread: scan all platforms with concurrent fetch + WebSocket push"""
     global _state, _realtime_feed
@@ -2917,80 +2939,92 @@ def background_scanner():
                     if now_dispute - _dispute_last_scan >= _dispute_scan_interval:
                         _dispute_last_scan = now_dispute
                         try:
-                            # 传入 raw Polymarket 数据（含数字 id 字段）给内部价格匹配
+                            # === 两层索引: 数字id + question文本 ===
+                            # UMA market_id 是 Poly 的数字 id 字段
+                            poly_by_id = {}    # str(id) → raw market
+                            poly_by_q = {}     # question.lower().strip() → raw market
+                            for rm in _poly_raw_markets:
+                                num_id = str(rm.get('id', ''))
+                                if num_id:
+                                    poly_by_id[num_id] = rm
+                                q = (rm.get('question') or '').lower().strip().rstrip('?')
+                                if q:
+                                    poly_by_q[q] = rm
+
+                            # 传入带数字 id 的简化市场列表给内部价格匹配
                             raw_for_detect = []
                             for rm in _poly_raw_markets:
                                 num_id = str(rm.get('id', ''))
-                                if num_id:
-                                    ba = rm.get('bestAsk')
-                                    op = rm.get('outcomePrices', '[]')
-                                    y = None
-                                    if ba is not None:
-                                        try:
-                                            y = float(ba)
-                                        except (ValueError, TypeError):
-                                            pass
-                                    if not y or y <= 0:
-                                        try:
-                                            prices = json.loads(op) if isinstance(op, str) else op
-                                            if prices and len(prices) >= 1:
-                                                y = float(prices[0])
-                                        except Exception:
-                                            pass
-                                    if y and y > 0:
-                                        raw_for_detect.append({
-                                            'id': num_id,
-                                            'title': rm.get('question', ''),
-                                            'yes': y,
-                                            'no': round(1.0 - y, 4),
-                                        })
+                                if not num_id:
+                                    continue
+                                y = _extract_yes_price(rm)
+                                if y and y > 0:
+                                    raw_for_detect.append({
+                                        'id': num_id,
+                                        'title': rm.get('question', ''),
+                                        'yes': y,
+                                        'no': round(1.0 - y, 4),
+                                    })
                             signals = _dispute_detector.detect_signals(raw_for_detect)
                             dispute_list = []
 
-                            # 构建 market_id(数字) → raw Polymarket 数据索引
-                            # UMA ancillaryData 里的 market_id 是 Poly 的数字 id 字段
-                            poly_lookup = {}
-                            for rm in _poly_raw_markets:
-                                num_id = str(rm.get('id', ''))
-                                if num_id:
-                                    poly_lookup[num_id] = rm
+                            # 对 _poly_raw_markets 里找不到的 market_id，直接查 Poly API
+                            missing_ids = []
+                            for sig in signals:
+                                if sig.market_id and str(sig.market_id) not in poly_by_id:
+                                    sig_q = sig.title.lower().strip().rstrip('?') if sig.title else ''
+                                    if sig_q not in poly_by_q:
+                                        missing_ids.append(str(sig.market_id))
+                            missing_ids = list(set(missing_ids))
+                            if missing_ids:
+                                import requests as _req
+                                for mid in missing_ids[:30]:  # 最多补查30个
+                                    try:
+                                        r = _req.get(
+                                            f"https://gamma-api.polymarket.com/markets?id={mid}",
+                                            timeout=8
+                                        )
+                                        if r.status_code == 200 and r.json():
+                                            rm = r.json()[0] if isinstance(r.json(), list) else r.json()
+                                            poly_by_id[str(rm.get('id', ''))] = rm
+                                            q = (rm.get('question') or '').lower().strip().rstrip('?')
+                                            if q:
+                                                poly_by_q[q] = rm
+                                    except Exception:
+                                        pass
+                                if missing_ids:
+                                    logger.info(f"Dispute: fetched {len(missing_ids)} markets from Poly API")
 
                             for sig in signals:
-                                # 查找 Polymarket URL + best_ask
+                                # 查找 Polymarket 原始数据: 先用 id 匹配, 回退用 title 精确匹配
+                                raw_m = None
+                                if sig.market_id:
+                                    raw_m = poly_by_id.get(str(sig.market_id))
+                                if not raw_m and sig.title:
+                                    sig_q = sig.title.lower().strip().rstrip('?')
+                                    raw_m = poly_by_q.get(sig_q)
+
+                                # Polymarket URL: 复用套利模块的 event slug 逻辑
                                 poly_url = ''
                                 best_ask_price = sig.market_price_yes
-                                raw_m = poly_lookup.get(str(sig.market_id)) if sig.market_id else None
                                 if raw_m:
-                                    # URL: 使用 event slug
                                     events = raw_m.get('events', [])
                                     ev = events[0] if events else {}
                                     ev_slug = ev.get('slug', '') or raw_m.get('slug', '')
                                     if ev_slug:
                                         poly_url = f"https://polymarket.com/event/{ev_slug}"
                                     # best_ask 价格
-                                    ba = raw_m.get('bestAsk')
-                                    if ba is not None:
-                                        try:
-                                            best_ask_price = float(ba)
-                                        except (ValueError, TypeError):
-                                            pass
-                                    if best_ask_price is None or best_ask_price <= 0:
-                                        ostr = raw_m.get('outcomePrices', '[]')
-                                        try:
-                                            prices = json.loads(ostr) if isinstance(ostr, str) else ostr
-                                            if prices and len(prices) >= 1:
-                                                best_ask_price = float(prices[0])
-                                        except Exception:
-                                            pass
+                                    y = _extract_yes_price(raw_m)
+                                    if y and y > 0:
+                                        best_ask_price = y
 
-                                # 回退: 用 title slugify 生成 Polymarket 搜索链接
+                                # 回退: slugify 标题生成链接
                                 if not poly_url and sig.title:
                                     title_slug = slugify(sig.title)
                                     if title_slug:
                                         poly_url = f"https://polymarket.com/event/{title_slug}"
 
                                 # Divergence: |oracle_target - market_best_ask|
-                                # oracle_target: 争议投票认为的正确价格
                                 oracle_target = None
                                 oc = sig.oracle_outcome.split('(')[0].strip()
                                 if oc == 'Yes':
@@ -3004,8 +3038,18 @@ def background_scanner():
                                 if oracle_target is not None and best_ask_price is not None and best_ask_price > 0:
                                     divergence = round(abs(oracle_target - best_ask_price) * 100, 1)
 
-                                # UMA Oracle request 链接
-                                uma_url = f"https://oracle.uma.xyz/?transactionHash={sig.request_id}&eventIndex=0" if sig.request_id else ''
+                                # UMA Oracle URL: chainId=137 (Polygon)
+                                uma_url = ''
+                                if sig.request_hash:
+                                    log_idx = sig.request_log_index or 0
+                                    oo_type = 'Optimistic+Oracle+V2' if sig.source == 'OOv2' else 'Optimistic+Oracle+V2'
+                                    uma_url = (
+                                        f"https://oracle.uma.xyz/"
+                                        f"?chainId=137"
+                                        f"&oracleType={oo_type}"
+                                        f"&transactionHash={sig.request_hash}"
+                                        f"&eventIndex={log_idx}"
+                                    )
 
                                 dispute_list.append({
                                     'signal_type': sig.signal_type.value,
