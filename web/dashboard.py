@@ -3200,14 +3200,11 @@ def background_scanner():
                                 del _dispute_price_history[k]
 
                             # === 过滤已结算市场 ===
-                            # 条件: Poly closed=True 或价格极端 (≥98c 或 ≤2c)
+                            # 条件: 仅根据 Poly closed=True 状态过滤
                             filtered = []
                             for entry in dispute_list:
                                 if entry.get('poly_closed'):
                                     continue  # Poly 已标记 closed
-                                mp = entry.get('market_price_yes')
-                                if mp is not None and (mp >= 0.98 or mp <= 0.02):
-                                    continue  # 价格极端 = 已结算
                                 filtered.append(entry)
                             dispute_list = filtered
 
