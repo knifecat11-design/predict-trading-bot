@@ -261,13 +261,14 @@ class UMAOracleClient:
     # ============================================================
 
     def query_active_disputes(self, first: int = 50) -> List[OracleRequest]:
-        """查询活跃的争议请求（state=Disputed）"""
+        """查询活跃的争议请求（state=Disputed），仅最近90天"""
+        cutoff = int(time.time()) - 90 * 86400
         query = f"""{{
   optimisticPriceRequests(
     first: {first},
     orderBy: disputeTimestamp,
     orderDirection: desc,
-    where: {{ disputer_not: null, state: Disputed }}
+    where: {{ disputer_not: null, state: Disputed, requestTimestamp_gte: "{cutoff}" }}
   ) {{
     id identifier ancillaryData time requester
     proposer proposedPrice proposalExpirationTimestamp
@@ -282,13 +283,14 @@ class UMAOracleClient:
         return results
 
     def query_recent_proposals(self, first: int = 50) -> List[OracleRequest]:
-        """查询最近的提案（包含挑战期内的）"""
+        """查询最近的提案（包含挑战期内的），仅最近90天"""
+        cutoff = int(time.time()) - 90 * 86400
         query = f"""{{
   optimisticPriceRequests(
     first: {first},
     orderBy: proposalTimestamp,
     orderDirection: desc,
-    where: {{ state: Proposed }}
+    where: {{ state: Proposed, requestTimestamp_gte: "{cutoff}" }}
   ) {{
     id identifier ancillaryData time requester
     proposer proposedPrice proposalExpirationTimestamp
@@ -303,13 +305,14 @@ class UMAOracleClient:
         return results
 
     def query_recent_settlements(self, first: int = 30) -> List[OracleRequest]:
-        """查询最近结算的请求"""
+        """查询最近结算的请求，仅最近90天内有争议的结算"""
+        cutoff = int(time.time()) - 90 * 86400
         query = f"""{{
   optimisticPriceRequests(
     first: {first},
     orderBy: settlementTimestamp,
     orderDirection: desc,
-    where: {{ state_in: [Resolved, Settled] }}
+    where: {{ state_in: [Resolved, Settled], disputer_not: null, requestTimestamp_gte: "{cutoff}" }}
   ) {{
     id identifier ancillaryData time requester
     proposer proposedPrice proposalExpirationTimestamp
