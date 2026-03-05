@@ -2682,6 +2682,8 @@ def background_scanner():
     _dispute_detector = None
     _dispute_last_scan = 0
     _dispute_scan_interval = 120  # 争议扫描间隔（秒）
+    # 争议周期价格追踪: {request_id: {first_seen_ts, initial_price}}
+    _dispute_price_history = {}
     try:
         from src.uma_oracle_api import UMAOracleClient
         from src.dispute_signal import DisputeSignalDetector
@@ -3058,15 +3060,44 @@ def background_scanner():
                                 if oracle_target is not None and best_ask_price is not None and best_ask_price > 0:
                                     divergence = round(abs(oracle_target - best_ask_price) * 100, 1)
 
-                                # 急剧变化判定: |24h变化| >= 20%
+                                # === 争议周期价格追踪 ===
+                                req_id = sig.request_id
+                                now_ts = int(time.time())
+                                lifecycle_change = None  # 从首次发现到现在的价格变化
+                                if req_id not in _dispute_price_history:
+                                    if best_ask_price and best_ask_price > 0:
+                                        _dispute_price_history[req_id] = {
+                                            'first_seen_ts': now_ts,
+                                            'initial_price': best_ask_price,
+                                        }
+                                else:
+                                    hist = _dispute_price_history[req_id]
+                                    if best_ask_price and best_ask_price > 0:
+                                        lifecycle_change = round(
+                                            (best_ask_price - hist['initial_price']) * 100, 1
+                                        )
+
+                                # 事件时间戳
+                                proposal_ts = sig.proposal_timestamp or sig.timestamp or 0
+                                expiration_ts = sig.expiration_timestamp or 0
+
+                                # === 24H 时间标签 ===
+                                time_tag = None  # "24H_NEW" or "24H_ENDING"
+                                if proposal_ts and (now_ts - proposal_ts) < 86400:
+                                    time_tag = '24H_NEW'
+                                elif expiration_ts and 0 < (expiration_ts - now_ts) < 86400:
+                                    time_tag = '24H_ENDING'
+
+                                # 急剧变化判定: 优先用周期变化, 回退用24h变化
+                                effective_change = lifecycle_change if lifecycle_change is not None else price_change_24h
                                 is_spike = False
-                                if price_change_24h is not None and abs(price_change_24h) >= 20.0:
+                                if effective_change is not None and abs(effective_change) >= 20.0:
                                     is_spike = True
 
-                                # 优先级评分: divergence权重60% + 24h变化权重20% + volume权重20%
+                                # 优先级评分
                                 div_score = abs(divergence) if divergence else 0
-                                change_score = abs(price_change_24h) if price_change_24h else 0
-                                vol_score = min(volume_24h / 100000, 10)  # 10万=1分, 上限10
+                                change_score = abs(effective_change) if effective_change else 0
+                                vol_score = min(volume_24h / 100000, 10)
                                 priority_score = div_score * 0.6 + change_score * 0.2 + vol_score * 0.2 * 10
 
                                 # UMA Oracle URL: chainId=137 (Polygon)
@@ -3106,12 +3137,23 @@ def background_scanner():
                                     'uma_url': uma_url,
                                     'price_change_24h': price_change_24h,
                                     'price_change_1h': price_change_1h,
+                                    'lifecycle_change': lifecycle_change,
                                     'volume_24h': round(volume_24h),
                                     'is_spike': is_spike,
+                                    'time_tag': time_tag,
+                                    'proposal_ts': proposal_ts,
+                                    'expiration_ts': expiration_ts,
                                     'priority_score': round(priority_score, 1),
                                     'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
                                     'source': sig.source,
                                 })
+                            # 清理超过7天未出现的价格历史
+                            active_ids = {e['request_id'] for e in dispute_list}
+                            stale = [k for k, v in _dispute_price_history.items()
+                                     if k not in active_ids and now_ts - v['first_seen_ts'] > 7 * 86400]
+                            for k in stale:
+                                del _dispute_price_history[k]
+
                             # 按优先级排序: 分数高的在前
                             dispute_list.sort(key=lambda x: x['priority_score'], reverse=True)
                             _state['dispute_signals'] = dispute_list

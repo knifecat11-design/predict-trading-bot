@@ -48,6 +48,8 @@ class DisputeSignal:
     request_id: str                # Oracle request ID
     timestamp: int                 # 事件时间戳
     source: str                    # 来源子图 (OOv2/MOOV2)
+    proposal_timestamp: Optional[int] = None  # 提案时间戳
+    expiration_timestamp: Optional[int] = None  # 挑战期到期时间戳
     request_hash: Optional[str] = None      # 链上 requestHash (for UMA URL)
     request_log_index: Optional[int] = None # 链上 eventLogIndex
 
@@ -180,6 +182,8 @@ class DisputeSignalDetector:
                 request_id=req.request_id,
                 timestamp=req.dispute_timestamp or int(time.time()),
                 source=req.source_endpoint,
+                proposal_timestamp=req.proposal_timestamp,
+                expiration_timestamp=req.expiration_timestamp,
                 request_hash=req.request_hash,
                 request_log_index=req.request_log_index,
             ))
@@ -212,6 +216,8 @@ class DisputeSignalDetector:
                     request_id=req.request_id,
                     timestamp=req.settlement_timestamp or int(time.time()),
                     source=req.source_endpoint,
+                    proposal_timestamp=req.proposal_timestamp,
+                    expiration_timestamp=req.expiration_timestamp,
                 ))
 
         return signals
@@ -228,12 +234,20 @@ class DisputeSignalDetector:
                 continue
             seen.add(req.request_id)
 
+            # 跳过已结算市场 — 只检测 Proposed 和 Disputed 状态
+            if req.state in ("Resolved", "Settled"):
+                continue
+
             market = self._find_market_price(req, poly_index)
             if not market:
                 continue
 
             market_yes = market.get('yes', 0)
             if not market_yes or market_yes <= 0:
+                continue
+
+            # 跳过 Poly 端已结算市场（价格极端，>98c 或 <2c）
+            if market_yes >= 0.98 or market_yes <= 0.02:
                 continue
 
             # 将 Oracle 结果转为价格
@@ -271,6 +285,8 @@ class DisputeSignalDetector:
                 request_id=req.request_id,
                 timestamp=req.proposal_timestamp or req.request_timestamp,
                 source=req.source_endpoint,
+                proposal_timestamp=req.proposal_timestamp,
+                expiration_timestamp=req.expiration_timestamp,
                 request_hash=req.request_hash,
                 request_log_index=req.request_log_index,
             ))
@@ -325,6 +341,8 @@ class DisputeSignalDetector:
                 request_id=req.request_id,
                 timestamp=req.proposal_timestamp or req.request_timestamp,
                 source=req.source_endpoint,
+                proposal_timestamp=req.proposal_timestamp,
+                expiration_timestamp=req.expiration_timestamp,
                 request_hash=req.request_hash,
                 request_log_index=req.request_log_index,
             ))
