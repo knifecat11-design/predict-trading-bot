@@ -188,6 +188,35 @@
             border: 1px solid rgba(240,136,62,0.3);
             animation: spike-pulse 2s ease-in-out infinite;
         }
+        /* DVM voting status bar */
+        .dispute-dvm-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .dispute-dvm-bar.voting {
+            background: rgba(210,153,34,0.12);
+            border: 1px solid rgba(210,153,34,0.25);
+            color: #d29922;
+        }
+        .dispute-dvm-bar.resolved {
+            background: rgba(63,185,80,0.12);
+            border: 1px solid rgba(63,185,80,0.25);
+            color: #3fb950;
+        }
+        .dispute-dvm-bar a {
+            color: inherit;
+            text-decoration: none;
+            margin-left: auto;
+            font-size: 10px;
+            opacity: 0.8;
+        }
+        .dispute-dvm-bar a:hover { text-decoration: underline; opacity: 1; }
         .dispute-type-badge {
             font-size: 10px;
             font-weight: 600;
@@ -1015,6 +1044,23 @@
                     detailsHtml += ` <a href="${s.uma_url}" target="_blank">View on UMA Oracle &rarr;</a>`;
                 }
 
+                // DVM voting status bar
+                let dvmBarHtml = '';
+                if (s.dvm_phase === 'resolved') {
+                    const pct = s.dvm_winning_pct ? ` (${s.dvm_winning_pct}%)` : '';
+                    const voters = s.dvm_voter_count ? ` \u00b7 ${s.dvm_voter_count} voters` : '';
+                    dvmBarHtml = `<div class="dispute-dvm-bar resolved">
+                        \u2705 DVM Result: <strong>${s.dvm_result || '?'}</strong>${pct}${voters}
+                        <a href="${s.vote_url}" target="_blank">vote.uma.xyz &rarr;</a>
+                    </div>`;
+                } else if (s.dvm_phase === 'voting') {
+                    const voters = s.dvm_voter_count ? ` \u00b7 ${s.dvm_voter_count} voters` : '';
+                    dvmBarHtml = `<div class="dispute-dvm-bar voting">
+                        \u23f3 DVM Final Review${voters}
+                        <a href="${s.vote_url}" target="_blank">vote.uma.xyz &rarr;</a>
+                    </div>`;
+                }
+
                 return `
                 <div class="dispute-card sev-${s.severity}">
                     <div class="dispute-card-header">
@@ -1024,6 +1070,7 @@
                         <span class="dispute-type-badge">${typeIcon} ${typeLabel}</span>
                     </div>
                     <div class="dispute-card-title">${titleHtml}</div>
+                    ${dvmBarHtml}
                     <div class="dispute-metrics">
                         <div class="dispute-metric">
                             <span class="label">Oracle</span>

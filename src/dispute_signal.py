@@ -52,6 +52,11 @@ class DisputeSignal:
     expiration_timestamp: Optional[int] = None  # 挑战期到期时间戳
     request_hash: Optional[str] = None      # 链上 requestHash (for UMA URL)
     request_log_index: Optional[int] = None # 链上 eventLogIndex
+    # DVM 投票状态
+    dvm_phase: Optional[str] = None   # None / "voting" / "resolved"
+    dvm_result: Optional[str] = None  # DVM 投票结果 (Yes/No/Unknown)
+    dvm_winning_pct: Optional[float] = None  # 胜出方得票%
+    dvm_voter_count: int = 0
 
     @property
     def signal_key(self) -> str:

@@ -2970,6 +2970,41 @@ def background_scanner():
                             signals = _dispute_detector.detect_signals(raw_for_detect)
                             dispute_list = []
 
+                            # === DVM 投票状态查询 ===
+                            # 查询 DVM 投票，尝试通过 ancillaryDataHash 匹配
+                            dvm_by_hash = {}  # ancillaryDataHash -> DvmVoteResult
+                            try:
+                                dvm_votes = _uma_client.query_dvm_votes(first=50)
+                                for dv in dvm_votes:
+                                    dvm_by_hash[dv.ancillary_data_hash] = dv
+                            except Exception as e:
+                                logger.debug(f"DVM vote query failed: {e}")
+
+                            # 为争议中的信号检测 DVM 阶段
+                            now_ts = int(time.time())
+                            for sig in signals:
+                                # 如果 Oracle 状态是 Disputed 且挑战期已过，标记为 DVM 投票阶段
+                                if sig.signal_type.value == 'new_dispute':
+                                    exp_ts = sig.expiration_timestamp or 0
+                                    if exp_ts > 0 and exp_ts < now_ts:
+                                        sig.dvm_phase = 'voting'
+                                    # 尝试通过 ancillaryData hash 匹配 DVM 投票结果
+                                    # (Oracle id 格式: identifier-timestamp-hash)
+                                    parts = sig.request_id.split('-', 2)
+                                    if len(parts) >= 3:
+                                        oracle_hash = parts[2]
+                                        if oracle_hash.startswith('0x'):
+                                            oracle_hash = oracle_hash[2:]
+                                        dvm_vote = dvm_by_hash.get(oracle_hash)
+                                        if dvm_vote:
+                                            if dvm_vote.is_resolved:
+                                                sig.dvm_phase = 'resolved'
+                                                sig.dvm_result = dvm_vote.vote_result
+                                            else:
+                                                sig.dvm_phase = 'voting'
+                                            sig.dvm_winning_pct = dvm_vote.winning_pct
+                                            sig.dvm_voter_count = dvm_vote.voter_count
+
                             # 对 _poly_raw_markets 里找不到的 market_id，直接查 Poly API
                             missing_ids = []
                             for sig in signals:
@@ -3146,6 +3181,11 @@ def background_scanner():
                                     'priority_score': round(priority_score, 1),
                                     'timestamp': datetime.now(_TZ_CST).strftime('%H:%M:%S'),
                                     'source': sig.source,
+                                    'dvm_phase': sig.dvm_phase,
+                                    'dvm_result': sig.dvm_result,
+                                    'dvm_winning_pct': sig.dvm_winning_pct,
+                                    'dvm_voter_count': sig.dvm_voter_count,
+                                    'vote_url': 'https://vote.uma.xyz',
                                 })
                             # 清理超过7天未出现的价格历史
                             active_ids = {e['request_id'] for e in dispute_list}
