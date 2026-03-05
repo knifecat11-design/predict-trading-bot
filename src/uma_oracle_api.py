@@ -34,18 +34,39 @@ MOOV2_ENDPOINT = (
     "polygon-managed-optimistic-oracle-v2/1.0.5/gn"
 )
 
+# DVM Voting V2 子图端点 (Ethereum Mainnet)
+DVM_VOTING_ENDPOINT = (
+    "https://api.goldsky.com/api/public/"
+    "project_clus2fndawbcc01w31192938i/subgraphs/"
+    "mainnet-voting-v2/0.1.1/gn"
+)
+
 # Polymarket UmaCtfAdapter 合约地址（Polygon）
 POLYMARKET_REQUESTERS = {
     "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",  # v2.0
     "0x2f5e3684cb1f318ec51b00edba38d79ac2c0aa9d",  # v3.0 (managed)
     "0xcb1822859cef82cd2eb4e6276c7916e692995130",  # v1.0
     "0x157ce2d672854c848c9b79c49a8cc6cc89176a49",  # v3.0 alt
+    "0x65070be91477460d8a7aeeb94ef92fe056c2f2a7",  # v4.0 (managed OOv2)
 }
 
 # proposedPrice 解码
 PRICE_YES = "1000000000000000000"  # 1e18
 PRICE_NO = "0"
 PRICE_UNKNOWN = "500000000000000000"  # 5e17
+
+
+@dataclass
+class DvmVoteResult:
+    """DVM 投票结果"""
+    request_id: str               # DVM PriceRequest ID
+    is_resolved: bool             # 是否已出结果
+    vote_result: Optional[str]    # "Yes", "No", "Unknown" (resolved时)
+    vote_result_raw: Optional[str]  # 原始价格
+    total_votes_revealed: float   # 总投票量
+    winning_pct: Optional[float]  # 胜出方得票百分比
+    voter_count: int              # 投票人数
+    ancillary_data_hash: str      # 用于匹配 Oracle dispute
 
 
 @dataclass
@@ -333,3 +354,100 @@ class UMAOracleClient:
             "proposals": self.query_recent_proposals(),
             "settlements": self.query_recent_settlements(),
         }
+
+    # ============================================================
+    # DVM Voting 查询
+    # ============================================================
+
+    def query_dvm_votes(self, first: int = 50) -> List[DvmVoteResult]:
+        """查询最近的 DVM 投票（已解决 + 进行中）
+
+        DVM 投票子图在以太坊主网，用于最终仲裁被争议的 Oracle 请求。
+        通过 ancillaryDataHash 与 Polygon Oracle disputes 匹配。
+        """
+        results = []
+
+        for is_resolved in [True, False]:
+            query = f"""{{
+  priceRequests(
+    first: {first},
+    orderBy: time,
+    orderDirection: desc,
+    where: {{ isResolved: {str(is_resolved).lower()} }}
+  ) {{
+    id
+    time
+    price
+    isResolved
+    ancillaryData
+    latestRound {{
+      totalVotesRevealed
+      votersAmount
+      groups {{
+        price
+        totalVoteAmount
+      }}
+    }}
+  }}
+}}"""
+            cache_key = f"dvm_votes_{is_resolved}"
+            data = self._get_cached_or_query(cache_key, DVM_VOTING_ENDPOINT, query)
+            if not data:
+                continue
+
+            for raw in data.get("priceRequests", []):
+                vote = self._parse_dvm_vote(raw)
+                if vote:
+                    results.append(vote)
+
+        logger.info(f"DVM Voting: {len(results)} votes found "
+                    f"({sum(1 for v in results if v.is_resolved)} resolved)")
+        return results
+
+    def _parse_dvm_vote(self, raw: dict) -> Optional[DvmVoteResult]:
+        """解析 DVM 投票数据"""
+        try:
+            # 解码 ancillaryData 提取 ancillaryDataHash
+            anc_hex = raw.get("ancillaryData", "")
+            if anc_hex.startswith("0x"):
+                anc_hex = anc_hex[2:]
+            anc_text = bytes.fromhex(anc_hex).decode("utf-8", errors="replace")
+            match = re.search(r"ancillaryDataHash:([a-f0-9]+)", anc_text)
+            if not match:
+                return None
+            anc_data_hash = match.group(1)
+
+            # 投票结果
+            is_resolved = raw.get("isResolved", False)
+            vote_result = None
+            vote_result_raw = raw.get("price")
+            if is_resolved and vote_result_raw:
+                vote_result = self.parse_proposed_price(vote_result_raw)
+
+            # 投票统计
+            latest_round = raw.get("latestRound") or {}
+            total_revealed = float(latest_round.get("totalVotesRevealed") or 0)
+            voter_count = int(float(latest_round.get("votersAmount") or 0))
+
+            # 胜出方百分比
+            winning_pct = None
+            groups = latest_round.get("groups", [])
+            if groups and total_revealed > 0:
+                # 找到得票最多的组
+                max_group = max(groups, key=lambda g: float(g.get("totalVoteAmount", 0)))
+                max_amount = float(max_group.get("totalVoteAmount", 0))
+                winning_pct = round(max_amount / total_revealed * 100, 1)
+
+            return DvmVoteResult(
+                request_id=raw.get("id", ""),
+                is_resolved=is_resolved,
+                vote_result=vote_result,
+                vote_result_raw=vote_result_raw,
+                total_votes_revealed=total_revealed,
+                winning_pct=winning_pct,
+                voter_count=voter_count,
+                ancillary_data_hash=anc_data_hash,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse DVM vote: {e}")
+            return None
