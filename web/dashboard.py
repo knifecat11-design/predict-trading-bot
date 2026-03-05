@@ -3047,6 +3047,7 @@ def background_scanner():
                                 price_change_24h = None
                                 price_change_1h = None
                                 volume_24h = 0
+                                poly_closed = False
                                 if raw_m:
                                     events = raw_m.get('events', [])
                                     ev = events[0] if events else {}
@@ -3074,6 +3075,9 @@ def background_scanner():
                                         volume_24h = float(raw_m.get('volume24hr') or 0)
                                     except (ValueError, TypeError):
                                         pass
+
+                                    # Poly 市场结算状态
+                                    poly_closed = raw_m.get('closed', False)
 
                                 # 回退: slugify 标题生成链接
                                 if not poly_url and sig.title:
@@ -3186,6 +3190,7 @@ def background_scanner():
                                     'dvm_winning_pct': sig.dvm_winning_pct,
                                     'dvm_voter_count': sig.dvm_voter_count,
                                     'vote_url': 'https://vote.uma.xyz',
+                                    'poly_closed': poly_closed,
                                 })
                             # 清理超过7天未出现的价格历史
                             active_ids = {e['request_id'] for e in dispute_list}
@@ -3193,6 +3198,36 @@ def background_scanner():
                                      if k not in active_ids and now_ts - v['first_seen_ts'] > 7 * 86400]
                             for k in stale:
                                 del _dispute_price_history[k]
+
+                            # === 过滤已结算市场 ===
+                            # 条件: Poly closed=True 或价格极端 (≥98c 或 ≤2c)
+                            filtered = []
+                            for entry in dispute_list:
+                                if entry.get('poly_closed'):
+                                    continue  # Poly 已标记 closed
+                                mp = entry.get('market_price_yes')
+                                if mp is not None and (mp >= 0.98 or mp <= 0.02):
+                                    continue  # 价格极端 = 已结算
+                                filtered.append(entry)
+                            dispute_list = filtered
+
+                            # === 去重: 同一市场多轮争议只保留最新的 ===
+                            seen_titles = {}  # title.lower() -> entry
+                            deduped = []
+                            for entry in dispute_list:
+                                key = entry['title'].lower().strip()
+                                if key in seen_titles:
+                                    # 保留 timestamp 更新的那个 (已按 request_id 中的时间排序)
+                                    existing = seen_titles[key]
+                                    if entry.get('priority_score', 0) > existing.get('priority_score', 0):
+                                        # 替换旧的
+                                        deduped = [e for e in deduped if e is not existing]
+                                        seen_titles[key] = entry
+                                        deduped.append(entry)
+                                else:
+                                    seen_titles[key] = entry
+                                    deduped.append(entry)
+                            dispute_list = deduped
 
                             # 按优先级排序: 分数高的在前
                             dispute_list.sort(key=lambda x: x['priority_score'], reverse=True)
