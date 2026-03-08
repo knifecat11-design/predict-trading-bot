@@ -55,11 +55,11 @@
         .ws-dot.disconnected { background: #f85149; box-shadow: 0 0 6px #f85149; }
         .ws-dot.connecting { background: #d29922; box-shadow: 0 0 6px #d29922; animation: pulse 1s ease-in-out infinite; }
 
-        /* Three-column layout: left (dispute) | center (main) | right (balance) */
+        /* Three-column layout: left (dispute) | center (main) | right (market maker) */
         .page-layout {
             display: grid;
-            grid-template-columns: 360px 1fr 60px;
-            max-width: 1920px;
+            grid-template-columns: 360px 1fr 380px;
+            max-width: 2200px;
             margin: 0 auto;
             min-height: calc(100vh - 60px);
         }
@@ -501,17 +501,226 @@
         .signal-tier.limit-candidate { color: #d29922; background: rgba(210,153,34,0.15); border: 1px solid rgba(210,153,34,0.3); }
         .signal-tier.monitor-only { color: #8b949e; background: rgba(139,148,158,0.1); border: 1px solid rgba(139,148,158,0.2); }
 
+        /* ============= Market Maker Panel (right column) ============= */
+        .mm-col {
+            padding: 24px 28px 24px 16px;
+        }
+        .mm-panel {
+            background: #131820;
+            border: 1px solid #21262d;
+            border-radius: 16px;
+            padding: 18px 16px;
+            max-height: calc(100vh - 108px);
+            overflow-y: auto;
+            position: sticky;
+            top: 78px;
+        }
+        .mm-panel::-webkit-scrollbar { width: 6px; }
+        .mm-panel::-webkit-scrollbar-track { background: #0d1117; border-radius: 3px; }
+        .mm-panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+        .mm-panel::-webkit-scrollbar-thumb:hover { background: #484f58; }
+        .mm-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #f0f6fc;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .mm-sub {
+            font-size: 11px;
+            color: #484f58;
+            margin-bottom: 14px;
+            line-height: 1.4;
+        }
+        .mm-status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .mm-status-bar.stopped { background: rgba(139,148,158,0.1); border: 1px solid rgba(139,148,158,0.2); color: #8b949e; }
+        .mm-status-bar.running { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.25); color: #3fb950; }
+        .mm-status-bar.paused { background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.25); color: #d29922; }
+        .mm-status-bar.error { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.25); color: #f85149; }
+        .mm-status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+        }
+        .mm-status-dot.stopped { background: #484f58; }
+        .mm-status-dot.running { background: #3fb950; box-shadow: 0 0 6px #3fb950; animation: pulse 2s infinite; }
+        .mm-status-dot.paused { background: #d29922; }
+        .mm-status-dot.error { background: #f85149; }
+        .mm-controls {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 14px;
+        }
+        .mm-btn {
+            flex: 1;
+            padding: 7px 8px;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            background: #21262d;
+            color: #e0e6ed;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .mm-btn:hover { background: #30363d; border-color: #484f58; }
+        .mm-btn.start { color: #3fb950; border-color: rgba(63,185,80,0.3); }
+        .mm-btn.start:hover { background: rgba(63,185,80,0.15); }
+        .mm-btn.stop { color: #f85149; border-color: rgba(248,81,73,0.3); }
+        .mm-btn.stop:hover { background: rgba(248,81,73,0.15); }
+        .mm-btn.disabled { opacity: 0.4; pointer-events: none; }
+        .mm-section-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 14px 0 8px 0;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #21262d;
+        }
+        .mm-stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px 12px;
+            margin-bottom: 10px;
+        }
+        .mm-stat {
+            font-size: 11px;
+            color: #8b949e;
+        }
+        .mm-stat .label { display: block; font-size: 10px; color: #484f58; text-transform: uppercase; margin-bottom: 1px; }
+        .mm-stat .value { font-weight: 700; color: #e0e6ed; font-size: 13px; }
+        .mm-stat .value.green { color: #3fb950; }
+        .mm-stat .value.red { color: #f85149; }
+        .mm-stat .value.blue { color: #58a6ff; }
+        .mm-config-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 0;
+            font-size: 11px;
+            color: #8b949e;
+            border-bottom: 1px solid #161b22;
+        }
+        .mm-config-row .cfg-val {
+            color: #e0e6ed;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .mm-config-row .cfg-val.sim { color: #d29922; }
+        .mm-config-row .cfg-val.live { color: #f85149; }
+        .mm-market-item {
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 8px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .mm-market-item:hover { border-color: #30363d; }
+        .mm-market-item.selected { border-left: 3px solid #58a6ff; }
+        .mm-market-item .mm-m-title {
+            color: #c9d1d9;
+            font-weight: 600;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mm-market-item .mm-m-info {
+            display: flex;
+            gap: 8px;
+            color: #484f58;
+            font-size: 10px;
+        }
+        .mm-market-item .mm-m-info .pts { color: #3fb950; font-weight: 600; }
+        .mm-order-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 0;
+            font-size: 10px;
+            color: #8b949e;
+            border-bottom: 1px solid #161b22;
+        }
+        .mm-order-item .buy { color: #3fb950; font-weight: 700; }
+        .mm-order-item .sell { color: #f85149; font-weight: 700; }
+        .mm-order-item .filled { color: #58a6ff; }
+        .mm-order-item .open { color: #d29922; }
+        .mm-log-item {
+            padding: 3px 0;
+            font-size: 10px;
+            line-height: 1.4;
+            border-bottom: 1px solid #161b22;
+            color: #8b949e;
+        }
+        .mm-log-item .log-time { color: #484f58; margin-right: 4px; }
+        .mm-log-item .log-level { font-weight: 700; margin-right: 4px; }
+        .mm-log-item .log-level.SYSTEM { color: #58a6ff; }
+        .mm-log-item .log-level.FILL { color: #3fb950; }
+        .mm-log-item .log-level.HEDGE { color: #d29922; }
+        .mm-log-item .log-level.ERROR { color: #f85149; }
+        .mm-log-item .log-level.RISK { color: #f85149; }
+        .mm-log-item .log-level.ORDER { color: #9c27b0; }
+        .mm-log-item .log-level.CONFIG { color: #58a6ff; }
+        .mm-log-item .log-level.MARKET { color: #d29922; }
+        .mm-log-item .log-level.WARNING { color: #d29922; }
+        .mm-pos-item {
+            background: #0d1117;
+            border-radius: 6px;
+            padding: 6px 8px;
+            margin-bottom: 6px;
+            font-size: 11px;
+        }
+        .mm-pos-item .pos-title { color: #c9d1d9; font-weight: 600; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .mm-pos-item .pos-row { display: flex; gap: 10px; color: #8b949e; font-size: 10px; }
+        .mm-pos-item .pos-row .yes { color: #3fb950; }
+        .mm-pos-item .pos-row .no { color: #f85149; }
+        .mm-pos-item .pos-row .state { color: #58a6ff; font-weight: 600; }
+        .mm-empty { text-align: center; color: #484f58; padding: 16px 8px; font-size: 11px; }
+        .mm-sim-badge {
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+            color: #d29922;
+            background: rgba(210,153,34,0.15);
+            border: 1px solid rgba(210,153,34,0.3);
+        }
+
+        @media (max-width: 1600px) {
+            .page-layout { grid-template-columns: 320px 1fr 340px; }
+        }
         @media (max-width: 1400px) {
-            .page-layout { grid-template-columns: 320px 1fr 0px; }
+            .page-layout { grid-template-columns: 300px 1fr 320px; }
+        }
+        @media (max-width: 1200px) {
+            .page-layout { grid-template-columns: 1fr 320px; }
+            .dispute-col { display: none; }
         }
         @media (max-width: 1100px) {
             .page-layout { grid-template-columns: 1fr; }
-            .dispute-col { padding: 16px 20px 0; }
-            .dispute-panel {
+            .dispute-col { display: block; padding: 16px 20px 0; }
+            .dispute-panel, .mm-panel {
                 position: static;
                 max-height: none;
                 overflow-y: visible;
             }
+            .mm-col { padding: 16px 20px; }
         }
         @media (max-width: 1024px) {
             .platforms, .market-lists { grid-template-columns: repeat(2, 1fr); }
@@ -520,6 +729,7 @@
             .platforms, .market-lists { grid-template-columns: 1fr; }
             .header { flex-direction: column; gap: 8px; }
             .dispute-col { padding: 12px; }
+            .mm-col { padding: 12px; }
         }
     </style>
 </head>
@@ -722,6 +932,98 @@
             </div>
         </div>
     </div><!-- /container -->
+
+        <!-- Right Column: Market Maker Panel -->
+        <div class="mm-col">
+            <div class="mm-panel" id="mm-panel">
+                <div class="mm-title">
+                    Market Maker
+                    <span id="mm-sim-badge" class="mm-sim-badge" style="display:none">SIM</span>
+                </div>
+                <div class="mm-sub">Unified strategy · Predict.fun & Probable</div>
+
+                <!-- Status Bar -->
+                <div class="mm-status-bar stopped" id="mm-status-bar">
+                    <span class="mm-status-dot stopped" id="mm-status-dot"></span>
+                    <span id="mm-status-label">Stopped</span>
+                    <span style="margin-left:auto;font-size:10px;color:#484f58" id="mm-uptime"></span>
+                </div>
+
+                <!-- Controls -->
+                <div class="mm-controls">
+                    <button class="mm-btn start" id="mm-btn-start" onclick="mmStart()">Start</button>
+                    <button class="mm-btn" id="mm-btn-pause" onclick="mmPause()">Pause</button>
+                    <button class="mm-btn stop" id="mm-btn-stop" onclick="mmStop()">Stop</button>
+                </div>
+
+                <!-- Stats -->
+                <div class="mm-section-label">Statistics</div>
+                <div class="mm-stats-grid">
+                    <div class="mm-stat">
+                        <span class="label">Cycles</span>
+                        <span class="value" id="mm-stat-cycles">0</span>
+                    </div>
+                    <div class="mm-stat">
+                        <span class="label">Orders</span>
+                        <span class="value blue" id="mm-stat-orders">0</span>
+                    </div>
+                    <div class="mm-stat">
+                        <span class="label">Fills</span>
+                        <span class="value green" id="mm-stat-fills">0</span>
+                    </div>
+                    <div class="mm-stat">
+                        <span class="label">Hedges</span>
+                        <span class="value" id="mm-stat-hedges">0</span>
+                    </div>
+                    <div class="mm-stat">
+                        <span class="label">Daily PnL</span>
+                        <span class="value" id="mm-stat-pnl">$0.00</span>
+                    </div>
+                    <div class="mm-stat">
+                        <span class="label">Markets</span>
+                        <span class="value blue" id="mm-stat-markets">0</span>
+                    </div>
+                </div>
+
+                <!-- Config -->
+                <div class="mm-section-label">Configuration</div>
+                <div id="mm-config">
+                    <div class="mm-config-row"><span>Mode</span><span class="cfg-val sim" id="mm-cfg-mode">Simulation</span></div>
+                    <div class="mm-config-row"><span>Venue</span><span class="cfg-val" id="mm-cfg-venue">predict</span></div>
+                    <div class="mm-config-row"><span>Spread</span><span class="cfg-val" id="mm-cfg-spread">1.5%</span></div>
+                    <div class="mm-config-row"><span>Order Size</span><span class="cfg-val" id="mm-cfg-ordersize">$25</span></div>
+                    <div class="mm-config-row"><span>Max Position</span><span class="cfg-val" id="mm-cfg-maxpos">$100</span></div>
+                    <div class="mm-config-row"><span>Dual Track</span><span class="cfg-val" id="mm-cfg-dual">ON</span></div>
+                    <div class="mm-config-row"><span>Async Hedge</span><span class="cfg-val" id="mm-cfg-hedge">ON</span></div>
+                    <div class="mm-config-row"><span>Points Opt</span><span class="cfg-val" id="mm-cfg-points">ON</span></div>
+                    <div class="mm-config-row"><span>API Key</span><span class="cfg-val" id="mm-cfg-apikey">-</span></div>
+                </div>
+
+                <!-- Positions -->
+                <div class="mm-section-label">Positions</div>
+                <div id="mm-positions">
+                    <div class="mm-empty">No active positions</div>
+                </div>
+
+                <!-- Markets -->
+                <div class="mm-section-label">Markets <span style="font-weight:400;color:#484f58;font-size:10px" id="mm-market-count"></span></div>
+                <div id="mm-markets">
+                    <div class="mm-empty">Loading markets...</div>
+                </div>
+
+                <!-- Recent Orders -->
+                <div class="mm-section-label">Recent Orders</div>
+                <div id="mm-orders">
+                    <div class="mm-empty">No orders yet</div>
+                </div>
+
+                <!-- Logs -->
+                <div class="mm-section-label">Activity Log</div>
+                <div id="mm-logs" style="max-height:200px;overflow-y:auto">
+                    <div class="mm-empty">Waiting for activity...</div>
+                </div>
+            </div>
+        </div>
     </div><!-- /page-layout -->
 
     <!-- Socket.IO client -->
@@ -1304,10 +1606,208 @@
                 .catch(e => console.error('Poll error:', e));
         }
 
+        // ============================================================
+        // Market Maker Panel
+        // ============================================================
+        function mmStart() {
+            if (socket && socket.connected) socket.emit('mm_start');
+        }
+        function mmStop() {
+            if (socket && socket.connected) socket.emit('mm_stop');
+        }
+        function mmPause() {
+            if (socket && socket.connected) {
+                const bar = document.getElementById('mm-status-bar');
+                const isPaused = bar && bar.classList.contains('paused');
+                socket.emit(isPaused ? 'mm_resume' : 'mm_pause');
+            }
+        }
+        function mmSelectMarket(marketId) {
+            if (!socket || !socket.connected) return;
+            // 切换选中状态
+            const items = document.querySelectorAll('.mm-market-item');
+            const selected = [];
+            items.forEach(item => {
+                if (item.dataset.id === marketId) {
+                    item.classList.toggle('selected');
+                }
+                if (item.classList.contains('selected')) {
+                    selected.push(item.dataset.id);
+                }
+            });
+            socket.emit('mm_select_markets', { market_ids: selected });
+        }
+
+        function formatUptime(seconds) {
+            if (!seconds || seconds <= 0) return '';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            if (h > 0) return `${h}h ${m}m`;
+            if (m > 0) return `${m}m ${s}s`;
+            return `${s}s`;
+        }
+
+        function updateMMPanel(data) {
+            if (!data) return;
+
+            // Status bar
+            const status = data.status || 'stopped';
+            const statusBar = document.getElementById('mm-status-bar');
+            const statusDot = document.getElementById('mm-status-dot');
+            const statusLabel = document.getElementById('mm-status-label');
+            statusBar.className = 'mm-status-bar ' + status;
+            statusDot.className = 'mm-status-dot ' + status;
+            const statusLabelsMap = { stopped: 'Stopped', running: 'Running', paused: 'Paused', error: 'Error' };
+            statusLabel.textContent = statusLabelsMap[status] || status;
+
+            // Uptime
+            const uptimeEl = document.getElementById('mm-uptime');
+            if (data.stats) uptimeEl.textContent = formatUptime(data.stats.uptime);
+
+            // Sim badge
+            const simBadge = document.getElementById('mm-sim-badge');
+            if (data.config && data.config.simulation_mode) {
+                simBadge.style.display = 'inline';
+            } else {
+                simBadge.style.display = 'none';
+            }
+
+            // Controls
+            const btnStart = document.getElementById('mm-btn-start');
+            const btnPause = document.getElementById('mm-btn-pause');
+            const btnStop = document.getElementById('mm-btn-stop');
+            btnStart.className = status === 'running' ? 'mm-btn start disabled' : 'mm-btn start';
+            btnStop.className = status === 'stopped' ? 'mm-btn stop disabled' : 'mm-btn stop';
+            btnPause.textContent = status === 'paused' ? 'Resume' : 'Pause';
+            btnPause.className = status === 'running' || status === 'paused' ? 'mm-btn' : 'mm-btn disabled';
+
+            // Stats
+            if (data.stats) {
+                document.getElementById('mm-stat-cycles').textContent = data.stats.total_cycles || 0;
+                document.getElementById('mm-stat-orders').textContent = data.stats.total_orders || 0;
+                document.getElementById('mm-stat-fills').textContent = data.stats.total_fills || 0;
+                document.getElementById('mm-stat-hedges').textContent = data.stats.total_hedges || 0;
+                const pnl = data.stats.daily_pnl || 0;
+                const pnlEl = document.getElementById('mm-stat-pnl');
+                pnlEl.textContent = '$' + pnl.toFixed(2);
+                pnlEl.className = 'value ' + (pnl >= 0 ? 'green' : 'red');
+                document.getElementById('mm-stat-markets').textContent = data.stats.active_markets || 0;
+            }
+
+            // Config
+            if (data.config) {
+                const c = data.config;
+                const modeEl = document.getElementById('mm-cfg-mode');
+                modeEl.textContent = c.simulation_mode ? 'Simulation' : 'LIVE';
+                modeEl.className = 'cfg-val ' + (c.simulation_mode ? 'sim' : 'live');
+                document.getElementById('mm-cfg-venue').textContent = c.venue || 'predict';
+                document.getElementById('mm-cfg-spread').textContent = ((c.spread || 0.015) * 100).toFixed(1) + '%';
+                document.getElementById('mm-cfg-ordersize').textContent = '$' + (c.order_size_usd || 25);
+                document.getElementById('mm-cfg-maxpos').textContent = '$' + (c.max_position_usd || 100);
+                document.getElementById('mm-cfg-dual').textContent = c.dual_track_mode ? 'ON' : 'OFF';
+                document.getElementById('mm-cfg-hedge').textContent = c.async_hedging ? 'ON' : 'OFF';
+                document.getElementById('mm-cfg-points').textContent = c.points_optimization ? 'ON' : 'OFF';
+                document.getElementById('mm-cfg-apikey').textContent = c.has_api_key ? 'Set' : 'Missing';
+                document.getElementById('mm-cfg-apikey').style.color = c.has_api_key ? '#3fb950' : '#f85149';
+            }
+
+            // Positions
+            const posContainer = document.getElementById('mm-positions');
+            const positions = (data.positions || []).filter(p => p.total_shares > 0);
+            if (positions.length === 0) {
+                posContainer.innerHTML = '<div class="mm-empty">No active positions</div>';
+            } else {
+                posContainer.innerHTML = positions.map(p => `
+                    <div class="mm-pos-item">
+                        <div class="pos-title">${p.market_title || p.market_id}</div>
+                        <div class="pos-row">
+                            <span class="yes">Y: ${p.yes_shares}</span>
+                            <span class="no">N: ${p.no_shares}</span>
+                            <span>Dev: ${p.deviation}%</span>
+                            <span class="state">${p.state}</span>
+                        </div>
+                    </div>`).join('');
+            }
+
+            // Markets
+            const mktsContainer = document.getElementById('mm-markets');
+            const markets = data.markets || [];
+            const countEl = document.getElementById('mm-market-count');
+            countEl.textContent = markets.length > 0 ? `(${markets.length})` : '';
+            if (markets.length === 0) {
+                mktsContainer.innerHTML = '<div class="mm-empty">No markets loaded</div>';
+            } else {
+                mktsContainer.innerHTML = markets.slice(0, 15).map(m => `
+                    <div class="mm-market-item${m.selected ? ' selected' : ''}" data-id="${m.market_id}" onclick="mmSelectMarket('${m.market_id}')">
+                        <div class="mm-m-title">${m.title}</div>
+                        <div class="mm-m-info">
+                            <span>Y:${(m.yes_price*100).toFixed(1)}c</span>
+                            <span>Spread:${m.spread_cents}c</span>
+                            <span>Vol:$${Math.round(m.volume_24h).toLocaleString()}</span>
+                            ${m.points_eligible ? '<span class="pts">PTS</span>' : ''}
+                        </div>
+                    </div>`).join('');
+            }
+
+            // Orders
+            const ordersContainer = document.getElementById('mm-orders');
+            const orders = data.orders || [];
+            if (orders.length === 0) {
+                ordersContainer.innerHTML = '<div class="mm-empty">No orders yet</div>';
+            } else {
+                ordersContainer.innerHTML = orders.slice(-10).reverse().map(o => `
+                    <div class="mm-order-item">
+                        <span class="${o.side.toLowerCase()}">${o.token} ${o.side}</span>
+                        <span>${o.shares} @ ${o.price.toFixed(2)}</span>
+                        <span class="${o.status}">${o.status}</span>
+                        <span style="color:#484f58">${o.time}</span>
+                    </div>`).join('');
+            }
+
+            // Logs
+            const logsContainer = document.getElementById('mm-logs');
+            const logs = data.logs || [];
+            if (logs.length === 0) {
+                logsContainer.innerHTML = '<div class="mm-empty">Waiting for activity...</div>';
+            } else {
+                logsContainer.innerHTML = logs.slice(-20).reverse().map(l => `
+                    <div class="mm-log-item">
+                        <span class="log-time">${l.time}</span>
+                        <span class="log-level ${l.level}">${l.level}</span>
+                        ${l.message}
+                    </div>`).join('');
+                // 自动滚动到底部
+                logsContainer.scrollTop = 0;
+            }
+        }
+
+        // Listen for MM state updates via WebSocket
+        function initMMSocket() {
+            if (socket) {
+                socket.on('mm_state_update', function(data) {
+                    updateMMPanel(data);
+                });
+            }
+        }
+
+        // Poll MM state on initial load
+        function pollMMState() {
+            fetch('/api/mm/state')
+                .then(r => r.ok ? r.json() : null)
+                .then(data => { if (data) updateMMPanel(data); })
+                .catch(() => {});
+        }
+
         // Start
         initWebSocket();
         // Also do one immediate HTTP fetch for fast initial load
         pollState();
+        // Init MM panel after socket is ready
+        setTimeout(function() {
+            initMMSocket();
+            pollMMState();
+        }, 1000);
     </script>
 </body>
 </html>

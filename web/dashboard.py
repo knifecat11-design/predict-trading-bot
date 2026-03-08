@@ -3382,6 +3382,122 @@ def health():
     })
 
 
+# ============================================================
+# Market Maker API routes & SocketIO events
+# ============================================================
+
+def _get_mm_engine():
+    """获取做市商引擎单例"""
+    try:
+        from src.market_maker import get_market_maker_engine
+        return get_market_maker_engine()
+    except Exception as e:
+        logger.error(f"做市商引擎加载失败: {e}")
+        return None
+
+
+@app.route('/api/mm/state')
+def mm_state():
+    """获取做市商完整状态"""
+    engine = _get_mm_engine()
+    if not engine:
+        return jsonify({'error': 'Market maker engine not available'}), 503
+    return jsonify(engine.get_state())
+
+
+@app.route('/api/mm/recommend')
+def mm_recommend():
+    """获取推荐做市市场"""
+    engine = _get_mm_engine()
+    if not engine:
+        return jsonify({'error': 'Market maker engine not available'}), 503
+    return jsonify(engine.recommend_markets())
+
+
+@socketio.on('mm_start')
+def handle_mm_start():
+    """前端启动做市商"""
+    engine = _get_mm_engine()
+    if engine:
+        engine.start()
+        emit('mm_state_update', engine.get_state())
+        logger.info("[MM] 做市商通过前端启动")
+
+
+@socketio.on('mm_stop')
+def handle_mm_stop():
+    """前端停止做市商"""
+    engine = _get_mm_engine()
+    if engine:
+        engine.stop()
+        emit('mm_state_update', engine.get_state())
+        logger.info("[MM] 做市商通过前端停止")
+
+
+@socketio.on('mm_pause')
+def handle_mm_pause():
+    """前端暂停做市商"""
+    engine = _get_mm_engine()
+    if engine:
+        engine.pause()
+        emit('mm_state_update', engine.get_state())
+
+
+@socketio.on('mm_resume')
+def handle_mm_resume():
+    """前端恢复做市商"""
+    engine = _get_mm_engine()
+    if engine:
+        engine.resume()
+        emit('mm_state_update', engine.get_state())
+
+
+@socketio.on('mm_update_config')
+def handle_mm_config(data):
+    """前端更新做市商配置"""
+    engine = _get_mm_engine()
+    if engine and isinstance(data, dict):
+        engine.update_config(data)
+        emit('mm_state_update', engine.get_state())
+
+
+@socketio.on('mm_select_markets')
+def handle_mm_select(data):
+    """前端选择做市市场"""
+    engine = _get_mm_engine()
+    if engine and isinstance(data, dict):
+        market_ids = data.get('market_ids', [])
+        engine.select_markets(market_ids)
+        emit('mm_state_update', engine.get_state())
+
+
+@socketio.on('mm_request_state')
+def handle_mm_request_state():
+    """前端请求做市商状态"""
+    engine = _get_mm_engine()
+    if engine:
+        emit('mm_state_update', engine.get_state())
+
+
+def _mm_state_broadcaster():
+    """后台线程：定期广播做市商状态到所有前端"""
+    while True:
+        try:
+            if _ws_clients > 0:
+                engine = _get_mm_engine()
+                if engine and engine._state.value == 'running':
+                    socketio.emit('mm_state_update', engine.get_state())
+            time.sleep(3)  # 每3秒更新一次
+        except Exception as e:
+            logger.debug(f"MM state broadcast error: {e}")
+            time.sleep(5)
+
+
+# 启动做市商状态广播线程
+_mm_broadcaster = threading.Thread(target=_mm_state_broadcaster, daemon=True, name='mm-broadcaster')
+_mm_broadcaster.start()
+
+
 def main():
     port = int(os.getenv('PORT', 5000))
 
