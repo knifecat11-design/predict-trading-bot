@@ -12,11 +12,14 @@ import time
 import logging
 import threading
 import traceback
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from flask_socketio import SocketIO, emit
+from functools import wraps
 
 # Setup logging first
 logging.basicConfig(
@@ -35,12 +38,65 @@ logger.info(f"Project root: {PROJECT_ROOT}")
 
 app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'arb-monitor-ws-key')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # SocketIO with threading mode + simple-websocket for true WebSocket
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
                     logger=False, engineio_logger=False)
 _ws_clients = 0  # Track connected WebSocket clients
+
+
+# ============================================================
+# Authentication system
+# ============================================================
+# 用户数据存储在内存中（重启丢失，生产环境可改为 SQLite）
+# 密码使用 SHA-256 + salt 哈希存储
+_users = {}  # {username: {'password_hash': str, 'salt': str, 'created_at': str}}
+_users_lock = threading.Lock()
+
+# 预设管理员账号（通过环境变量配置）
+_ADMIN_USER = os.getenv('DASHBOARD_USER', '')
+_ADMIN_PASS = os.getenv('DASHBOARD_PASS', '')
+
+
+def _hash_password(password: str, salt: str = None) -> tuple:
+    """SHA-256 + salt 密码哈希"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+    return hashed, salt
+
+
+def _init_admin_user():
+    """初始化管理员账号（从环境变量）"""
+    if _ADMIN_USER and _ADMIN_PASS:
+        hashed, salt = _hash_password(_ADMIN_PASS)
+        _users[_ADMIN_USER] = {
+            'password_hash': hashed,
+            'salt': salt,
+            'created_at': datetime.now().isoformat(),
+        }
+        logger.info(f"管理员账号已初始化: {_ADMIN_USER}")
+
+
+_init_admin_user()
+
+
+def login_required(f):
+    """登录保护装饰器"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # 如果没有配置任何用户且没有注册用户，允许访问（首次使用引导注册）
+        if not _users and not _ADMIN_USER:
+            return f(*args, **kwargs)
+        if 'user' not in session:
+            # API 路由返回 401，页面路由重定向
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'unauthorized'}), 401
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated
 
 _TZ_CST = timezone(timedelta(hours=8))   # UTC+8 显示时间
 
@@ -3356,16 +3412,94 @@ def handle_request_state():
 # HTTP routes (kept as fallback)
 # ============================================================
 
+@app.route('/login', methods=['GET'])
+def login_page():
+    """登录页面"""
+    if 'user' in session:
+        return redirect(url_for('index'))
+    # 如果没有任何用户，引导注册
+    need_register = len(_users) == 0
+    return render_template('login.html', need_register=need_register)
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def api_register():
+    """注册新用户"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Invalid request'}), 400
+
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    if not username or len(username) < 2:
+        return jsonify({'error': '用户名至少2个字符'}), 400
+    if len(password) < 6:
+        return jsonify({'error': '密码至少6个字符'}), 400
+
+    with _users_lock:
+        if username in _users:
+            return jsonify({'error': '用户名已存在'}), 400
+
+        hashed, salt = _hash_password(password)
+        _users[username] = {
+            'password_hash': hashed,
+            'salt': salt,
+            'created_at': datetime.now().isoformat(),
+        }
+
+    logger.info(f"新用户注册: {username}")
+    session.permanent = True
+    session['user'] = username
+    return jsonify({'ok': True, 'user': username})
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    """用户登录"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Invalid request'}), 400
+
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    with _users_lock:
+        user = _users.get(username)
+        if not user:
+            return jsonify({'error': '用户名或密码错误'}), 401
+
+        hashed, _ = _hash_password(password, user['salt'])
+        if hashed != user['password_hash']:
+            return jsonify({'error': '用户名或密码错误'}), 401
+
+    session.permanent = True
+    session['user'] = username
+    logger.info(f"用户登录: {username}")
+    return jsonify({'ok': True, 'user': username})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_logout():
+    """用户登出"""
+    user = session.pop('user', None)
+    if user:
+        logger.info(f"用户登出: {user}")
+    return jsonify({'ok': True})
+
+
 @app.route('/')
+@login_required
 def index():
     try:
-        return render_template('index.html')
+        return render_template('index.html', current_user=session.get('user', ''))
     except Exception as e:
         logger.error(f"Template error: {e}")
         return f"<h1>Dashboard Error</h1><p>{e}</p><pre>{traceback.format_exc()}</pre>"
 
 
 @app.route('/api/state')
+@login_required
 def api_state():
     """HTTP fallback for clients without WebSocket"""
     with _lock:
@@ -3397,6 +3531,7 @@ def _get_mm_engine():
 
 
 @app.route('/api/mm/state')
+@login_required
 def mm_state():
     """获取做市商完整状态"""
     engine = _get_mm_engine()
@@ -3406,6 +3541,7 @@ def mm_state():
 
 
 @app.route('/api/mm/recommend')
+@login_required
 def mm_recommend():
     """获取推荐做市市场"""
     engine = _get_mm_engine()
@@ -3416,7 +3552,7 @@ def mm_recommend():
 
 @socketio.on('mm_setup_credentials')
 def handle_mm_setup_credentials(data):
-    """前端设置做市商凭证"""
+    """前端设置做市商凭证（只需私钥和地址，API key 自动从监控系统复用）"""
     engine = _get_mm_engine()
     if not engine or not isinstance(data, dict):
         emit('mm_setup_result', {'error': 'Engine not available'})
@@ -3424,18 +3560,30 @@ def handle_mm_setup_credentials(data):
 
     try:
         cred_updates = {}
-        for key in ['api_key', 'jwt_token', 'private_key', 'predict_account_address', 'venue']:
+        # 接受用户输入的私钥和地址
+        for key in ['private_key', 'predict_account_address', 'venue']:
             if key in data and data[key]:
                 cred_updates[key] = data[key]
 
-        if not cred_updates.get('api_key'):
-            emit('mm_setup_result', {'error': 'API Key is required'})
-            return
+        # API key 自动从监控系统已有配置复用
+        config = load_config()
+        venue = cred_updates.get('venue', engine.config.venue)
+        if venue == 'predict':
+            existing_key = config.get('api', {}).get('api_key', '')
+        else:
+            existing_key = os.getenv('PROBABLE_API_KEY', '')
+
+        if existing_key:
+            cred_updates['api_key'] = existing_key
+        elif not engine.config.api_key:
+            # 没有现成的 API key，用公共只读模式（部分平台不需要 key 即可读取市场数据）
+            logger.warning("[MM] 未找到现有 API Key，将以公共模式运行")
 
         engine.update_config(cred_updates)
-        logger.info(f"[MM] 凭证已设置: venue={cred_updates.get('venue', 'predict')}, "
-                    f"has_jwt={bool(cred_updates.get('jwt_token'))}")
-        emit('mm_setup_result', {'ok': True})
+        logger.info(f"[MM] 凭证已设置: venue={venue}, "
+                    f"has_private_key={bool(cred_updates.get('private_key'))}, "
+                    f"api_key={'复用监控系统' if existing_key else '未设置'}")
+        emit('mm_setup_result', {'ok': True, 'has_api_key': bool(existing_key or engine.config.api_key)})
         emit('mm_state_update', engine.get_state())
     except Exception as e:
         logger.error(f"[MM] 凭证设置失败: {e}")

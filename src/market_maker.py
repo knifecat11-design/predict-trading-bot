@@ -522,16 +522,8 @@ class MarketMakerEngine:
 
             # 实盘模式需要凭证验证
             if not self.config.simulation_mode:
-                if not self.config.api_key:
-                    self._add_log('ERROR', '启动失败：未设置 API Key')
-                    self._state = MarketMakerState.ERROR
-                    return
-                if not self.config.jwt_token:
-                    self._add_log('ERROR', '启动失败：实盘模式需要 JWT Token')
-                    self._state = MarketMakerState.ERROR
-                    return
                 if not self.config.private_key:
-                    self._add_log('ERROR', '启动失败：实盘模式需要 Private Key')
+                    self._add_log('ERROR', '启动失败：实盘模式需要 Private Key（钱包私钥）')
                     self._state = MarketMakerState.ERROR
                     return
 
