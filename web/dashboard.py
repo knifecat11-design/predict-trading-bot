@@ -3414,6 +3414,34 @@ def mm_recommend():
     return jsonify(engine.recommend_markets())
 
 
+@socketio.on('mm_setup_credentials')
+def handle_mm_setup_credentials(data):
+    """前端设置做市商凭证"""
+    engine = _get_mm_engine()
+    if not engine or not isinstance(data, dict):
+        emit('mm_setup_result', {'error': 'Engine not available'})
+        return
+
+    try:
+        cred_updates = {}
+        for key in ['api_key', 'jwt_token', 'private_key', 'predict_account_address', 'venue']:
+            if key in data and data[key]:
+                cred_updates[key] = data[key]
+
+        if not cred_updates.get('api_key'):
+            emit('mm_setup_result', {'error': 'API Key is required'})
+            return
+
+        engine.update_config(cred_updates)
+        logger.info(f"[MM] 凭证已设置: venue={cred_updates.get('venue', 'predict')}, "
+                    f"has_jwt={bool(cred_updates.get('jwt_token'))}")
+        emit('mm_setup_result', {'ok': True})
+        emit('mm_state_update', engine.get_state())
+    except Exception as e:
+        logger.error(f"[MM] 凭证设置失败: {e}")
+        emit('mm_setup_result', {'error': str(e)})
+
+
 @socketio.on('mm_start')
 def handle_mm_start():
     """前端启动做市商"""

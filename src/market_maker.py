@@ -86,6 +86,7 @@ class MarketMakerConfig:
     hedge_slippage_bps: int = 250        # 对冲滑点 (2.5%)
 
     # 策略模式
+    strategy: str = 'simulation'         # simulation / market_making / arbitrage
     async_hedging: bool = True           # 异步对冲（不撤单直接对冲）
     dual_track_mode: bool = True         # 双轨并行（YES+NO同时挂单）
     dynamic_offset_mode: bool = True     # 动态偏移（第二档挂单）
@@ -491,6 +492,8 @@ class MarketMakerEngine:
                     'cycle_interval_ms': self.config.cycle_interval_ms,
                     'has_api_key': bool(self.config.api_key),
                     'has_jwt': bool(self.config.jwt_token),
+                    'has_private_key': bool(self.config.private_key),
+                    'strategy': self.config.strategy,
                 },
                 'stats': {
                     'total_cycles': self.stats.total_cycles,
@@ -517,10 +520,33 @@ class MarketMakerEngine:
             if self._state == MarketMakerState.RUNNING:
                 return
 
+            # 实盘模式需要凭证验证
+            if not self.config.simulation_mode:
+                if not self.config.api_key:
+                    self._add_log('ERROR', '启动失败：未设置 API Key')
+                    self._state = MarketMakerState.ERROR
+                    return
+                if not self.config.jwt_token:
+                    self._add_log('ERROR', '启动失败：实盘模式需要 JWT Token')
+                    self._state = MarketMakerState.ERROR
+                    return
+                if not self.config.private_key:
+                    self._add_log('ERROR', '启动失败：实盘模式需要 Private Key')
+                    self._state = MarketMakerState.ERROR
+                    return
+
             self._state = MarketMakerState.RUNNING
             self._running.set()
             self.stats.start_time = time.time()
-            self._add_log('SYSTEM', f'做市商启动 ({"模拟" if self.config.simulation_mode else "实盘"}模式)')
+
+            mode_label = '模拟' if self.config.simulation_mode else '实盘'
+            strategy_labels = {
+                'simulation': '模拟交易',
+                'market_making': '做市策略',
+                'arbitrage': '套利策略',
+            }
+            strategy_name = strategy_labels.get(self.config.strategy, self.config.strategy)
+            self._add_log('SYSTEM', f'做市商启动 ({mode_label}模式 · {strategy_name})')
 
             self._thread = threading.Thread(target=self._run_loop, daemon=True, name='mm-engine')
             self._thread.start()
@@ -825,10 +851,68 @@ class MarketMakerEngine:
                           f'({market.title[:30]})')
 
     def _execute_order(self, order: MMOrder):
-        """实盘下单（预留接口）"""
-        # TODO: 对接真实 API 下单
-        self._add_log('ORDER', f'[实盘] {order.token} {order.side} {order.shares}股 @ {order.price:.4f}')
-        order.status = 'pending'
+        """实盘下单 — 通过 Predict.fun API 执行真实订单"""
+        if self._api_client is None:
+            self._add_log('ERROR', '实盘下单失败：API 客户端未初始化')
+            order.status = 'error'
+            return
+
+        try:
+            # 安全检查：余额/仓位上限
+            if not self._pre_order_check(order):
+                return
+
+            # 转换为 API 侧的参数
+            side = order.side.lower()  # 'buy' or 'sell'
+            price = order.price
+            size = order.shares
+
+            result = self._api_client.place_order(
+                side=side,
+                price=price,
+                size=size,
+                market_id=order.market_id,
+            )
+
+            if result:
+                order.order_id = result.order_id or order.order_id
+                order.status = 'open'
+                self._add_log('ORDER',
+                              f'[实盘] {order.token} {order.side} {order.shares}股 '
+                              f'@ {order.price:.4f} → 已提交 (id={order.order_id[:12]}...)')
+            else:
+                order.status = 'error'
+                self.stats.errors += 1
+                self._add_log('ERROR',
+                              f'[实盘] 下单失败: {order.token} {order.side} {order.shares}股 '
+                              f'@ {order.price:.4f}')
+
+        except Exception as e:
+            order.status = 'error'
+            self.stats.errors += 1
+            self._add_log('ERROR', f'[实盘] 下单异常: {e}')
+            logger.error(f"实盘下单异常: {e}", exc_info=True)
+
+    def _pre_order_check(self, order: MMOrder) -> bool:
+        """下单前安全检查"""
+        # 检查每日亏损限制
+        if self.stats.daily_pnl <= -abs(self.config.max_daily_loss_usd):
+            self._add_log('RISK', f'每日亏损已达上限 (${abs(self.stats.daily_pnl):.2f}/${self.config.max_daily_loss_usd})，拒绝下单')
+            order.status = 'rejected'
+            return False
+
+        # 检查仓位上限
+        pos = self.positions.get(order.market_id)
+        if pos:
+            total_value = (pos.yes_shares * pos.avg_yes_cost + pos.no_shares * pos.avg_no_cost)
+            order_value = order.shares * order.price
+            if total_value + order_value > self.config.max_position_usd:
+                self._add_log('RISK',
+                              f'仓位将超过上限 (${total_value + order_value:.0f}>${self.config.max_position_usd})，拒绝下单')
+                order.status = 'rejected'
+                return False
+
+        return True
 
     def _add_log(self, level: str, message: str):
         """添加日志条目"""
