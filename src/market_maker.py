@@ -56,14 +56,13 @@ class MarketMakerConfig:
     # 基础配置
     enabled: bool = False
     simulation_mode: bool = True         # 模拟模式（默认开启，不真实下单）
-    venue: str = 'predict'               # predict 或 probable
+    venue: str = 'polymarket'            # polymarket（主要）或 predict
 
     # API 配置
     api_key: str = ''
-    jwt_token: str = ''
     private_key: str = ''
-    predict_account_address: str = ''
-    api_base_url: str = 'https://api.predict.fun'
+    wallet_address: str = ''
+    api_base_url: str = 'https://gamma-api.polymarket.com'
 
     # 做市参数
     spread: float = 0.015                # 基础价差 (1.5%)
@@ -162,6 +161,9 @@ class MMMarket:
     liquidity: float = 0.0     # 流动性
     points_eligible: bool = False  # 是否满足积分要求
     selected: bool = False     # 是否被选中做市
+    yes_token_id: str = ''     # Polymarket YES token ID (用于下单)
+    no_token_id: str = ''      # Polymarket NO token ID (用于下单)
+    condition_id: str = ''     # Polymarket condition ID
 
 
 @dataclass
@@ -427,19 +429,18 @@ class MarketMakerEngine:
         self.stats = MMStats()
         self.log_entries: List[dict] = []
 
-        # 使用现有的 Predict.fun API 客户端
-        self._api_client = None
+        # API 客户端
+        self._poly_client = None        # Polymarket Gamma API（市场数据，只读）
+        self._clob_client = None        # Polymarket CLOB（下单，需私钥）
 
     def load_config_from_env(self):
         """从环境变量加载配置"""
         self.config.enabled = os.getenv('MM_ENABLED', 'false').lower() == 'true'
         self.config.simulation_mode = os.getenv('MM_SIMULATION_MODE', 'true').lower() == 'true'
-        self.config.venue = os.getenv('MM_VENUE', 'predict')
-        self.config.api_key = os.getenv('API_KEY', os.getenv('PREDICT_API_KEY', ''))
-        self.config.jwt_token = os.getenv('JWT_TOKEN', '')
+        self.config.venue = os.getenv('MM_VENUE', 'polymarket')
+        self.config.api_key = os.getenv('PREDICT_API_KEY', '')
         self.config.private_key = os.getenv('PRIVATE_KEY', '')
-        self.config.predict_account_address = os.getenv('PREDICT_ACCOUNT_ADDRESS', '')
-        self.config.api_base_url = os.getenv('API_BASE_URL', 'https://api.predict.fun')
+        self.config.wallet_address = os.getenv('WALLET_ADDRESS', '')
         self.config.spread = float(os.getenv('SPREAD', '0.015'))
         self.config.min_spread = float(os.getenv('MIN_SPREAD', '0.008'))
         self.config.max_spread = float(os.getenv('MAX_SPREAD', '0.055'))
@@ -491,8 +492,8 @@ class MarketMakerEngine:
                     'async_hedging': self.config.async_hedging,
                     'cycle_interval_ms': self.config.cycle_interval_ms,
                     'has_api_key': bool(self.config.api_key),
-                    'has_jwt': bool(self.config.jwt_token),
                     'has_private_key': bool(self.config.private_key),
+                    'has_wallet_address': bool(self.config.wallet_address),
                     'strategy': self.config.strategy,
                 },
                 'stats': {
@@ -642,37 +643,64 @@ class MarketMakerEngine:
             self.stats.active_markets = len(selected_markets)
 
     def _refresh_markets(self):
-        """刷新市场数据（使用现有 API 客户端）"""
+        """刷新市场数据（Polymarket Gamma API）"""
         try:
-            if self._api_client is None:
-                self._init_api_client()
+            if self._poly_client is None:
+                self._init_poly_client()
 
-            if self._api_client is None:
+            if self._poly_client is None:
                 return
 
-            raw_markets = self._api_client.get_markets(status='open', limit=100)
+            import json
+            raw_markets = self._poly_client.get_markets(limit=200, active_only=True)
+
             for raw in raw_markets:
-                mid = str(raw.get('id', raw.get('marketId', raw.get('market_id', ''))))
-                if not mid:
+                condition_id = raw.get('conditionId', '')
+                if not condition_id:
                     continue
 
-                title = raw.get('title', raw.get('question', ''))
-                yes_price = self._extract_price(raw, 'yes')
-                no_price = self._extract_price(raw, 'no')
-                yes_bid = float(raw.get('yes_bid', raw.get('bestBid', yes_price * 0.99)))
-                yes_ask = float(raw.get('yes_ask', raw.get('bestAsk', yes_price * 1.01)))
+                title = raw.get('question', '')
+
+                # 提取 token IDs（下单必需）
+                clob_token_ids = raw.get('clobTokenIds', '[]')
+                if isinstance(clob_token_ids, str):
+                    clob_token_ids = json.loads(clob_token_ids)
+                yes_token_id = clob_token_ids[0] if len(clob_token_ids) > 0 else ''
+                no_token_id = clob_token_ids[1] if len(clob_token_ids) > 1 else ''
+
+                # 提取价格
+                outcome_prices = raw.get('outcomePrices', '[]')
+                if isinstance(outcome_prices, str):
+                    outcome_prices = json.loads(outcome_prices)
+                yes_price = float(outcome_prices[0]) if len(outcome_prices) > 0 else 0.5
+                no_price = float(outcome_prices[1]) if len(outcome_prices) > 1 else (1.0 - yes_price)
+
+                # Bid/Ask
+                yes_bid = float(raw.get('bestBid', 0) or 0)
+                yes_ask = float(raw.get('bestAsk', 0) or 0)
+                if yes_bid == 0:
+                    yes_bid = max(0.01, yes_price - 0.01)
+                if yes_ask == 0:
+                    yes_ask = min(0.99, yes_price + 0.01)
                 no_bid = max(0.01, 1.0 - yes_ask)
                 no_ask = min(0.99, 1.0 - yes_bid)
-                spread = abs(yes_ask - yes_bid) * 100
-                volume = float(raw.get('volume_24h', raw.get('volume24hr', raw.get('volume', 0))))
-                liquidity = float(raw.get('liquidity', raw.get('liquidityClob', 0)))
 
-                # 积分资格检查
+                spread = abs(yes_ask - yes_bid) * 100
+                volume = float(raw.get('volume24hr', 0) or 0)
+                liquidity = float(raw.get('liquidityClob', raw.get('liquidity', 0)) or 0)
+
+                # 过滤无效市场
+                if yes_price <= 0.02 or yes_price >= 0.98:
+                    continue
+                if not yes_token_id:
+                    continue
+
                 points_eligible = (
                     spread <= self.config.points_max_spread_cents
                     and liquidity >= 100
                 )
 
+                mid = condition_id
                 if mid not in self.markets:
                     self.markets[mid] = MMMarket()
 
@@ -689,47 +717,42 @@ class MarketMakerEngine:
                 m.volume_24h = volume
                 m.liquidity = liquidity
                 m.points_eligible = points_eligible
+                m.yes_token_id = yes_token_id
+                m.no_token_id = no_token_id
+                m.condition_id = condition_id
 
         except Exception as e:
             logger.warning(f"刷新市场数据失败: {e}")
             self._add_log('WARNING', f'市场数据刷新失败: {e}')
 
-    def _init_api_client(self):
-        """初始化 API 客户端（复用现有模块）"""
+    def _init_poly_client(self):
+        """初始化 Polymarket Gamma API 客户端（只读，用于市场数据）"""
         try:
-            from src.api_client import PredictAPIClient
-            api_config = {
-                'api': {
-                    'api_key': self.config.api_key,
-                    'base_url': self.config.api_base_url,
-                }
-            }
-            self._api_client = PredictAPIClient(api_config)
-            self._add_log('SYSTEM', f'API 客户端初始化成功: {self.config.api_base_url}')
+            from src.polymarket_api import PolymarketClient
+            self._poly_client = PolymarketClient()
+            self._add_log('SYSTEM', 'Polymarket 市场数据客户端初始化成功')
         except Exception as e:
-            logger.warning(f"API 客户端初始化失败: {e}")
-            self._add_log('ERROR', f'API 客户端初始化失败: {e}')
+            logger.warning(f"Polymarket 客户端初始化失败: {e}")
+            self._add_log('ERROR', f'Polymarket 客户端初始化失败: {e}')
 
-    def _extract_price(self, raw: dict, side: str) -> float:
-        """从原始市场数据中提取价格"""
-        if side == 'yes':
-            # 尝试多种字段名
-            for key in ['yesPrice', 'yes_price', 'current_price', 'lastPrice', 'bestAsk']:
-                val = raw.get(key)
-                if val is not None:
-                    return float(val)
-            # 从 outcomePrices 提取
-            prices = raw.get('outcomePrices')
-            if prices:
-                import json
-                if isinstance(prices, str):
-                    prices = json.loads(prices)
-                if isinstance(prices, list) and len(prices) > 0:
-                    return float(prices[0])
-            return 0.5
-        else:
-            yes = self._extract_price(raw, 'yes')
-            return max(0.01, 1.0 - yes)
+    def _init_clob_client(self):
+        """初始化 Polymarket CLOB 交易客户端（需要私钥）"""
+        if not self.config.private_key:
+            return
+        try:
+            from src.polymarket_clob import PolymarketClobClient
+            self._clob_client = PolymarketClobClient(
+                private_key=self.config.private_key,
+                funder_address=self.config.wallet_address or None,
+            )
+            if self._clob_client.initialize():
+                self._add_log('SYSTEM', 'Polymarket CLOB 交易客户端初始化成功')
+            else:
+                self._clob_client = None
+                self._add_log('ERROR', 'Polymarket CLOB 交易客户端初始化失败')
+        except Exception as e:
+            logger.warning(f"Polymarket CLOB 客户端初始化失败: {e}")
+            self._add_log('ERROR', f'CLOB 客户端初始化失败: {e}')
 
     def _process_market(self, market: MMMarket):
         """处理单个市场的做市策略"""
@@ -843,27 +866,40 @@ class MarketMakerEngine:
                           f'({market.title[:30]})')
 
     def _execute_order(self, order: MMOrder):
-        """实盘下单 — 通过 Predict.fun API 执行真实订单"""
-        if self._api_client is None:
-            self._add_log('ERROR', '实盘下单失败：API 客户端未初始化')
+        """实盘下单 — 通过 Polymarket CLOB 执行真实订单"""
+        # 初始化 CLOB 客户端（首次下单时）
+        if self._clob_client is None:
+            self._init_clob_client()
+
+        if self._clob_client is None or not self._clob_client.is_ready:
+            self._add_log('ERROR', '实盘下单失败：CLOB 客户端未初始化（检查私钥是否正确）')
             order.status = 'error'
             return
 
         try:
-            # 安全检查：余额/仓位上限
+            # 安全检查
             if not self._pre_order_check(order):
                 return
 
-            # 转换为 API 侧的参数
-            side = order.side.lower()  # 'buy' or 'sell'
-            price = order.price
-            size = order.shares
+            # 获取 token_id
+            market = self.markets.get(order.market_id)
+            if not market:
+                self._add_log('ERROR', f'实盘下单失败：未找到市场 {order.market_id}')
+                order.status = 'error'
+                return
 
-            result = self._api_client.place_order(
-                side=side,
-                price=price,
-                size=size,
-                market_id=order.market_id,
+            token_id = market.yes_token_id if order.token == 'YES' else market.no_token_id
+            if not token_id:
+                self._add_log('ERROR', f'实盘下单失败：{order.token} token_id 为空')
+                order.status = 'error'
+                return
+
+            # 通过 Polymarket CLOB 下限价单
+            result = self._clob_client.place_limit_order(
+                token_id=token_id,
+                side=order.side,
+                price=order.price,
+                size=float(order.shares),
             )
 
             if result:
@@ -871,7 +907,7 @@ class MarketMakerEngine:
                 order.status = 'open'
                 self._add_log('ORDER',
                               f'[实盘] {order.token} {order.side} {order.shares}股 '
-                              f'@ {order.price:.4f} → 已提交 (id={order.order_id[:12]}...)')
+                              f'@ {order.price:.4f} → 已提交 (id={order.order_id[:16]})')
             else:
                 order.status = 'error'
                 self.stats.errors += 1
@@ -940,6 +976,7 @@ class MarketMakerEngine:
             'liquidity': m.liquidity,
             'points_eligible': m.points_eligible,
             'selected': m.selected,
+            'has_token_ids': bool(m.yes_token_id),
         }
 
     def _position_to_dict(self, p: MMPosition) -> dict:
