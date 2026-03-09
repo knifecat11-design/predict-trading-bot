@@ -395,7 +395,7 @@
         .tag.opinion { background: #1f3a5f; color: #d29922; }
         .tag.predict { background: #1f3a5f; color: #9c27b0; }
         .tag.kalshi { background: #1f3a5f; color: #3fb950; }
-        .tag.probable { background: #1f3a5f; color: #ff6b6b; }
+        /* .tag.probable removed - merged into predict.fun */
         .tag.cross { background: #3a2a10; color: #ff9800; }
         .cross-combo-row td:first-child { border-left: 2px solid #ff980033; }
         .direction { font-size: 12px; color: #8b949e; }
@@ -884,16 +884,6 @@
                     <div>Status: <span class="num" id="status-kalshi">...</span></div>
                 </div>
             </div>
-            <div class="platform-card" id="card-probable">
-                <div class="name">
-                    <span class="status-dot unknown" id="dot-probable"></span>
-                    Probable.market
-                </div>
-                <div class="platform-stats">
-                    <div>Markets: <span class="num" id="count-probable">-</span></div>
-                    <div>Status: <span class="num" id="status-probable">...</span></div>
-                </div>
-            </div>
         </div>
 
         <!-- Scan Statistics -->
@@ -1005,10 +995,6 @@
                 <div class="market-list-header">Kalshi</div>
                 <div id="list-kalshi"><div class="empty-state">Loading...</div></div>
             </div>
-            <div class="market-list">
-                <div class="market-list-header">Probable.market</div>
-                <div id="list-probable"><div class="empty-state">Loading...</div></div>
-            </div>
         </div>
     </div><!-- /container -->
 
@@ -1020,7 +1006,7 @@
                     <span id="mm-sim-badge" class="mm-sim-badge" style="display:none">SIM</span>
                     <span id="mm-live-badge" class="mm-sim-badge" style="display:none;background:rgba(248,81,73,0.15);color:#f85149">LIVE</span>
                 </div>
-                <div class="mm-sub">Unified strategy · Predict.fun & Probable</div>
+                <div class="mm-sub">Unified strategy · Polymarket CLOB</div>
 
                 <!-- Step Indicator -->
                 <div class="mm-step-indicator" id="mm-steps">
@@ -1035,9 +1021,9 @@
                     <div class="mm-input-group">
                         <label>Platform</label>
                         <select class="mm-select" id="mm-venue-select">
-                            <option value="predict">Predict.fun</option>
-                            <option value="probable">Probable</option>
+                            <option value="polymarket" selected>Polymarket</option>
                         </select>
+                        <div class="mm-input-hint">Best liquidity. Uses Polygon chain (MATIC) for settlement.</div>
                     </div>
                     <div class="mm-input-group">
                         <label>Private Key <span style="color:#484f58">(optional for simulation)</span></label>
@@ -1137,7 +1123,7 @@
                     <div class="mm-section-label">Configuration</div>
                     <div id="mm-config-summary">
                         <div class="mm-config-row"><span>Mode</span><span class="cfg-val sim" id="mm-cfg-mode">Simulation</span></div>
-                        <div class="mm-config-row"><span>Venue</span><span class="cfg-val" id="mm-cfg-venue">predict</span></div>
+                        <div class="mm-config-row"><span>Platform</span><span class="cfg-val" id="mm-cfg-venue">Polymarket</span></div>
                         <div class="mm-config-row"><span>Spread</span><span class="cfg-val" id="mm-cfg-spread">1.5%</span></div>
                         <div class="mm-config-row"><span>Order Size</span><span class="cfg-val" id="mm-cfg-ordersize">$25</span></div>
                         <div class="mm-config-row"><span>Max Position</span><span class="cfg-val" id="mm-cfg-maxpos">$100</span></div>
@@ -1202,7 +1188,6 @@
             const cls = n.includes('poly') ? 'poly' :
                         n.includes('opinion') ? 'opinion' :
                         n.includes('kalshi') ? 'kalshi' :
-                        n.includes('probable') ? 'probable' :
                         n.includes('cross') ? 'cross' : 'predict';
             return `<span class="tag ${cls}">${name}</span>`;
         }
@@ -1342,7 +1327,6 @@
                     'opinion': '#d29922',
                     'predict': '#9c27b0',
                     'kalshi': '#3fb950',
-                    'probable': '#ff6b6b',
                 };
                 const pillsHtml = (a.outcomes || []).map(o => {
                     const platKey = (o.platform || '').toLowerCase();
@@ -1576,7 +1560,7 @@
             document.getElementById('last-scan').textContent = data.last_scan || '-';
 
             // Platforms
-            ['polymarket', 'opinion', 'predict', 'kalshi', 'probable'].forEach(p => {
+            ['polymarket', 'opinion', 'predict', 'kalshi'].forEach(p => {
                 const info = data.platforms[p] || {};
                 const dot = document.getElementById(`dot-${p}`);
                 dot.className = `status-dot ${info.status || 'unknown'}`;
@@ -1596,7 +1580,7 @@
                 document.getElementById('stat-op').textContent = stats.opinion_count || 0;
                 document.getElementById('stat-pre').textContent = stats.predict_count || 0;
                 document.getElementById('stat-kal').textContent = stats.kalshi_count || 0;
-                document.getElementById('stat-prob').textContent = stats.probable_count || 0;
+                // Probable removed (merged into Predict.fun)
                 document.getElementById('stat-same').textContent = stats.same_platform_arb || 0;
                 document.getElementById('stat-cross').textContent = stats.cross_platform_arb || 0;
                 document.getElementById('stat-multi').textContent = stats.multi_outcome_arb || 0;

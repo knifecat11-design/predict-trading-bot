@@ -1,6 +1,6 @@
 """
 Cross-platform prediction market arbitrage dashboard
-Platforms: Polymarket, Opinion.trade, Predict.fun, Probable.markets, Kalshi
+Platforms: Polymarket, Opinion.trade, Predict.fun, Kalshi
 
 v3.4: + Improved market matching for person names (Eric vs Donald Trump)
 """
@@ -118,7 +118,7 @@ PREDICT_ORDERBOOK_WORKERS = 15    # Concurrent threads for Predict orderbook fet
 PREDICT_FETCH_MAX_PAGES = 50      # Max cursor pagination pages for Predict (20→50, up to 5000 markets)
 MIN_SCAN_INTERVAL = 60            # Minimum seconds between scans (prevents overload)
 KALSHI_FETCH_LIMIT = 5000         # Kalshi markets to fetch (all open markets)
-PROBABLE_FETCH_LIMIT = 5000       # Probable events to fetch (was 1000)
+# PROBABLE_FETCH_LIMIT removed (Probable merged into Predict.fun)
 PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # Multi-outcome arb: minimum total cost (sum of all Yes-ask prices) to be considered valid.
 # A genuine MECE event (election, sports champion) has outcomes summing close to $1.
@@ -126,9 +126,7 @@ PRICE_HISTORY_MAX_POINTS = 30     # Max price history data points per market
 # must be excluded — if no outcome covers the actual result, all positions expire worthless.
 MULTI_OUTCOME_MIN_TOTAL_COST = 0.50   # Require sum ≥ 50c to pass MECE sanity check
 
-# Probable Markets order book API: https://api.probable.markets/public/api/v1
-# Enable Probable Markets arbitrage monitoring
-PROBABLE_ARBITRAGE_ENABLED = True
+# Probable Markets removed (merged into Predict.fun)
 
 # Logical Spread Arbitrage configuration
 LSA_ENABLED = True                    # Enable logical spread arbitrage detection
@@ -142,8 +140,6 @@ PLATFORM_FEES = {
     'opinion': 0.02,       # 2% estimated
     'predict': 0.02,       # feeRateBps: 200 = 2%
     'kalshi': 0.02,        # ~2% effective (Kalshi: 7% of profit ≈ 2% of trade value)
-    'probable': 0.00,      # 0% (Probable Markets claims zero fees)
-    'pro': 0.00,           # Alias for Probable Markets
 }
 
 # Global state
@@ -153,7 +149,6 @@ _state = {
         'opinion': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
         'predict': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
         'kalshi': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
-        'probable': {'status': 'unknown', 'markets': [], 'last_update': 0, 'count': 0},
     },
     'arbitrage': [],
     'logical_spread_arb': [],  # Logical Spread Arbitrage: P(hard) >= P(easy) on same platform
@@ -176,7 +171,6 @@ _poly_events_cache = []
 _kalshi_raw_cache = []    # Raw Kalshi market dicts (before price filtering)
 _predict_raw_cache = []   # Raw Predict.fun market dicts (before extreme-price filtering)
 _predict_ob_cache = {}    # Predict.fun orderbooks {market_id: {'yes_ask': float, 'no_ask': float}}
-_probable_raw_cache = []   # Raw Probable Markets events (for multi-outcome analysis)
 _lock = threading.Lock()
 _scanning = threading.Event()  # Scan guard: prevents overlapping scans
 
@@ -379,8 +373,6 @@ def platform_link_html(platform_name, market_url=None):
         'Predict': '#9c27b0',
         'Predict.fun': '#9c27b0',
         'Kalshi': '#3fb950',
-        'Probable': '#ff6b6b',
-        'Probable.market': '#ff6b6b',
     }
     platform_urls = {
         'Polymarket': 'https://polymarket.com',
@@ -389,8 +381,6 @@ def platform_link_html(platform_name, market_url=None):
         'Predict': 'https://predict.fun',
         'Predict.fun': 'https://predict.fun',
         'Kalshi': 'https://kalshi.com',
-        'Probable': 'https://probable.markets',
-        'Probable.market': 'https://probable.markets',
     }
     color = platform_colors.get(platform_name, '#888')
     url = market_url if market_url else platform_urls.get(platform_name, '#')
@@ -980,128 +970,8 @@ def fetch_kalshi_data(config):
 
 
 def fetch_probable_data(config):
-    """Fetch Probable Markets — using probable_api client with pagination"""
-    global _probable_raw_cache
-    try:
-        from src.probable_api import ProbableClient
-        client = ProbableClient(config)
-
-        # Get all events with pagination, then extract markets
-        events = client.get_events(active_only=True, limit=PROBABLE_FETCH_LIMIT)
-        logger.info(f"Probable: fetched {len(events)} events")
-
-        # Cache raw events for cross-platform multi-outcome analysis
-        _probable_raw_cache = events
-
-        # First pass: collect markets and their token IDs
-        markets_to_fetch = []
-        for event in events:
-            for market in event.get('markets', []):
-                try:
-                    market_id = str(market.get('id', ''))
-                    question = market.get('question', '')
-                    liquidity = float(market.get('liquidity', 0) or 0)
-                    volume_24h = float(market.get('volume24hr', 0) or 0)
-                    end_date = market.get('endDate', '')
-
-                    # Get token IDs for Yes/No
-                    tokens = market.get('tokens', [])
-                    if len(tokens) < 2:
-                        continue
-
-                    yes_token_id = tokens[0].get('token_id')
-                    no_token_id = tokens[1].get('token_id')
-
-                    if not yes_token_id or not no_token_id:
-                        continue
-
-                    event_slug = event.get('slug', '')
-                    url = f"https://probable.markets/event/{event_slug}" if event_slug else "https://probable.markets"
-
-                    markets_to_fetch.append({
-                        'market_id': market_id,
-                        'question': question,
-                        'liquidity': liquidity,
-                        'volume_24h': volume_24h,
-                        'end_date': end_date,
-                        'yes_token_id': str(yes_token_id),
-                        'no_token_id': str(no_token_id),
-                        'url': url,
-                        'event_slug': event_slug,
-                    })
-                except (ValueError, TypeError, KeyError):
-                    continue
-
-        # Batch fetch prices
-        token_pairs = [{'token_id': m['yes_token_id'], 'side': 'BUY'} for m in markets_to_fetch] + \
-                      [{'token_id': m['no_token_id'], 'side': 'BUY'} for m in markets_to_fetch]
-        price_data = client.get_token_prices_batch(token_pairs) if token_pairs else {}
-
-        # Concurrently fetch orderbook ask sizes for yes tokens
-        yes_token_ids = list({m['yes_token_id'] for m in markets_to_fetch})
-        orderbook_data = {}
-
-        def fetch_orderbook(token_id):
-            try:
-                book = client.get_order_book_by_token_id(token_id)
-                return token_id, book
-            except Exception as e:
-                logger.debug(f"Failed to fetch orderbook for {token_id}: {e}")
-                return token_id, None
-
-        if yes_token_ids:
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                futures = {executor.submit(fetch_orderbook, tid): tid for tid in yes_token_ids}
-                for future in as_completed(futures):
-                    token_id, book = future.result()
-                    if book:
-                        orderbook_data[token_id] = book
-
-        # Build parsed list
-        parsed = []
-        for m in markets_to_fetch:
-            yes_str_id = m['yes_token_id']
-            no_str_id = m['no_token_id']
-
-            yes_price = float(price_data.get(yes_str_id, {}).get('BUY', 0.5)) if yes_str_id in price_data else 0.5
-            no_price = float(price_data.get(no_str_id, {}).get('BUY', 0.5)) if no_str_id in price_data else 0.5
-
-            # Get ask_size from orderbook
-            ask_size = 0
-            if yes_str_id in orderbook_data:
-                try:
-                    ask_size = int(orderbook_data[yes_str_id].get('best_ask_size', 0) or 0)
-                except (ValueError, TypeError):
-                    ask_size = 0
-
-            # Filter extreme prices
-            if yes_price < PREDICT_EXTREME_FILTER or yes_price > (1 - PREDICT_EXTREME_FILTER):
-                continue
-
-            parsed.append({
-                'id': m['market_id'],
-                'title': f"<a href='{m['url']}' target='_blank' style='color:#f85149;text-decoration:none'>{m['question'][:80]}</a>",
-                'url': m['url'],
-                'match_title': m['question'],
-                'yes': round(yes_price, 4),
-                'no': round(no_price, 4),
-                'ask_size': ask_size,
-                'volume': m['volume_24h'],
-                'liquidity': m['liquidity'],
-                'platform': 'probable',
-                'end_date': m['end_date'],
-            })
-
-        # Sort by liquidity
-        parsed.sort(key=lambda x: x['liquidity'], reverse=True)
-        logger.info(f"Probable: {len(parsed)} markets with valid prices")
-        return 'active', parsed
-    except ImportError as e:
-        logger.error(f"Probable import error: {e}")
-        return 'error', []
-    except Exception as e:
-        logger.error(f"Probable fetch error: {e}")
-        return 'error', []
+    """Probable Markets 已被 Predict.fun 整合，此函数已弃用"""
+    return 'disabled', []
 
 
 def update_price_history(arbitrage_list):
@@ -2305,73 +2175,13 @@ def group_polymarket_events_for_combo(poly_events):
 
 
 def group_probable_events(probable_markets):
-    """将 Probable Markets 市场按事件分组，形成多结果事件列表。
-
-    Args:
-        probable_markets: 已解析的市场列表（来自 fetch_probable_data，包含 yes/no 价格）
-
-    Returns:
-        [{'event_key', 'event_title', 'event_title_norm', 'event_url',
-          'platform', 'outcomes': [...]}]
-    """
-    from collections import defaultdict
-
-    # 按事件标题分组（从 URL 中提取事件标识）
-    event_groups = defaultdict(list)
-
-    for market in probable_markets:
-        # 从 URL 提取事件标识
-        url = market.get('url', '')
-        yes_price = market.get('yes', 0)
-        no_price = market.get('no', 0)
-
-        # 过滤无效价格
-        if yes_price <= 0 or yes_price >= 1:
-            continue
-
-        # 从标题中提取结果标签
-        title = strip_html(market.get('title', ''))
-        label = _extract_outcome_label(title) or title[:40]
-
-        # 使用 URL 的事件部分作为事件分组键
-        # URL 格式: https://probable.markets/event/event-slug?market=xxx
-        event_slug = url.split('/event/')[-1].split('?')[0] if '/event/' in url else 'unknown'
-        event_url = url.split('?')[0] if '?' in url else url
-
-        event_groups[event_slug].append({
-            'label': label,
-            'label_norm': label.lower().strip(),
-            'price': round(yes_price, 4),
-            'url': url,
-            'platform': 'Probable',
-        })
-
-    # 构建结果
-    result = []
-    for event_slug, outcomes_list in event_groups.items():
-        if len(outcomes_list) < 3:
-            continue
-
-        # 使用第一个结果的标题作为事件标题
-        first_title = outcomes_list[0].get('label', '')
-        event_title = f"Probable: {event_slug}"
-
-        result.append({
-            'event_key': f'prob-{event_slug}',
-            'event_title': event_title,
-            'event_title_norm': _normalize_title_for_matching(event_title),
-            'event_url': event_url,
-            'platform': 'Probable',
-            'outcomes': outcomes_list,
-        })
-
-    logger.info(f"Probable event groups: {len(result)} events with 3+ outcomes")
-    return result
+    """Probable Markets 已被 Predict.fun 整合，此函数已弃用"""
+    return []
 
 
 def find_cross_platform_multi_outcome_arb(
         kalshi_raw, predict_raw, predict_obs, poly_events,
-        opinion_markets, probable_markets, threshold=0.5):
+        opinion_markets, threshold=0.5):
     """检测跨平台多结果组单套利机会。
 
     对同一个事件（如2026世界杯冠军），在不同平台为每个结果选择最低价格：
@@ -2389,7 +2199,6 @@ def find_cross_platform_multi_outcome_arb(
         predict_obs:   Predict.fun 订单簿缓存 {market_id: ob_dict}
         poly_events:   Polymarket 事件缓存
         opinion_markets: Opinion 已解析市场列表（用于补充单个结果的更低价格）
-        probable_markets: Probable Markets 已解析市场列表
         threshold:     最低毛利率阈值（%）
 
     Returns:
@@ -2412,18 +2221,12 @@ def find_cross_platform_multi_outcome_arb(
     except Exception as e:
         logger.warning(f"Cross-combo: Polymarket grouping error: {e}")
         poly_event_groups = []
-    try:
-        probable_events = group_probable_events(probable_markets) if probable_markets else []
-    except Exception as e:
-        logger.warning(f"Cross-combo: Probable grouping error: {e}")
-        probable_events = []
-
     logger.info(
         f"Cross-combo groups: Kalshi={len(kalshi_events)}, "
-        f"Predict={len(predict_events)}, Poly={len(poly_event_groups)}, Probable={len(probable_events)}"
+        f"Predict={len(predict_events)}, Poly={len(poly_event_groups)}"
     )
 
-    if len(kalshi_events) + len(predict_events) + len(poly_event_groups) + len(probable_events) < 2:
+    if len(kalshi_events) + len(predict_events) + len(poly_event_groups) < 2:
         return []
 
     # Build Opinion lookup for supplementary single-outcome matching:
@@ -2438,22 +2241,10 @@ def find_cross_platform_multi_outcome_arb(
             'raw_title': raw_title,
         }
 
-    # Build Probable lookup for supplementary single-outcome matching:
-    probable_lookup = {}
-    for pm in (probable_markets or []):
-        raw_title = strip_html(pm.get('title', ''))
-        norm = _normalize_title_for_matching(raw_title)
-        probable_lookup[norm] = {
-            'yes_price': pm.get('yes', 0),
-            'url': pm.get('url', ''),
-            'raw_title': raw_title,
-        }
-
     all_platform_groups = [
         ('Kalshi', kalshi_events),
         ('Predict', predict_events),
         ('Polymarket', poly_event_groups),
-        ('Probable', probable_events),
     ]
 
     # Pairwise event matching across platforms, then build merged outcome map
@@ -2561,25 +2352,6 @@ def find_cross_platform_multi_outcome_arb(
                             }
                             if 'Opinion' not in plat_opts:
                                 plat_opts['Opinion'] = opinion_outcome
-                            break
-
-                    # Try to find a matching Probable market for this outcome
-                    for prob_norm, prob_info in probable_lookup.items():
-                        prob_words = set(prob_norm.split())
-                        label_words = set(outcome_label.lower().split())
-                        if (len(event_title_words & prob_words) >= 2
-                                and label_words.issubset(prob_words)
-                                and prob_info['yes_price'] > 0):
-                            probable_outcome = {
-                                'label': outcome_label,
-                                'label_norm': ln,
-                                'price': prob_info['yes_price'],
-                                'url': prob_info['url'],
-                                'platform': 'Probable',
-                                'platform_color': '#6366f1',
-                            }
-                            if 'Probable' not in plat_opts:
-                                plat_opts['Probable'] = probable_outcome
                             break
 
                 # Build optimal portfolio: pick cheapest platform per outcome
@@ -2784,15 +2556,14 @@ def background_scanner():
             opinion_status, opinion_markets = 'unknown', []
             predict_status, predict_markets = 'unknown', []
             kalshi_status, kalshi_markets = 'unknown', []
-            probable_status, probable_markets = 'unknown', []
+            # Probable已被Predict整合，已移除
 
-            with ThreadPoolExecutor(max_workers=5, thread_name_prefix='fetch') as executor:
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix='fetch') as executor:
                 futures = {
                     executor.submit(fetch_polymarket_data, config): 'polymarket',
                     executor.submit(fetch_opinion_data, config): 'opinion',
                     executor.submit(fetch_predict_data, config): 'predict',
                     executor.submit(fetch_kalshi_data, config): 'kalshi',
-                    executor.submit(fetch_probable_data, config): 'probable',
                 }
 
                 for future in as_completed(futures, timeout=300):
@@ -2807,8 +2578,6 @@ def background_scanner():
                             predict_status, predict_markets = status, markets
                         elif platform == 'kalshi':
                             kalshi_status, kalshi_markets = status, markets
-                        elif platform == 'probable':
-                            probable_status, probable_markets = status, markets
 
                         # Update state immediately for this platform
                         with _lock:
@@ -2840,12 +2609,6 @@ def background_scanner():
                 ('Polymarket', poly_markets), ('Opinion', opinion_markets),
                 ('Predict', predict_markets), ('Kalshi', kalshi_markets),
             ]
-            # Probable Markets arbitrage disabled - price data unavailable via public API
-            if not PROBABLE_ARBITRAGE_ENABLED:
-                logger.info("[Probable] 套利计算已禁用 - 公共API不提供价格数据")
-            else:
-                platform_market_pairs.append(('Probable', probable_markets))
-
             for pname, pmarkets in platform_market_pairs:
                 if pmarkets:
                     same_arb = find_same_platform_arbitrage(pmarkets, pname, threshold=0.5)
@@ -2861,14 +2624,6 @@ def background_scanner():
                 (opinion_markets, kalshi_markets, 'Opinion', 'Kalshi'),
                 (predict_markets, kalshi_markets, 'Predict', 'Kalshi'),
             ]
-            # Probable Markets arbitrage disabled - price data unavailable via public API
-            if PROBABLE_ARBITRAGE_ENABLED:
-                cross_platform_combos.extend([
-                    (poly_markets, probable_markets, 'Polymarket', 'Probable'),
-                    (opinion_markets, probable_markets, 'Opinion', 'Probable'),
-                    (predict_markets, probable_markets, 'Predict', 'Probable'),
-                    (kalshi_markets, probable_markets, 'Kalshi', 'Probable'),
-                ])
             for markets_a, markets_b, name_a, name_b in cross_platform_combos:
                 if markets_a and markets_b:
                     arb = find_cross_platform_arbitrage(
@@ -2890,11 +2645,9 @@ def background_scanner():
                 # 或者如果标题包含 Eric Trump 但没有 Donald，却被匹配到了 Donald Trump 市场
                 if has_eric and has_donald:
                     return True
-                # 如果是 Eric Trump 但 direction 显示是 Polymarket vs Probable 且另一方是 Donald
                 direction = arb.get('direction', '').lower()
                 if 'eric' in market and 'trump' in market:
-                    # 检查另一方是否是 donald trump
-                    if 'donald' in direction or 'probable' in direction:
+                    if 'donald' in direction:
                         return True
                 return False
 
@@ -2925,13 +2678,10 @@ def background_scanner():
             # Falls back to empty list if events fetch failed.
             multi_outcome_arb = find_polymarket_multi_outcome_arbitrage(_poly_events_cache, threshold=0.5)
 
-            # === Cross-platform multi-outcome combo (Kalshi + Predict + Polymarket + Opinion + Probable) ===
-            # For the same event, pick cheapest platform per outcome to build a complete portfolio.
-            # Probable Markets arbitrage disabled - price data unavailable via public API
-            probable_for_arb = probable_markets if PROBABLE_ARBITRAGE_ENABLED else []
+            # === Cross-platform multi-outcome combo (Kalshi + Predict + Polymarket + Opinion) ===
             cross_combo_arb = find_cross_platform_multi_outcome_arb(
                 _kalshi_raw_cache, _predict_raw_cache, _predict_ob_cache,
-                _poly_events_cache, opinion_markets, probable_for_arb, threshold=0.5)
+                _poly_events_cache, opinion_markets, threshold=0.5)
 
             # Merge same-platform and cross-platform multi-outcome into one list
             all_multi_arb = multi_outcome_arb + cross_combo_arb
@@ -3302,12 +3052,11 @@ def background_scanner():
                 profitable = sum(1 for a in all_arb if a.get('net_profit', 0) > 0)
                 _state['scan_stats'] = {
                     'duration': round(scan_duration, 1),
-                    'total_markets': len(poly_markets) + len(opinion_markets) + len(predict_markets) + len(kalshi_markets) + len(probable_markets),
+                    'total_markets': len(poly_markets) + len(opinion_markets) + len(predict_markets) + len(kalshi_markets),
                     'poly_count': len(poly_markets),
                     'opinion_count': len(opinion_markets),
                     'predict_count': len(predict_markets),
                     'kalshi_count': len(kalshi_markets),
-                    'probable_count': len(probable_markets),
                     'cross_pairs_checked': cross_pairs_checked,
                     'same_platform_arb': same_count,
                     'cross_platform_arb': cross_count,
@@ -3327,7 +3076,6 @@ def background_scanner():
                 f"Scan #{_state['scan_count']} ({scan_duration:.1f}s): "
                 f"Poly={len(poly_markets)} Opinion={len(opinion_markets)} "
                 f"Predict={len(predict_markets)} Kalshi={len(kalshi_markets)} "
-                f"Probable={len(probable_markets)} "
                 f"Arb={len(all_arb)}(same={same_count},cross={cross_count},net+={profitable}) "
                 f"WS={_ws_clients}"
             )
@@ -3552,7 +3300,7 @@ def mm_recommend():
 
 @socketio.on('mm_setup_credentials')
 def handle_mm_setup_credentials(data):
-    """前端设置做市商凭证（只需私钥和地址，API key 自动从监控系统复用）"""
+    """前端设置做市商凭证（私钥 + 钱包地址，Polymarket 公共 API 无需 key）"""
     engine = _get_mm_engine()
     if not engine or not isinstance(data, dict):
         emit('mm_setup_result', {'error': 'Engine not available'})
@@ -3560,30 +3308,18 @@ def handle_mm_setup_credentials(data):
 
     try:
         cred_updates = {}
-        # 接受用户输入的私钥和地址
-        for key in ['private_key', 'predict_account_address', 'venue']:
-            if key in data and data[key]:
-                cred_updates[key] = data[key]
+        if data.get('private_key'):
+            cred_updates['private_key'] = data['private_key']
+        if data.get('wallet_address'):
+            cred_updates['wallet_address'] = data['wallet_address']
 
-        # API key 自动从监控系统已有配置复用
-        config = load_config()
-        venue = cred_updates.get('venue', engine.config.venue)
-        if venue == 'predict':
-            existing_key = config.get('api', {}).get('api_key', '')
-        else:
-            existing_key = os.getenv('PROBABLE_API_KEY', '')
-
-        if existing_key:
-            cred_updates['api_key'] = existing_key
-        elif not engine.config.api_key:
-            # 没有现成的 API key，用公共只读模式（部分平台不需要 key 即可读取市场数据）
-            logger.warning("[MM] 未找到现有 API Key，将以公共模式运行")
+        # Polymarket 公共 API 不需要 key，直接使用
+        cred_updates['venue'] = 'polymarket'
 
         engine.update_config(cred_updates)
-        logger.info(f"[MM] 凭证已设置: venue={venue}, "
-                    f"has_private_key={bool(cred_updates.get('private_key'))}, "
-                    f"api_key={'复用监控系统' if existing_key else '未设置'}")
-        emit('mm_setup_result', {'ok': True, 'has_api_key': bool(existing_key or engine.config.api_key)})
+        logger.info(f"[MM] 凭证已设置: venue=polymarket, "
+                    f"has_private_key={bool(cred_updates.get('private_key'))}")
+        emit('mm_setup_result', {'ok': True})
         emit('mm_state_update', engine.get_state())
     except Exception as e:
         logger.error(f"[MM] 凭证设置失败: {e}")
