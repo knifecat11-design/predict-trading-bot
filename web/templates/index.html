@@ -691,6 +691,79 @@
         .mm-pos-item .pos-row .no { color: #f85149; }
         .mm-pos-item .pos-row .state { color: #58a6ff; font-weight: 600; }
         .mm-empty { text-align: center; color: #484f58; padding: 16px 8px; font-size: 11px; }
+        /* Setup wizard styles */
+        .mm-setup-section { margin-bottom: 14px; }
+        .mm-input-group { margin-bottom: 8px; }
+        .mm-input-group label { display: block; font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 3px; }
+        .mm-input {
+            width: 100%; box-sizing: border-box;
+            padding: 7px 10px; font-size: 11px; font-family: 'SF Mono', Monaco, monospace;
+            background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+            color: #e0e6ed; outline: none; transition: border-color 0.2s;
+        }
+        .mm-input:focus { border-color: #58a6ff; }
+        .mm-input::placeholder { color: #484f58; }
+        .mm-input.error { border-color: #f85149; }
+        .mm-input.success { border-color: #3fb950; }
+        .mm-input-hint { font-size: 9px; color: #484f58; margin-top: 2px; }
+        .mm-select {
+            width: 100%; box-sizing: border-box;
+            padding: 7px 10px; font-size: 11px;
+            background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+            color: #e0e6ed; outline: none; cursor: pointer;
+            -webkit-appearance: none; appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23484f58'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 10px center;
+        }
+        .mm-select:focus { border-color: #58a6ff; }
+        .mm-strategy-card {
+            background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+            padding: 10px 12px; margin-bottom: 6px; cursor: pointer; transition: all 0.2s;
+        }
+        .mm-strategy-card:hover { border-color: #30363d; }
+        .mm-strategy-card.active { border-color: #58a6ff; background: rgba(88,166,255,0.05); }
+        .mm-strategy-card .st-name { font-size: 12px; font-weight: 700; color: #c9d1d9; margin-bottom: 2px; }
+        .mm-strategy-card .st-desc { font-size: 10px; color: #484f58; line-height: 1.3; }
+        .mm-strategy-card .st-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-top: 4px; font-weight: 600; }
+        .mm-strategy-card .st-tag.sim { background: rgba(210,153,34,0.15); color: #d29922; }
+        .mm-strategy-card .st-tag.live { background: rgba(248,81,73,0.15); color: #f85149; }
+        .mm-config-editable {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 5px 0; font-size: 11px; color: #8b949e; border-bottom: 1px solid #161b22;
+        }
+        .mm-config-editable input {
+            width: 70px; text-align: right; padding: 3px 6px; font-size: 11px;
+            background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+            color: #e0e6ed; outline: none; font-weight: 600;
+        }
+        .mm-config-editable input:focus { border-color: #58a6ff; }
+        .mm-config-editable select {
+            width: 80px; padding: 3px 6px; font-size: 11px;
+            background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+            color: #e0e6ed; outline: none;
+        }
+        .mm-step-indicator { display: flex; gap: 4px; margin-bottom: 14px; }
+        .mm-step { flex: 1; height: 3px; border-radius: 2px; background: #21262d; transition: background 0.3s; }
+        .mm-step.done { background: #3fb950; }
+        .mm-step.current { background: #58a6ff; }
+        .mm-cred-status { display: flex; align-items: center; gap: 5px; font-size: 10px; margin-top: 6px; padding: 5px 8px; border-radius: 6px; }
+        .mm-cred-status.ok { background: rgba(63,185,80,0.1); color: #3fb950; }
+        .mm-cred-status.missing { background: rgba(248,81,73,0.1); color: #f85149; }
+        .mm-confirm-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7); z-index: 9999;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .mm-confirm-box {
+            background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+            padding: 24px; max-width: 360px; text-align: center;
+        }
+        .mm-confirm-box h3 { color: #f85149; font-size: 15px; margin: 0 0 8px 0; }
+        .mm-confirm-box p { color: #8b949e; font-size: 12px; margin: 0 0 16px 0; line-height: 1.5; }
+        .mm-confirm-box .btns { display: flex; gap: 8px; justify-content: center; }
+        .mm-confirm-box .btns button { padding: 8px 20px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #30363d; }
+        .mm-confirm-box .btn-cancel { background: #21262d; color: #e0e6ed; }
+        .mm-confirm-box .btn-confirm { background: #f85149; color: #fff; border-color: #f85149; }
         .mm-sim-badge {
             font-size: 9px;
             font-weight: 800;
@@ -939,88 +1012,160 @@
                 <div class="mm-title">
                     Market Maker
                     <span id="mm-sim-badge" class="mm-sim-badge" style="display:none">SIM</span>
+                    <span id="mm-live-badge" class="mm-sim-badge" style="display:none;background:rgba(248,81,73,0.15);color:#f85149">LIVE</span>
                 </div>
                 <div class="mm-sub">Unified strategy · Predict.fun & Probable</div>
 
-                <!-- Status Bar -->
-                <div class="mm-status-bar stopped" id="mm-status-bar">
-                    <span class="mm-status-dot stopped" id="mm-status-dot"></span>
-                    <span id="mm-status-label">Stopped</span>
-                    <span style="margin-left:auto;font-size:10px;color:#484f58" id="mm-uptime"></span>
+                <!-- Step Indicator -->
+                <div class="mm-step-indicator" id="mm-steps">
+                    <div class="mm-step current" id="mm-step-1"></div>
+                    <div class="mm-step" id="mm-step-2"></div>
+                    <div class="mm-step" id="mm-step-3"></div>
                 </div>
 
-                <!-- Controls -->
-                <div class="mm-controls">
-                    <button class="mm-btn start" id="mm-btn-start" onclick="mmStart()">Start</button>
-                    <button class="mm-btn" id="mm-btn-pause" onclick="mmPause()">Pause</button>
-                    <button class="mm-btn stop" id="mm-btn-stop" onclick="mmStop()">Stop</button>
-                </div>
-
-                <!-- Stats -->
-                <div class="mm-section-label">Statistics</div>
-                <div class="mm-stats-grid">
-                    <div class="mm-stat">
-                        <span class="label">Cycles</span>
-                        <span class="value" id="mm-stat-cycles">0</span>
+                <!-- ====== STEP 1: Credentials ====== -->
+                <div id="mm-setup-credentials" class="mm-setup-section">
+                    <div class="mm-section-label">Step 1: API Credentials</div>
+                    <div class="mm-input-group">
+                        <label>Platform</label>
+                        <select class="mm-select" id="mm-venue-select" onchange="mmVenueChange()">
+                            <option value="predict">Predict.fun</option>
+                            <option value="probable">Probable</option>
+                        </select>
                     </div>
-                    <div class="mm-stat">
-                        <span class="label">Orders</span>
-                        <span class="value blue" id="mm-stat-orders">0</span>
+                    <div class="mm-input-group">
+                        <label>API Key</label>
+                        <input class="mm-input" type="password" id="mm-input-apikey" placeholder="Enter API key..." autocomplete="off">
+                        <div class="mm-input-hint">Public API key for market data</div>
                     </div>
-                    <div class="mm-stat">
-                        <span class="label">Fills</span>
-                        <span class="value green" id="mm-stat-fills">0</span>
+                    <div class="mm-input-group">
+                        <label>JWT Token <span style="color:#484f58">(optional for simulation)</span></label>
+                        <input class="mm-input" type="password" id="mm-input-jwt" placeholder="Enter JWT token..." autocomplete="off">
+                        <div class="mm-input-hint">Required for live order placement</div>
                     </div>
-                    <div class="mm-stat">
-                        <span class="label">Hedges</span>
-                        <span class="value" id="mm-stat-hedges">0</span>
+                    <div class="mm-input-group">
+                        <label>Private Key <span style="color:#484f58">(optional for simulation)</span></label>
+                        <input class="mm-input" type="password" id="mm-input-privkey" placeholder="Enter private key..." autocomplete="off">
+                        <div class="mm-input-hint">Wallet private key for signing orders</div>
                     </div>
-                    <div class="mm-stat">
-                        <span class="label">Daily PnL</span>
-                        <span class="value" id="mm-stat-pnl">$0.00</span>
+                    <div class="mm-input-group">
+                        <label>Account Address <span style="color:#484f58">(optional for simulation)</span></label>
+                        <input class="mm-input" type="text" id="mm-input-address" placeholder="0x..." autocomplete="off">
+                        <div class="mm-input-hint">On-chain account address for position queries</div>
                     </div>
-                    <div class="mm-stat">
-                        <span class="label">Markets</span>
-                        <span class="value blue" id="mm-stat-markets">0</span>
+                    <div id="mm-cred-status"></div>
+                    <div style="margin-top:10px">
+                        <button class="mm-btn start" style="width:100%" onclick="mmSaveCredentials()">Save & Next</button>
                     </div>
                 </div>
 
-                <!-- Config -->
-                <div class="mm-section-label">Configuration</div>
-                <div id="mm-config">
-                    <div class="mm-config-row"><span>Mode</span><span class="cfg-val sim" id="mm-cfg-mode">Simulation</span></div>
-                    <div class="mm-config-row"><span>Venue</span><span class="cfg-val" id="mm-cfg-venue">predict</span></div>
-                    <div class="mm-config-row"><span>Spread</span><span class="cfg-val" id="mm-cfg-spread">1.5%</span></div>
-                    <div class="mm-config-row"><span>Order Size</span><span class="cfg-val" id="mm-cfg-ordersize">$25</span></div>
-                    <div class="mm-config-row"><span>Max Position</span><span class="cfg-val" id="mm-cfg-maxpos">$100</span></div>
-                    <div class="mm-config-row"><span>Dual Track</span><span class="cfg-val" id="mm-cfg-dual">ON</span></div>
-                    <div class="mm-config-row"><span>Async Hedge</span><span class="cfg-val" id="mm-cfg-hedge">ON</span></div>
-                    <div class="mm-config-row"><span>Points Opt</span><span class="cfg-val" id="mm-cfg-points">ON</span></div>
-                    <div class="mm-config-row"><span>API Key</span><span class="cfg-val" id="mm-cfg-apikey">-</span></div>
+                <!-- ====== STEP 2: Strategy Selection ====== -->
+                <div id="mm-setup-strategy" class="mm-setup-section" style="display:none">
+                    <div class="mm-section-label">Step 2: Select Strategy</div>
+                    <div class="mm-strategy-card active" id="mm-st-sim" onclick="mmSelectStrategy('simulation')">
+                        <div class="st-name">Simulation Mode</div>
+                        <div class="st-desc">Paper trading with virtual fills. No real orders placed. Safe for testing strategies.</div>
+                        <span class="st-tag sim">SAFE</span>
+                    </div>
+                    <div class="mm-strategy-card" id="mm-st-mm" onclick="mmSelectStrategy('market_making')">
+                        <div class="st-name">Market Making (Live)</div>
+                        <div class="st-desc">Place real bid/ask orders on a single platform. Earn spread + points. Requires JWT + Private Key.</div>
+                        <span class="st-tag live">REAL ORDERS</span>
+                    </div>
+                    <div class="mm-strategy-card" id="mm-st-arb" onclick="mmSelectStrategy('arbitrage')">
+                        <div class="st-name">Cross-Platform Arbitrage (Live)</div>
+                        <div class="st-desc">Detect and execute arbitrage across platforms. Buy Yes on A + No on B when spread > threshold.</div>
+                        <span class="st-tag live">REAL ORDERS</span>
+                    </div>
+                    <div style="margin-top:10px;display:flex;gap:6px">
+                        <button class="mm-btn" onclick="mmGoStep(1)">Back</button>
+                        <button class="mm-btn start" style="flex:2" onclick="mmGoStep(3)">Next</button>
+                    </div>
                 </div>
 
-                <!-- Positions -->
-                <div class="mm-section-label">Positions</div>
-                <div id="mm-positions">
-                    <div class="mm-empty">No active positions</div>
+                <!-- ====== STEP 3: Configuration ====== -->
+                <div id="mm-setup-config" class="mm-setup-section" style="display:none">
+                    <div class="mm-section-label">Step 3: Parameters</div>
+                    <div class="mm-config-editable"><span>Spread</span><input type="text" id="mm-cfg-spread-input" value="1.5" onchange="mmConfigChanged()"><span style="color:#484f58;font-size:10px">%</span></div>
+                    <div class="mm-config-editable"><span>Order Size</span><input type="text" id="mm-cfg-ordersize-input" value="25" onchange="mmConfigChanged()"><span style="color:#484f58;font-size:10px">USD</span></div>
+                    <div class="mm-config-editable"><span>Max Position</span><input type="text" id="mm-cfg-maxpos-input" value="100" onchange="mmConfigChanged()"><span style="color:#484f58;font-size:10px">USD</span></div>
+                    <div class="mm-config-editable"><span>Max Daily Loss</span><input type="text" id="mm-cfg-maxloss-input" value="200" onchange="mmConfigChanged()"><span style="color:#484f58;font-size:10px">USD</span></div>
+                    <div class="mm-config-editable"><span>Max Markets</span><input type="text" id="mm-cfg-maxmkt-input" value="5" onchange="mmConfigChanged()"><span style="color:#484f58;font-size:10px"></span></div>
+                    <div class="mm-config-editable"><span>Cycle Interval</span><input type="text" id="mm-cfg-interval-input" value="3000" onchange="mmConfigChanged()"><span style="color:#484f58;font-size:10px">ms</span></div>
+                    <div class="mm-config-editable">
+                        <span>Dual Track</span>
+                        <select id="mm-cfg-dual-input" onchange="mmConfigChanged()"><option value="true">ON</option><option value="false">OFF</option></select>
+                    </div>
+                    <div class="mm-config-editable">
+                        <span>Async Hedge</span>
+                        <select id="mm-cfg-hedge-input" onchange="mmConfigChanged()"><option value="true">ON</option><option value="false">OFF</option></select>
+                    </div>
+                    <div class="mm-config-editable">
+                        <span>Points Opt</span>
+                        <select id="mm-cfg-points-input" onchange="mmConfigChanged()"><option value="true">ON</option><option value="false">OFF</option></select>
+                    </div>
+                    <div style="margin-top:10px;display:flex;gap:6px">
+                        <button class="mm-btn" onclick="mmGoStep(2)">Back</button>
+                        <button class="mm-btn start" style="flex:2" id="mm-btn-launch" onclick="mmLaunch()">Start</button>
+                    </div>
                 </div>
 
-                <!-- Markets -->
-                <div class="mm-section-label">Markets <span style="font-weight:400;color:#484f58;font-size:10px" id="mm-market-count"></span></div>
-                <div id="mm-markets">
-                    <div class="mm-empty">Loading markets...</div>
-                </div>
+                <!-- ====== RUNNING PANEL (shown when engine is running) ====== -->
+                <div id="mm-running-panel" style="display:none">
+                    <!-- Status Bar -->
+                    <div class="mm-status-bar stopped" id="mm-status-bar">
+                        <span class="mm-status-dot stopped" id="mm-status-dot"></span>
+                        <span id="mm-status-label">Stopped</span>
+                        <span style="margin-left:auto;font-size:10px;color:#484f58" id="mm-uptime"></span>
+                    </div>
 
-                <!-- Recent Orders -->
-                <div class="mm-section-label">Recent Orders</div>
-                <div id="mm-orders">
-                    <div class="mm-empty">No orders yet</div>
-                </div>
+                    <!-- Controls -->
+                    <div class="mm-controls">
+                        <button class="mm-btn" id="mm-btn-pause" onclick="mmPause()">Pause</button>
+                        <button class="mm-btn stop" id="mm-btn-stop" onclick="mmStop()">Stop</button>
+                        <button class="mm-btn" onclick="mmReset()" style="font-size:10px">Reset</button>
+                    </div>
 
-                <!-- Logs -->
-                <div class="mm-section-label">Activity Log</div>
-                <div id="mm-logs" style="max-height:200px;overflow-y:auto">
-                    <div class="mm-empty">Waiting for activity...</div>
+                    <!-- Stats -->
+                    <div class="mm-section-label">Statistics</div>
+                    <div class="mm-stats-grid">
+                        <div class="mm-stat"><span class="label">Cycles</span><span class="value" id="mm-stat-cycles">0</span></div>
+                        <div class="mm-stat"><span class="label">Orders</span><span class="value blue" id="mm-stat-orders">0</span></div>
+                        <div class="mm-stat"><span class="label">Fills</span><span class="value green" id="mm-stat-fills">0</span></div>
+                        <div class="mm-stat"><span class="label">Hedges</span><span class="value" id="mm-stat-hedges">0</span></div>
+                        <div class="mm-stat"><span class="label">Daily PnL</span><span class="value" id="mm-stat-pnl">$0.00</span></div>
+                        <div class="mm-stat"><span class="label">Markets</span><span class="value blue" id="mm-stat-markets">0</span></div>
+                    </div>
+
+                    <!-- Current Config (read-only summary) -->
+                    <div class="mm-section-label">Configuration</div>
+                    <div id="mm-config-summary">
+                        <div class="mm-config-row"><span>Mode</span><span class="cfg-val sim" id="mm-cfg-mode">Simulation</span></div>
+                        <div class="mm-config-row"><span>Venue</span><span class="cfg-val" id="mm-cfg-venue">predict</span></div>
+                        <div class="mm-config-row"><span>Spread</span><span class="cfg-val" id="mm-cfg-spread">1.5%</span></div>
+                        <div class="mm-config-row"><span>Order Size</span><span class="cfg-val" id="mm-cfg-ordersize">$25</span></div>
+                        <div class="mm-config-row"><span>Max Position</span><span class="cfg-val" id="mm-cfg-maxpos">$100</span></div>
+                        <div class="mm-config-row"><span>Dual Track</span><span class="cfg-val" id="mm-cfg-dual">ON</span></div>
+                        <div class="mm-config-row"><span>Async Hedge</span><span class="cfg-val" id="mm-cfg-hedge">ON</span></div>
+                        <div class="mm-config-row"><span>Points Opt</span><span class="cfg-val" id="mm-cfg-points">ON</span></div>
+                        <div class="mm-config-row"><span>Credentials</span><span class="cfg-val" id="mm-cfg-creds">-</span></div>
+                    </div>
+
+                    <!-- Positions -->
+                    <div class="mm-section-label">Positions</div>
+                    <div id="mm-positions"><div class="mm-empty">No active positions</div></div>
+
+                    <!-- Markets -->
+                    <div class="mm-section-label">Markets <span style="font-weight:400;color:#484f58;font-size:10px" id="mm-market-count"></span></div>
+                    <div id="mm-markets"><div class="mm-empty">Loading markets...</div></div>
+
+                    <!-- Recent Orders -->
+                    <div class="mm-section-label">Recent Orders</div>
+                    <div id="mm-orders"><div class="mm-empty">No orders yet</div></div>
+
+                    <!-- Logs -->
+                    <div class="mm-section-label">Activity Log</div>
+                    <div id="mm-logs" style="max-height:200px;overflow-y:auto"><div class="mm-empty">Waiting for activity...</div></div>
                 </div>
             </div>
         </div>
@@ -1607,178 +1752,373 @@
         }
 
         // ============================================================
-        // Market Maker Panel
+        // Market Maker Panel - Setup Wizard & Runtime
         // ============================================================
-        function mmStart() {
-            if (socket && socket.connected) socket.emit('mm_start');
+        var mmCurrentStep = 1;
+        var mmSelectedStrategy = 'simulation';
+        var mmCredentialsSaved = false;
+        var mmIsRunning = false;
+
+        // Step navigation
+        function mmGoStep(step) {
+            mmCurrentStep = step;
+            document.getElementById('mm-setup-credentials').style.display = step === 1 ? 'block' : 'none';
+            document.getElementById('mm-setup-strategy').style.display = step === 2 ? 'block' : 'none';
+            document.getElementById('mm-setup-config').style.display = step === 3 ? 'block' : 'none';
+            // Update step indicators
+            for (var i = 1; i <= 3; i++) {
+                var el = document.getElementById('mm-step-' + i);
+                el.className = 'mm-step' + (i < step ? ' done' : (i === step ? ' current' : ''));
+            }
         }
+
+        function mmVenueChange() {
+            // Clear credential status on venue change
+            document.getElementById('mm-cred-status').innerHTML = '';
+        }
+
+        function mmSaveCredentials() {
+            var apiKey = document.getElementById('mm-input-apikey').value.trim();
+            var jwt = document.getElementById('mm-input-jwt').value.trim();
+            var privKey = document.getElementById('mm-input-privkey').value.trim();
+            var address = document.getElementById('mm-input-address').value.trim();
+            var venue = document.getElementById('mm-venue-select').value;
+
+            // Validate: at minimum API key is needed
+            if (!apiKey) {
+                document.getElementById('mm-cred-status').innerHTML =
+                    '<div class="mm-cred-status missing">API Key is required for market data access</div>';
+                document.getElementById('mm-input-apikey').classList.add('error');
+                return;
+            }
+            document.getElementById('mm-input-apikey').classList.remove('error');
+            document.getElementById('mm-input-apikey').classList.add('success');
+
+            // Send credentials to backend
+            if (socket && socket.connected) {
+                socket.emit('mm_setup_credentials', {
+                    api_key: apiKey,
+                    jwt_token: jwt,
+                    private_key: privKey,
+                    predict_account_address: address,
+                    venue: venue
+                });
+            }
+
+            var hasLiveCreds = jwt && privKey;
+            var statusHtml = '<div class="mm-cred-status ok">API Key saved';
+            if (hasLiveCreds) statusHtml += ' · Live trading credentials set';
+            else statusHtml += ' · Simulation mode only (no JWT/Private Key)';
+            statusHtml += '</div>';
+            document.getElementById('mm-cred-status').innerHTML = statusHtml;
+            mmCredentialsSaved = true;
+
+            // If no live credentials, pre-select simulation
+            if (!hasLiveCreds) {
+                mmSelectedStrategy = 'simulation';
+            }
+
+            setTimeout(function() { mmGoStep(2); }, 500);
+        }
+
+        function mmSelectStrategy(strategy) {
+            var jwt = document.getElementById('mm-input-jwt').value.trim();
+            var privKey = document.getElementById('mm-input-privkey').value.trim();
+            var hasLiveCreds = jwt && privKey;
+
+            // Block live strategies if no credentials
+            if (strategy !== 'simulation' && !hasLiveCreds) {
+                alert('Live trading requires JWT Token and Private Key. Go back to Step 1 to fill them in.');
+                return;
+            }
+
+            mmSelectedStrategy = strategy;
+            document.querySelectorAll('.mm-strategy-card').forEach(function(el) { el.classList.remove('active'); });
+            var cardId = { simulation: 'mm-st-sim', market_making: 'mm-st-mm', arbitrage: 'mm-st-arb' }[strategy];
+            if (cardId) document.getElementById(cardId).classList.add('active');
+        }
+
+        function mmConfigChanged() {
+            // Config values are read when launching
+        }
+
+        function mmLaunch() {
+            if (!mmCredentialsSaved) {
+                alert('Please save credentials first (Step 1)');
+                mmGoStep(1);
+                return;
+            }
+
+            var isLive = mmSelectedStrategy !== 'simulation';
+
+            // Gather config
+            var config = {
+                strategy: mmSelectedStrategy,
+                simulation_mode: !isLive,
+                spread: parseFloat(document.getElementById('mm-cfg-spread-input').value) / 100 || 0.015,
+                order_size_usd: parseFloat(document.getElementById('mm-cfg-ordersize-input').value) || 25,
+                max_position_usd: parseFloat(document.getElementById('mm-cfg-maxpos-input').value) || 100,
+                max_daily_loss_usd: parseFloat(document.getElementById('mm-cfg-maxloss-input').value) || 200,
+                max_markets: parseInt(document.getElementById('mm-cfg-maxmkt-input').value) || 5,
+                cycle_interval_ms: parseInt(document.getElementById('mm-cfg-interval-input').value) || 3000,
+                dual_track_mode: document.getElementById('mm-cfg-dual-input').value === 'true',
+                async_hedging: document.getElementById('mm-cfg-hedge-input').value === 'true',
+                points_optimization: document.getElementById('mm-cfg-points-input').value === 'true',
+            };
+
+            if (isLive) {
+                // Show confirmation dialog for live mode
+                mmShowLiveConfirm(config);
+            } else {
+                mmDoStart(config);
+            }
+        }
+
+        function mmShowLiveConfirm(config) {
+            var overlay = document.createElement('div');
+            overlay.className = 'mm-confirm-overlay';
+            overlay.id = 'mm-confirm-overlay';
+            var strategyName = mmSelectedStrategy === 'market_making' ? 'Market Making' : 'Cross-Platform Arbitrage';
+            overlay.innerHTML =
+                '<div class="mm-confirm-box">' +
+                '<h3>Enable Live Trading?</h3>' +
+                '<p>You are about to start <strong>' + strategyName + '</strong> with real orders.<br>' +
+                'Order Size: <strong>$' + config.order_size_usd + '</strong> | ' +
+                'Max Position: <strong>$' + config.max_position_usd + '</strong><br>' +
+                'Max Daily Loss: <strong>$' + config.max_daily_loss_usd + '</strong></p>' +
+                '<div class="btns">' +
+                '<button class="btn-cancel" onclick="mmCancelConfirm()">Cancel</button>' +
+                '<button class="btn-confirm" onclick="mmConfirmLive()">Confirm & Start</button>' +
+                '</div></div>';
+            document.body.appendChild(overlay);
+            // Stash config for confirm
+            window._mmPendingConfig = config;
+        }
+
+        function mmCancelConfirm() {
+            var el = document.getElementById('mm-confirm-overlay');
+            if (el) el.remove();
+        }
+
+        function mmConfirmLive() {
+            var el = document.getElementById('mm-confirm-overlay');
+            if (el) el.remove();
+            if (window._mmPendingConfig) {
+                mmDoStart(window._mmPendingConfig);
+                window._mmPendingConfig = null;
+            }
+        }
+
+        function mmDoStart(config) {
+            if (socket && socket.connected) {
+                socket.emit('mm_update_config', config);
+                setTimeout(function() {
+                    socket.emit('mm_start');
+                }, 300);
+            }
+            mmIsRunning = true;
+            // Show running panel, hide setup
+            document.getElementById('mm-setup-credentials').style.display = 'none';
+            document.getElementById('mm-setup-strategy').style.display = 'none';
+            document.getElementById('mm-setup-config').style.display = 'none';
+            document.getElementById('mm-running-panel').style.display = 'block';
+            document.querySelector('.mm-step-indicator').style.display = 'none';
+        }
+
         function mmStop() {
             if (socket && socket.connected) socket.emit('mm_stop');
         }
         function mmPause() {
             if (socket && socket.connected) {
-                const bar = document.getElementById('mm-status-bar');
-                const isPaused = bar && bar.classList.contains('paused');
+                var bar = document.getElementById('mm-status-bar');
+                var isPaused = bar && bar.classList.contains('paused');
                 socket.emit(isPaused ? 'mm_resume' : 'mm_pause');
             }
         }
+        function mmReset() {
+            if (mmIsRunning) {
+                if (!confirm('Stop the engine and return to setup?')) return;
+                if (socket && socket.connected) socket.emit('mm_stop');
+            }
+            mmIsRunning = false;
+            document.getElementById('mm-running-panel').style.display = 'none';
+            document.querySelector('.mm-step-indicator').style.display = 'flex';
+            mmGoStep(1);
+        }
+
         function mmSelectMarket(marketId) {
             if (!socket || !socket.connected) return;
-            // 切换选中状态
-            const items = document.querySelectorAll('.mm-market-item');
-            const selected = [];
-            items.forEach(item => {
-                if (item.dataset.id === marketId) {
-                    item.classList.toggle('selected');
-                }
-                if (item.classList.contains('selected')) {
-                    selected.push(item.dataset.id);
-                }
+            var items = document.querySelectorAll('.mm-market-item');
+            var selected = [];
+            items.forEach(function(item) {
+                if (item.dataset.id === marketId) item.classList.toggle('selected');
+                if (item.classList.contains('selected')) selected.push(item.dataset.id);
             });
             socket.emit('mm_select_markets', { market_ids: selected });
         }
 
         function formatUptime(seconds) {
             if (!seconds || seconds <= 0) return '';
-            const h = Math.floor(seconds / 3600);
-            const m = Math.floor((seconds % 3600) / 60);
-            const s = Math.floor(seconds % 60);
-            if (h > 0) return `${h}h ${m}m`;
-            if (m > 0) return `${m}m ${s}s`;
-            return `${s}s`;
+            var h = Math.floor(seconds / 3600);
+            var m = Math.floor((seconds % 3600) / 60);
+            var s = Math.floor(seconds % 60);
+            if (h > 0) return h + 'h ' + m + 'm';
+            if (m > 0) return m + 'm ' + s + 's';
+            return s + 's';
         }
 
         function updateMMPanel(data) {
             if (!data) return;
+            var status = data.status || 'stopped';
 
-            // Status bar
-            const status = data.status || 'stopped';
-            const statusBar = document.getElementById('mm-status-bar');
-            const statusDot = document.getElementById('mm-status-dot');
-            const statusLabel = document.getElementById('mm-status-label');
-            statusBar.className = 'mm-status-bar ' + status;
-            statusDot.className = 'mm-status-dot ' + status;
-            const statusLabelsMap = { stopped: 'Stopped', running: 'Running', paused: 'Paused', error: 'Error' };
-            statusLabel.textContent = statusLabelsMap[status] || status;
-
-            // Uptime
-            const uptimeEl = document.getElementById('mm-uptime');
-            if (data.stats) uptimeEl.textContent = formatUptime(data.stats.uptime);
-
-            // Sim badge
-            const simBadge = document.getElementById('mm-sim-badge');
-            if (data.config && data.config.simulation_mode) {
-                simBadge.style.display = 'inline';
-            } else {
-                simBadge.style.display = 'none';
+            // If engine is running/paused, ensure running panel is visible
+            if (status === 'running' || status === 'paused') {
+                if (!mmIsRunning) {
+                    mmIsRunning = true;
+                    document.getElementById('mm-setup-credentials').style.display = 'none';
+                    document.getElementById('mm-setup-strategy').style.display = 'none';
+                    document.getElementById('mm-setup-config').style.display = 'none';
+                    document.getElementById('mm-running-panel').style.display = 'block';
+                    document.querySelector('.mm-step-indicator').style.display = 'none';
+                }
+            } else if (status === 'stopped' && mmIsRunning) {
+                // Engine stopped externally - stay on running panel to show final state
             }
 
+            // Badges
+            var simBadge = document.getElementById('mm-sim-badge');
+            var liveBadge = document.getElementById('mm-live-badge');
+            if (data.config) {
+                simBadge.style.display = data.config.simulation_mode ? 'inline' : 'none';
+                liveBadge.style.display = data.config.simulation_mode ? 'none' : 'inline';
+            }
+
+            // Running panel elements (check existence before updating)
+            var statusBar = document.getElementById('mm-status-bar');
+            var statusDot = document.getElementById('mm-status-dot');
+            var statusLabel = document.getElementById('mm-status-label');
+            if (statusBar) {
+                statusBar.className = 'mm-status-bar ' + status;
+                statusDot.className = 'mm-status-dot ' + status;
+                var statusLabelsMap = { stopped: 'Stopped', running: 'Running', paused: 'Paused', error: 'Error' };
+                statusLabel.textContent = statusLabelsMap[status] || status;
+            }
+
+            var uptimeEl = document.getElementById('mm-uptime');
+            if (uptimeEl && data.stats) uptimeEl.textContent = formatUptime(data.stats.uptime);
+
             // Controls
-            const btnStart = document.getElementById('mm-btn-start');
-            const btnPause = document.getElementById('mm-btn-pause');
-            const btnStop = document.getElementById('mm-btn-stop');
-            btnStart.className = status === 'running' ? 'mm-btn start disabled' : 'mm-btn start';
-            btnStop.className = status === 'stopped' ? 'mm-btn stop disabled' : 'mm-btn stop';
-            btnPause.textContent = status === 'paused' ? 'Resume' : 'Pause';
-            btnPause.className = status === 'running' || status === 'paused' ? 'mm-btn' : 'mm-btn disabled';
+            var btnPause = document.getElementById('mm-btn-pause');
+            var btnStop = document.getElementById('mm-btn-stop');
+            if (btnPause) {
+                btnStop.className = status === 'stopped' ? 'mm-btn stop disabled' : 'mm-btn stop';
+                btnPause.textContent = status === 'paused' ? 'Resume' : 'Pause';
+                btnPause.className = (status === 'running' || status === 'paused') ? 'mm-btn' : 'mm-btn disabled';
+            }
 
             // Stats
             if (data.stats) {
-                document.getElementById('mm-stat-cycles').textContent = data.stats.total_cycles || 0;
-                document.getElementById('mm-stat-orders').textContent = data.stats.total_orders || 0;
-                document.getElementById('mm-stat-fills').textContent = data.stats.total_fills || 0;
-                document.getElementById('mm-stat-hedges').textContent = data.stats.total_hedges || 0;
-                const pnl = data.stats.daily_pnl || 0;
-                const pnlEl = document.getElementById('mm-stat-pnl');
-                pnlEl.textContent = '$' + pnl.toFixed(2);
-                pnlEl.className = 'value ' + (pnl >= 0 ? 'green' : 'red');
-                document.getElementById('mm-stat-markets').textContent = data.stats.active_markets || 0;
+                var el;
+                el = document.getElementById('mm-stat-cycles'); if (el) el.textContent = data.stats.total_cycles || 0;
+                el = document.getElementById('mm-stat-orders'); if (el) el.textContent = data.stats.total_orders || 0;
+                el = document.getElementById('mm-stat-fills'); if (el) el.textContent = data.stats.total_fills || 0;
+                el = document.getElementById('mm-stat-hedges'); if (el) el.textContent = data.stats.total_hedges || 0;
+                var pnl = data.stats.daily_pnl || 0;
+                var pnlEl = document.getElementById('mm-stat-pnl');
+                if (pnlEl) { pnlEl.textContent = '$' + pnl.toFixed(2); pnlEl.className = 'value ' + (pnl >= 0 ? 'green' : 'red'); }
+                el = document.getElementById('mm-stat-markets'); if (el) el.textContent = data.stats.active_markets || 0;
             }
 
-            // Config
+            // Config summary
             if (data.config) {
-                const c = data.config;
-                const modeEl = document.getElementById('mm-cfg-mode');
-                modeEl.textContent = c.simulation_mode ? 'Simulation' : 'LIVE';
-                modeEl.className = 'cfg-val ' + (c.simulation_mode ? 'sim' : 'live');
-                document.getElementById('mm-cfg-venue').textContent = c.venue || 'predict';
-                document.getElementById('mm-cfg-spread').textContent = ((c.spread || 0.015) * 100).toFixed(1) + '%';
-                document.getElementById('mm-cfg-ordersize').textContent = '$' + (c.order_size_usd || 25);
-                document.getElementById('mm-cfg-maxpos').textContent = '$' + (c.max_position_usd || 100);
-                document.getElementById('mm-cfg-dual').textContent = c.dual_track_mode ? 'ON' : 'OFF';
-                document.getElementById('mm-cfg-hedge').textContent = c.async_hedging ? 'ON' : 'OFF';
-                document.getElementById('mm-cfg-points').textContent = c.points_optimization ? 'ON' : 'OFF';
-                document.getElementById('mm-cfg-apikey').textContent = c.has_api_key ? 'Set' : 'Missing';
-                document.getElementById('mm-cfg-apikey').style.color = c.has_api_key ? '#3fb950' : '#f85149';
+                var c = data.config;
+                var modeEl = document.getElementById('mm-cfg-mode');
+                if (modeEl) {
+                    modeEl.textContent = c.simulation_mode ? 'Simulation' : 'LIVE';
+                    modeEl.className = 'cfg-val ' + (c.simulation_mode ? 'sim' : 'live');
+                }
+                var venueEl = document.getElementById('mm-cfg-venue'); if (venueEl) venueEl.textContent = c.venue || 'predict';
+                var spreadEl = document.getElementById('mm-cfg-spread'); if (spreadEl) spreadEl.textContent = ((c.spread || 0.015) * 100).toFixed(1) + '%';
+                var osEl = document.getElementById('mm-cfg-ordersize'); if (osEl) osEl.textContent = '$' + (c.order_size_usd || 25);
+                var mpEl = document.getElementById('mm-cfg-maxpos'); if (mpEl) mpEl.textContent = '$' + (c.max_position_usd || 100);
+                var dualEl = document.getElementById('mm-cfg-dual'); if (dualEl) dualEl.textContent = c.dual_track_mode ? 'ON' : 'OFF';
+                var hedgeEl = document.getElementById('mm-cfg-hedge'); if (hedgeEl) hedgeEl.textContent = c.async_hedging ? 'ON' : 'OFF';
+                var ptsEl = document.getElementById('mm-cfg-points'); if (ptsEl) ptsEl.textContent = c.points_optimization ? 'ON' : 'OFF';
+                var credEl = document.getElementById('mm-cfg-creds');
+                if (credEl) {
+                    var hasKey = c.has_api_key;
+                    var hasJwt = c.has_jwt;
+                    credEl.textContent = hasJwt ? 'Full (API+JWT)' : (hasKey ? 'API Key only' : 'Missing');
+                    credEl.style.color = hasJwt ? '#3fb950' : (hasKey ? '#d29922' : '#f85149');
+                }
             }
 
             // Positions
-            const posContainer = document.getElementById('mm-positions');
-            const positions = (data.positions || []).filter(p => p.total_shares > 0);
-            if (positions.length === 0) {
-                posContainer.innerHTML = '<div class="mm-empty">No active positions</div>';
-            } else {
-                posContainer.innerHTML = positions.map(p => `
-                    <div class="mm-pos-item">
-                        <div class="pos-title">${p.market_title || p.market_id}</div>
-                        <div class="pos-row">
-                            <span class="yes">Y: ${p.yes_shares}</span>
-                            <span class="no">N: ${p.no_shares}</span>
-                            <span>Dev: ${p.deviation}%</span>
-                            <span class="state">${p.state}</span>
-                        </div>
-                    </div>`).join('');
+            var posContainer = document.getElementById('mm-positions');
+            if (posContainer) {
+                var positions = (data.positions || []).filter(function(p) { return p.total_shares > 0; });
+                if (positions.length === 0) {
+                    posContainer.innerHTML = '<div class="mm-empty">No active positions</div>';
+                } else {
+                    posContainer.innerHTML = positions.map(function(p) {
+                        return '<div class="mm-pos-item"><div class="pos-title">' + (p.market_title || p.market_id) + '</div>' +
+                            '<div class="pos-row"><span class="yes">Y: ' + p.yes_shares + '</span>' +
+                            '<span class="no">N: ' + p.no_shares + '</span>' +
+                            '<span>Dev: ' + p.deviation + '%</span>' +
+                            '<span class="state">' + p.state + '</span></div></div>';
+                    }).join('');
+                }
             }
 
             // Markets
-            const mktsContainer = document.getElementById('mm-markets');
-            const markets = data.markets || [];
-            const countEl = document.getElementById('mm-market-count');
-            countEl.textContent = markets.length > 0 ? `(${markets.length})` : '';
-            if (markets.length === 0) {
-                mktsContainer.innerHTML = '<div class="mm-empty">No markets loaded</div>';
-            } else {
-                mktsContainer.innerHTML = markets.slice(0, 15).map(m => `
-                    <div class="mm-market-item${m.selected ? ' selected' : ''}" data-id="${m.market_id}" onclick="mmSelectMarket('${m.market_id}')">
-                        <div class="mm-m-title">${m.title}</div>
-                        <div class="mm-m-info">
-                            <span>Y:${(m.yes_price*100).toFixed(1)}c</span>
-                            <span>Spread:${m.spread_cents}c</span>
-                            <span>Vol:$${Math.round(m.volume_24h).toLocaleString()}</span>
-                            ${m.points_eligible ? '<span class="pts">PTS</span>' : ''}
-                        </div>
-                    </div>`).join('');
+            var mktsContainer = document.getElementById('mm-markets');
+            if (mktsContainer) {
+                var markets = data.markets || [];
+                var countEl = document.getElementById('mm-market-count');
+                if (countEl) countEl.textContent = markets.length > 0 ? '(' + markets.length + ')' : '';
+                if (markets.length === 0) {
+                    mktsContainer.innerHTML = '<div class="mm-empty">No markets loaded</div>';
+                } else {
+                    mktsContainer.innerHTML = markets.slice(0, 15).map(function(m) {
+                        return '<div class="mm-market-item' + (m.selected ? ' selected' : '') + '" data-id="' + m.market_id + '" onclick="mmSelectMarket(\'' + m.market_id + '\')">' +
+                            '<div class="mm-m-title">' + m.title + '</div>' +
+                            '<div class="mm-m-info"><span>Y:' + (m.yes_price*100).toFixed(1) + 'c</span>' +
+                            '<span>Spread:' + m.spread_cents + 'c</span>' +
+                            '<span>Vol:$' + Math.round(m.volume_24h).toLocaleString() + '</span>' +
+                            (m.points_eligible ? '<span class="pts">PTS</span>' : '') + '</div></div>';
+                    }).join('');
+                }
             }
 
             // Orders
-            const ordersContainer = document.getElementById('mm-orders');
-            const orders = data.orders || [];
-            if (orders.length === 0) {
-                ordersContainer.innerHTML = '<div class="mm-empty">No orders yet</div>';
-            } else {
-                ordersContainer.innerHTML = orders.slice(-10).reverse().map(o => `
-                    <div class="mm-order-item">
-                        <span class="${o.side.toLowerCase()}">${o.token} ${o.side}</span>
-                        <span>${o.shares} @ ${o.price.toFixed(2)}</span>
-                        <span class="${o.status}">${o.status}</span>
-                        <span style="color:#484f58">${o.time}</span>
-                    </div>`).join('');
+            var ordersContainer = document.getElementById('mm-orders');
+            if (ordersContainer) {
+                var orders = data.orders || [];
+                if (orders.length === 0) {
+                    ordersContainer.innerHTML = '<div class="mm-empty">No orders yet</div>';
+                } else {
+                    ordersContainer.innerHTML = orders.slice(-10).reverse().map(function(o) {
+                        return '<div class="mm-order-item"><span class="' + o.side.toLowerCase() + '">' + o.token + ' ' + o.side + '</span>' +
+                            '<span>' + o.shares + ' @ ' + o.price.toFixed(2) + '</span>' +
+                            '<span class="' + o.status + '">' + o.status + '</span>' +
+                            '<span style="color:#484f58">' + o.time + '</span></div>';
+                    }).join('');
+                }
             }
 
             // Logs
-            const logsContainer = document.getElementById('mm-logs');
-            const logs = data.logs || [];
-            if (logs.length === 0) {
-                logsContainer.innerHTML = '<div class="mm-empty">Waiting for activity...</div>';
-            } else {
-                logsContainer.innerHTML = logs.slice(-20).reverse().map(l => `
-                    <div class="mm-log-item">
-                        <span class="log-time">${l.time}</span>
-                        <span class="log-level ${l.level}">${l.level}</span>
-                        ${l.message}
-                    </div>`).join('');
-                // 自动滚动到底部
-                logsContainer.scrollTop = 0;
+            var logsContainer = document.getElementById('mm-logs');
+            if (logsContainer) {
+                var logs = data.logs || [];
+                if (logs.length === 0) {
+                    logsContainer.innerHTML = '<div class="mm-empty">Waiting for activity...</div>';
+                } else {
+                    logsContainer.innerHTML = logs.slice(-20).reverse().map(function(l) {
+                        return '<div class="mm-log-item"><span class="log-time">' + l.time + '</span>' +
+                            '<span class="log-level ' + l.level + '">' + l.level + '</span>' + l.message + '</div>';
+                    }).join('');
+                    logsContainer.scrollTop = 0;
+                }
             }
         }
 
@@ -1788,15 +2128,21 @@
                 socket.on('mm_state_update', function(data) {
                     updateMMPanel(data);
                 });
+                socket.on('mm_setup_result', function(data) {
+                    if (data && data.error) {
+                        document.getElementById('mm-cred-status').innerHTML =
+                            '<div class="mm-cred-status missing">' + data.error + '</div>';
+                    }
+                });
             }
         }
 
         // Poll MM state on initial load
         function pollMMState() {
             fetch('/api/mm/state')
-                .then(r => r.ok ? r.json() : null)
-                .then(data => { if (data) updateMMPanel(data); })
-                .catch(() => {});
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) { if (data) updateMMPanel(data); })
+                .catch(function() {});
         }
 
         // Start
