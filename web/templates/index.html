@@ -818,6 +818,12 @@
             <div>Scans: <span class="val" id="scan-count">0</span></div>
             <div>Threshold: <span class="val" id="threshold">2.0</span>%</div>
             <div>Updated: <span class="val" id="last-scan">-</span></div>
+            {% if current_user %}
+            <div style="border-left:1px solid #30363d;padding-left:12px;display:flex;align-items:center;gap:8px">
+                <span style="color:#c9d1d9">{{ current_user }}</span>
+                <button onclick="doLogout()" style="background:#21262d;border:1px solid #30363d;color:#8b949e;padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer">Logout</button>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -1023,35 +1029,25 @@
                     <div class="mm-step" id="mm-step-3"></div>
                 </div>
 
-                <!-- ====== STEP 1: Credentials ====== -->
+                <!-- ====== STEP 1: Wallet Setup ====== -->
                 <div id="mm-setup-credentials" class="mm-setup-section">
-                    <div class="mm-section-label">Step 1: API Credentials</div>
+                    <div class="mm-section-label">Step 1: Wallet Setup</div>
                     <div class="mm-input-group">
                         <label>Platform</label>
-                        <select class="mm-select" id="mm-venue-select" onchange="mmVenueChange()">
+                        <select class="mm-select" id="mm-venue-select">
                             <option value="predict">Predict.fun</option>
                             <option value="probable">Probable</option>
                         </select>
                     </div>
                     <div class="mm-input-group">
-                        <label>API Key</label>
-                        <input class="mm-input" type="password" id="mm-input-apikey" placeholder="Enter API key..." autocomplete="off">
-                        <div class="mm-input-hint">Public API key for market data</div>
-                    </div>
-                    <div class="mm-input-group">
-                        <label>JWT Token <span style="color:#484f58">(optional for simulation)</span></label>
-                        <input class="mm-input" type="password" id="mm-input-jwt" placeholder="Enter JWT token..." autocomplete="off">
-                        <div class="mm-input-hint">Required for live order placement</div>
-                    </div>
-                    <div class="mm-input-group">
                         <label>Private Key <span style="color:#484f58">(optional for simulation)</span></label>
-                        <input class="mm-input" type="password" id="mm-input-privkey" placeholder="Enter private key..." autocomplete="off">
-                        <div class="mm-input-hint">Wallet private key for signing orders</div>
+                        <input class="mm-input" type="password" id="mm-input-privkey" placeholder="Enter wallet private key..." autocomplete="off">
+                        <div class="mm-input-hint">Used for signing orders in live mode. Not needed for simulation.</div>
                     </div>
                     <div class="mm-input-group">
-                        <label>Account Address <span style="color:#484f58">(optional for simulation)</span></label>
+                        <label>Wallet Address <span style="color:#484f58">(optional for simulation)</span></label>
                         <input class="mm-input" type="text" id="mm-input-address" placeholder="0x..." autocomplete="off">
-                        <div class="mm-input-hint">On-chain account address for position queries</div>
+                        <div class="mm-input-hint">For querying balances and positions. API keys auto-loaded from system config.</div>
                     </div>
                     <div id="mm-cred-status"></div>
                     <div style="margin-top:10px">
@@ -1069,7 +1065,7 @@
                     </div>
                     <div class="mm-strategy-card" id="mm-st-mm" onclick="mmSelectStrategy('market_making')">
                         <div class="st-name">Market Making (Live)</div>
-                        <div class="st-desc">Place real bid/ask orders on a single platform. Earn spread + points. Requires JWT + Private Key.</div>
+                        <div class="st-desc">Place real bid/ask orders on a single platform. Earn spread + points. Requires Private Key.</div>
                         <span class="st-tag live">REAL ORDERS</span>
                     </div>
                     <div class="mm-strategy-card" id="mm-st-arb" onclick="mmSelectStrategy('arbitrage')">
@@ -1752,6 +1748,15 @@
         }
 
         // ============================================================
+        // Auth
+        // ============================================================
+        function doLogout() {
+            fetch('/api/auth/logout', {method: 'POST'})
+                .then(function() { window.location.href = '/login'; })
+                .catch(function() { window.location.href = '/login'; });
+        }
+
+        // ============================================================
         // Market Maker Panel - Setup Wizard & Runtime
         // ============================================================
         var mmCurrentStep = 1;
@@ -1772,49 +1777,29 @@
             }
         }
 
-        function mmVenueChange() {
-            // Clear credential status on venue change
-            document.getElementById('mm-cred-status').innerHTML = '';
-        }
-
         function mmSaveCredentials() {
-            var apiKey = document.getElementById('mm-input-apikey').value.trim();
-            var jwt = document.getElementById('mm-input-jwt').value.trim();
             var privKey = document.getElementById('mm-input-privkey').value.trim();
             var address = document.getElementById('mm-input-address').value.trim();
             var venue = document.getElementById('mm-venue-select').value;
 
-            // Validate: at minimum API key is needed
-            if (!apiKey) {
-                document.getElementById('mm-cred-status').innerHTML =
-                    '<div class="mm-cred-status missing">API Key is required for market data access</div>';
-                document.getElementById('mm-input-apikey').classList.add('error');
-                return;
-            }
-            document.getElementById('mm-input-apikey').classList.remove('error');
-            document.getElementById('mm-input-apikey').classList.add('success');
-
-            // Send credentials to backend
+            // Send wallet info to backend (API key auto-loaded from system config)
             if (socket && socket.connected) {
                 socket.emit('mm_setup_credentials', {
-                    api_key: apiKey,
-                    jwt_token: jwt,
                     private_key: privKey,
                     predict_account_address: address,
                     venue: venue
                 });
             }
 
-            var hasLiveCreds = jwt && privKey;
-            var statusHtml = '<div class="mm-cred-status ok">API Key saved';
-            if (hasLiveCreds) statusHtml += ' · Live trading credentials set';
-            else statusHtml += ' · Simulation mode only (no JWT/Private Key)';
+            var hasPrivKey = !!privKey;
+            var statusHtml = '<div class="mm-cred-status ok">Wallet setup saved';
+            if (hasPrivKey) statusHtml += ' · Private key set (live trading enabled)';
+            else statusHtml += ' · No private key (simulation only)';
             statusHtml += '</div>';
             document.getElementById('mm-cred-status').innerHTML = statusHtml;
             mmCredentialsSaved = true;
 
-            // If no live credentials, pre-select simulation
-            if (!hasLiveCreds) {
+            if (!hasPrivKey) {
                 mmSelectedStrategy = 'simulation';
             }
 
@@ -1822,13 +1807,11 @@
         }
 
         function mmSelectStrategy(strategy) {
-            var jwt = document.getElementById('mm-input-jwt').value.trim();
             var privKey = document.getElementById('mm-input-privkey').value.trim();
-            var hasLiveCreds = jwt && privKey;
 
-            // Block live strategies if no credentials
-            if (strategy !== 'simulation' && !hasLiveCreds) {
-                alert('Live trading requires JWT Token and Private Key. Go back to Step 1 to fill them in.');
+            // Block live strategies if no private key
+            if (strategy !== 'simulation' && !privKey) {
+                alert('Live trading requires a Private Key. Go back to Step 1 to fill it in.');
                 return;
             }
 
