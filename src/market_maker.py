@@ -633,14 +633,59 @@ class MarketMakerEngine:
             # 1. 刷新市场数据
             self._refresh_markets()
 
-            # 2. 对每个选中的市场执行策略
+            if not self.markets:
+                if self.stats.total_cycles % 10 == 0:
+                    self._add_log('WARNING', '未获取到任何市场数据，等待下一轮刷新...')
+                return
+
+            # 2. 自动选择市场（如果没有手动选择的市场）
             selected_markets = [m for m in self.markets.values() if m.selected]
+            if not selected_markets:
+                self._auto_select_markets()
+                selected_markets = [m for m in self.markets.values() if m.selected]
+
+            if not selected_markets:
+                if self.stats.total_cycles % 10 == 0:
+                    self._add_log('WARNING', f'已加载 {len(self.markets)} 个市场，但没有符合条件的做市目标')
+                return
+
+            # 3. 对每个选中的市场执行策略
             for market in selected_markets:
                 self._process_market(market)
 
-            # 3. 更新统计
+            # 4. 更新统计
             self.stats.active_orders = len([o for o in self.orders if o.status == 'open'])
             self.stats.active_markets = len(selected_markets)
+
+            # 5. 定期输出摘要
+            if self.stats.total_cycles % 20 == 0 and self.stats.total_cycles > 0:
+                self._add_log('STATS',
+                    f'周期#{self.stats.total_cycles} | 市场:{len(selected_markets)} | '
+                    f'订单:{self.stats.total_orders} | 成交:{self.stats.total_fills} | '
+                    f'对冲:{self.stats.total_hedges} | PnL:${self.stats.daily_pnl:.2f}')
+
+    def _auto_select_markets(self):
+        """自动选择评分最高的市场进行做市"""
+        scored = []
+        for m in self.markets.values():
+            score = self.strategy.score_market(m)
+            scored.append((score, m))
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        max_markets = self.config.max_markets
+        selected_count = 0
+        for score, m in scored[:max_markets]:
+            if score >= 20:  # 最低分数门槛
+                m.selected = True
+                selected_count += 1
+
+        if selected_count > 0:
+            names = [m.title[:40] for _, m in scored[:selected_count]]
+            self._add_log('MARKET',
+                f'自动选择 {selected_count} 个做市市场 (评分≥20): {", ".join(names)}')
+        else:
+            self._add_log('WARNING',
+                f'所有 {len(self.markets)} 个市场评分过低，无法自动选择')
 
     def _refresh_markets(self):
         """刷新市场数据（Polymarket Gamma API）"""
@@ -720,6 +765,11 @@ class MarketMakerEngine:
                 m.yes_token_id = yes_token_id
                 m.no_token_id = no_token_id
                 m.condition_id = condition_id
+
+            if self.stats.total_cycles == 0:
+                valid_count = len([m for m in self.markets.values() if m.yes_token_id])
+                self._add_log('SYSTEM',
+                    f'已加载 {valid_count} 个有效市场 (共 {len(raw_markets)} 个)')
 
         except Exception as e:
             logger.warning(f"刷新市场数据失败: {e}")
@@ -810,6 +860,11 @@ class MarketMakerEngine:
 
         self.orders.append(order)
         self.stats.total_orders += 1
+
+        self._add_log('ORDER',
+            f'[{"模拟" if self.config.simulation_mode else "实盘"}] '
+            f'{token} {side} {shares}股 @ {price:.4f} '
+            f'({market.title[:30]})')
 
         if self.config.simulation_mode:
             # 模拟模式：模拟成交逻辑

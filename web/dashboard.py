@@ -84,14 +84,11 @@ _init_admin_user()
 
 
 def login_required(f):
-    """登录保护装饰器"""
+    """登录保护装饰器 — 始终要求登录"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        # 如果没有配置任何用户且没有注册用户，允许访问（首次使用引导注册）
-        if not _users and not _ADMIN_USER:
-            return f(*args, **kwargs)
         if 'user' not in session:
-            # API 路由返回 401，页面路由重定向
+            # API 路由返回 401，页面路由重定向到登录页
             if request.path.startswith('/api/'):
                 return jsonify({'error': 'unauthorized'}), 401
             return redirect(url_for('login_page'))
