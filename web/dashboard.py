@@ -38,8 +38,30 @@ logger.info(f"Project root: {PROJECT_ROOT}")
 
 app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+# SECRET_KEY 必须在重启后保持不变，否则所有 session cookie 失效
+# 优先使用环境变量；未设时生成一个稳定密钥并写入文件，重启后复用
+_secret_key_file = os.path.join(PROJECT_ROOT, '.secret_key')
+def _get_stable_secret_key():
+    env_key = os.getenv('SECRET_KEY', '')
+    if env_key:
+        return env_key
+    if os.path.exists(_secret_key_file):
+        try:
+            return open(_secret_key_file).read().strip()
+        except Exception:
+            pass
+    key = secrets.token_hex(32)
+    try:
+        with open(_secret_key_file, 'w') as f:
+            f.write(key)
+    except Exception:
+        pass
+    return key
+
+app.config['SECRET_KEY'] = _get_stable_secret_key()
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 # SocketIO with threading mode + simple-websocket for true WebSocket
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
@@ -50,10 +72,35 @@ _ws_clients = 0  # Track connected WebSocket clients
 # ============================================================
 # Authentication system
 # ============================================================
-# 用户数据存储在内存中（重启丢失，生产环境可改为 SQLite）
+# 用户数据持久化到 JSON 文件，重启后不丢失
 # 密码使用 SHA-256 + salt 哈希存储
+_USERS_FILE = os.path.join(PROJECT_ROOT, '.users.json')
 _users = {}  # {username: {'password_hash': str, 'salt': str, 'created_at': str}}
 _users_lock = threading.Lock()
+
+
+def _load_users():
+    """从文件加载用户数据"""
+    global _users
+    if os.path.exists(_USERS_FILE):
+        try:
+            with open(_USERS_FILE, 'r') as f:
+                _users = json.load(f)
+            logger.info(f"已从文件加载 {len(_users)} 个用户")
+        except Exception as e:
+            logger.warning(f"加载用户文件失败: {e}")
+
+
+def _save_users():
+    """将用户数据保存到文件"""
+    try:
+        with open(_USERS_FILE, 'w') as f:
+            json.dump(_users, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"保存用户文件失败: {e}")
+
+
+_load_users()
 
 # 预设管理员账号（通过环境变量配置）
 _ADMIN_USER = os.getenv('DASHBOARD_USER', '')
@@ -71,13 +118,17 @@ def _hash_password(password: str, salt: str = None) -> tuple:
 def _init_admin_user():
     """初始化管理员账号（从环境变量）"""
     if _ADMIN_USER and _ADMIN_PASS:
-        hashed, salt = _hash_password(_ADMIN_PASS)
-        _users[_ADMIN_USER] = {
-            'password_hash': hashed,
-            'salt': salt,
-            'created_at': datetime.now().isoformat(),
-        }
-        logger.info(f"管理员账号已初始化: {_ADMIN_USER}")
+        if _ADMIN_USER not in _users:
+            hashed, salt = _hash_password(_ADMIN_PASS)
+            _users[_ADMIN_USER] = {
+                'password_hash': hashed,
+                'salt': salt,
+                'created_at': datetime.now().isoformat(),
+            }
+            _save_users()
+            logger.info(f"管理员账号已初始化: {_ADMIN_USER}")
+        else:
+            logger.info(f"管理员账号已存在（从文件加载）: {_ADMIN_USER}")
 
 
 _init_admin_user()
@@ -3192,6 +3243,7 @@ def api_register():
             'salt': salt,
             'created_at': datetime.now().isoformat(),
         }
+        _save_users()
 
     logger.info(f"新用户注册: {username}")
     session.permanent = True

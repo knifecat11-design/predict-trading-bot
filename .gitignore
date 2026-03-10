@@ -41,6 +41,8 @@ logs/
 
 # Config files with sensitive data
 config.yaml
+.secret_key
+.users.json
 
 # OS
 .DS_Store
