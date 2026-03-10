@@ -299,7 +299,7 @@
         /* Platform status cards */
         .platforms {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -348,29 +348,42 @@
             align-items: center;
             gap: 8px;
         }
+        .table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+            border-radius: 12px;
+            border: 1px solid #21262d;
+            margin-bottom: 24px;
+        }
         .arb-table {
             width: 100%;
             border-collapse: collapse;
             background: #161b22;
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid #21262d;
-            margin-bottom: 24px;
+            table-layout: auto;
+            min-width: 700px;
         }
         .arb-table th {
             background: #1c2128;
-            padding: 10px 14px;
+            padding: 8px 10px;
             text-align: left;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             color: #8b949e;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            white-space: nowrap;
         }
         .arb-table td {
-            padding: 10px 14px;
+            padding: 8px 10px;
             border-top: 1px solid #21262d;
-            font-size: 13px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .arb-table td:first-child {
+            white-space: normal;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .arb-table tr:hover td { background: #1c2128; }
         .arb-pct {
@@ -407,7 +420,7 @@
         /* Market list */
         .market-lists {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
         }
         .market-list {
@@ -458,25 +471,24 @@
             width: 100%;
             border-collapse: collapse;
             background: #161b22;
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid #21262d;
-            margin-bottom: 24px;
+            table-layout: auto;
+            min-width: 600px;
         }
         .multi-arb-table th {
             background: #1a1c2e;
-            padding: 10px 14px;
+            padding: 8px 10px;
             text-align: left;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             color: #8b949e;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            white-space: nowrap;
         }
         .multi-arb-table td {
-            padding: 10px 14px;
+            padding: 8px 10px;
             border-top: 1px solid #21262d;
-            font-size: 13px;
+            font-size: 12px;
             vertical-align: top;
         }
         .multi-arb-table tr:hover td { background: #1c2128; }
@@ -894,7 +906,6 @@
             <span style="color:#d29922">OP <span class="val" id="stat-op">-</span></span>
             <span style="color:#9c27b0">Pre <span class="val" id="stat-pre">-</span></span>
             <span style="color:#3fb950">Kal <span class="val" id="stat-kal">-</span></span>
-            <span style="color:#ff6b6b">Prob <span class="val" id="stat-prob">-</span></span>
             <span>|</span>
             <span>Same-Plat: <span class="val" id="stat-same">0</span></span>
             <span>Cross-Plat: <span class="val" id="stat-cross">0</span></span>
@@ -908,6 +919,7 @@
 
         <!-- Arbitrage Opportunities -->
         <div class="section-title">Arbitrage Opportunities</div>
+        <div class="table-wrapper">
         <table class="arb-table">
             <thead>
                 <tr>
@@ -927,6 +939,7 @@
                 <tr><td colspan="10" class="empty-state pulse">Scanning markets...</td></tr>
             </tbody>
         </table>
+        </div>
 
         <!-- Logical Spread Arbitrage -->
         <div class="section-title">
@@ -934,6 +947,7 @@
             <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— Hard⊂Easy structural arb: buy Hard_NO + Easy_YES &lt; $1 · Polymarket + Kalshi + Predict</span>
             <span id="lsa-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
         </div>
+        <div class="table-wrapper">
         <table class="arb-table">
             <thead>
                 <tr>
@@ -953,6 +967,7 @@
                 <tr><td colspan="10" class="empty-state pulse">Scanning for logical spread opportunities...</td></tr>
             </tbody>
         </table>
+        </div>
 
         <!-- Multi-result Arbitrage -->
         <div class="section-title">
@@ -960,12 +975,13 @@
             <span style="font-size:12px;font-weight:normal;color:#8b949e;margin-left:6px">— buy all outcomes when total cost &lt; $1 · same-platform (Polymarket) &amp; cross-platform combos (Kalshi+Predict+Opinion)</span>
             <span id="multi-arb-count" style="margin-left:auto;font-size:13px;color:#58a6ff;font-weight:600"></span>
         </div>
+        <div class="table-wrapper">
         <table class="multi-arb-table">
             <thead>
                 <tr>
                     <th>Event</th>
                     <th>Platform</th>
-                    <th style="min-width:320px">Outcomes (buy all Yes)</th>
+                    <th style="min-width:280px">Outcomes (buy all Yes)</th>
                     <th>Total Cost</th>
                     <th>Gross</th>
                     <th>Time</th>
@@ -975,6 +991,7 @@
                 <tr><td colspan="6" class="empty-state pulse">Scanning for multi-outcome opportunities...</td></tr>
             </tbody>
         </table>
+        </div>
 
         <!-- Market Lists -->
         <div class="section-title">Top Markets by Platform</div>
