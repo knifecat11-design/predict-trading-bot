@@ -500,16 +500,41 @@ class LogicalSpreadAnalyzer:
     }
 
     # 区间/分桶标题正则 — 用于检测互斥的范围型子市场（如 IPO market cap buckets）
-    # 匹配: "$100-200B", "$750B-1T", "$1T-1.25T", "100-200", "50K-100K" 等
+    # 紧凑格式: "$100-200B", "$750B-1T", "$1T-1.25T", "100-200", "50K-100K"
     RANGE_BUCKET_PATTERN = re.compile(
         r'\$?\d+(?:[.,]\d+)?\s*[BMKT]?\s*[-–]\s*\$?\d+(?:[.,]\d+)?\s*[BMKT]?',
         re.IGNORECASE
     )
-    # 匹配: "$600B+", "$1.5T+", "100+" 等开放端点
+    # 紧凑开放端点: "$600B+", "$1.5T+", "100+"
     OPEN_BUCKET_PATTERN = re.compile(
         r'\$?\d+(?:[.,]\d+)?\s*[BMKT]?\s*\+',
         re.IGNORECASE
     )
+    # 自然语言区间: "between $100B and $200B", "between 100 and 200"
+    BETWEEN_PATTERN = re.compile(
+        r'between\s+\$?[\d,.]+\s*[BMKT]?\s+and\s+\$?[\d,.]+\s*[BMKT]?',
+        re.IGNORECASE
+    )
+    # 自然语言开放端点: "$600B or greater", "$1T or more", "$500B or higher"
+    OR_GREATER_PATTERN = re.compile(
+        r'\$[\d,.]+\s*[BMKT]?\s+or\s+(?:greater|more|higher|above)',
+        re.IGNORECASE
+    )
+    # 自然语言下限: "less than $100B", "under $100B", "below $100B" (在 bucket 上下文中)
+    LESS_THAN_PATTERN = re.compile(
+        r'(?:less\s+than|under|below)\s+\$[\d,.]+\s*[BMKT]?',
+        re.IGNORECASE
+    )
+
+    @classmethod
+    def _is_range_title(cls, title: str) -> bool:
+        """检测单个标题是否为区间/分桶格式"""
+        return bool(
+            cls.RANGE_BUCKET_PATTERN.search(title)
+            or cls.OPEN_BUCKET_PATTERN.search(title)
+            or cls.BETWEEN_PATTERN.search(title)
+            or cls.OR_GREATER_PATTERN.search(title)
+        )
 
     @classmethod
     def is_range_bucket_event(cls, markets: List[Dict]) -> bool:
@@ -518,15 +543,35 @@ class LogicalSpreadAnalyzer:
         区间型事件的子市场彼此互斥（每个覆盖一个独立范围），
         不存在子集/超集的逻辑包含关系，不应做 LSA 配对。
 
-        判断标准: 如果 ≥2 个子市场标题包含 "X-Y" 范围格式，整个事件被视为区间型。
+        检测策略（多层）:
+        1. 紧凑格式: "$100-200B", "$600B+", "100-200"
+        2. 自然语言: "between $100B and $200B", "$600B or greater"
+        3. 组合检测: "less than $X" + "or greater" 在同一事件内
+
+        判断标准: 如果 ≥2 个子市场匹配区间模式，整个事件被视为区间型。
         """
         range_count = 0
+        has_less_than = False
+        has_or_greater = False
+
         for m in markets:
             title = m.get('question', m.get('title', ''))
-            if cls.RANGE_BUCKET_PATTERN.search(title) or cls.OPEN_BUCKET_PATTERN.search(title):
+            if cls._is_range_title(title):
                 range_count += 1
+            if cls.LESS_THAN_PATTERN.search(title):
+                has_less_than = True
+            if cls.OR_GREATER_PATTERN.search(title):
+                has_or_greater = True
             if range_count >= 2:
                 return True
+
+        # "less than $X" + "$Y or greater" 在同一事件 = bucket endpoints
+        if has_less_than and has_or_greater:
+            return True
+        # "between" + "less than" = bucket event
+        if range_count >= 1 and has_less_than:
+            return True
+
         return False
 
     def __init__(self, config: Dict = None):
