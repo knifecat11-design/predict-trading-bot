@@ -98,6 +98,7 @@ _poly_raw_markets = []
 _poly_events_cache = []
 # Caches for cross-platform multi-outcome combo detection
 _kalshi_raw_cache = []    # Raw Kalshi market dicts (before price filtering)
+_kalshi_series_cache: dict = {}  # series_ticker → title slug（用于 URL 构建）
 _predict_raw_cache = []   # Raw Predict.fun market dicts (before extreme-price filtering)
 _predict_ob_cache = {}    # Predict.fun orderbooks {market_id: {'yes_ask': float, 'no_ask': float}}
 _lock = threading.Lock()
@@ -291,6 +292,43 @@ def question_to_predict_slug(question_text):
         result = slugify(question_text)
 
     return result
+
+
+def _kalshi_series_ticker(event_ticker: str) -> str:
+    """从 event_ticker 提取 series_ticker。
+    KXFEDDECISION-26MAR  → KXFEDDECISION
+    KXAAAGASW-26MAR16TH → KXAAAGASW
+    """
+    import re
+    m = re.match(r'^(.+?)-\d{2}[A-Z]{3}', event_ticker)
+    return m.group(1) if m else event_ticker
+
+
+def _kalshi_title_slug(title: str) -> str:
+    """将 series 标题转为 URL slug。'Fed meeting' → 'fed-meeting'"""
+    import re
+    slug = title.lower().strip()
+    slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+    slug = re.sub(r"\s+", "-", slug)
+    return slug.strip("-")
+
+
+def _kalshi_market_url(event_ticker: str, kalshi_client=None) -> str:
+    """构造正确的 Kalshi 市场 URL。
+    格式：https://kalshi.com/markets/{series}/{slug}/{event}（均小写）
+    优先查全局 _kalshi_series_cache，其次调 client API，最后兜底两段式。
+    """
+    series_ticker = _kalshi_series_ticker(event_ticker)
+    # 优先查全局 cache（fetch_kalshi_data 预填）
+    series_slug = _kalshi_series_cache.get(series_ticker, '')
+    if not series_slug and kalshi_client:
+        title = kalshi_client.get_series_title(series_ticker)
+        series_slug = _kalshi_title_slug(title)
+        _kalshi_series_cache[series_ticker] = series_slug
+    if series_slug:
+        return f"https://kalshi.com/markets/{series_ticker.lower()}/{series_slug}/{event_ticker.lower()}"
+    # 兜底：两段式 URL（无 series slug）
+    return f"https://kalshi.com/markets/{series_ticker.lower()}/{event_ticker.lower()}"
 
 
 def platform_link_html(platform_name, market_url=None):
@@ -734,13 +772,20 @@ def fetch_predict_data(config):
 
 def fetch_kalshi_data(config):
     """Fetch Kalshi markets — prices included in /markets response (no orderbook calls)"""
-    global _kalshi_raw_cache
+    global _kalshi_raw_cache, _kalshi_series_cache
     try:
         from src.kalshi_api import KalshiClient
         client = KalshiClient(config)
         raw_markets = client.get_markets(status='open', limit=KALSHI_FETCH_LIMIT)
         logger.info(f"Kalshi: fetched {len(raw_markets)} raw markets")
         _kalshi_raw_cache = raw_markets  # store for cross-platform multi-outcome analysis
+
+        # 预先收集所有唯一 series_ticker 并批量获取标题（每个系列只调一次 API）
+        series_tickers = {_kalshi_series_ticker(m.get('event_ticker', ''))
+                          for m in raw_markets if m.get('event_ticker')}
+        for st in series_tickers:
+            title = client.get_series_title(st)
+            _kalshi_series_cache[st] = _kalshi_title_slug(title) if title else ''
 
         parsed = []
         for m in raw_markets:
@@ -768,7 +813,7 @@ def fetch_kalshi_data(config):
                 if yes_ask < PREDICT_EXTREME_FILTER or yes_ask > (1 - PREDICT_EXTREME_FILTER):
                     continue
 
-                url = f"https://kalshi.com/markets/{event_ticker}"
+                url = _kalshi_market_url(event_ticker, client)
                 volume = float(m.get('volume_24h', 0) or 0)
                 close_time = m.get('close_time', '')
 
@@ -1277,7 +1322,7 @@ def group_kalshi_events(raw_markets):
                 'label': label,
                 'label_norm': label.lower().strip(),
                 'price': round(price, 4),
-                'url': f"https://kalshi.com/markets/{event_ticker}",
+                'url': _kalshi_market_url(event_ticker),
                 'platform': 'Kalshi',
                 'platform_color': '#3fb950',
             })
@@ -1304,7 +1349,7 @@ def group_kalshi_events(raw_markets):
             'event_ticker': event_ticker,
             'event_title': event_title,
             'event_title_norm': _normalize_title_for_matching(event_title),
-            'event_url': f"https://kalshi.com/markets/{event_ticker}",
+            'event_url': _kalshi_market_url(event_ticker),
             'platform': 'Kalshi',
             'outcomes': outcomes,
         })
