@@ -148,3 +148,34 @@ class KalshiClient:
     def clear_cache(self):
         self._markets_cache = []
         self._cache_time = 0
+
+    def get_series_title(self, series_ticker: str) -> str:
+        """Fetch series title for URL slug construction.
+
+        Returns the human-readable title (e.g. "Fed meeting" for KXFEDDECISION),
+        used to build correct market URLs like:
+          /markets/kxfeddecision/fed-meeting/kxfeddecision-26mar
+
+        Results are cached in-memory (series titles never change).
+        Returns empty string on failure so caller can fall back gracefully.
+        """
+        if not hasattr(self, '_series_title_cache'):
+            self._series_title_cache: dict = {}
+
+        if series_ticker in self._series_title_cache:
+            return self._series_title_cache[series_ticker]
+
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/series/{series_ticker}",
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                title = resp.json().get('series', {}).get('title', '')
+                self._series_title_cache[series_ticker] = title
+                return title
+        except Exception as e:
+            logger.debug(f"Kalshi series/{series_ticker} fetch failed: {e}")
+
+        self._series_title_cache[series_ticker] = ''
+        return ''
