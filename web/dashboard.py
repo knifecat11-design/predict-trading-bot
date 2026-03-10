@@ -424,12 +424,14 @@ def _kalshi_series_ticker(event_ticker: str) -> str:
 
 
 def _kalshi_title_slug(title: str) -> str:
-    """将 series 标题转为 URL slug。'Fed meeting' → 'fed-meeting'"""
+    """将 series 标题转为 URL slug，完全复现 Kalshi 的生成逻辑。
+    'Fed meeting'     → 'fed-meeting'
+    'Challenger ATP ' → 'challenger-atp-'  （标题末尾空格 → 尾部 -，需保留）
+    """
     import re
-    slug = title.lower().strip()
-    slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+    slug = re.sub(r"[^a-z0-9\s-]", "", title.lower())  # 不预先 strip，保留尾部空格
     slug = re.sub(r"\s+", "-", slug)
-    return slug.strip("-")
+    return slug.strip()  # 只去首尾空白字符，不去 -
 
 
 def _kalshi_market_url(event_ticker: str, kalshi_client=None) -> str:
